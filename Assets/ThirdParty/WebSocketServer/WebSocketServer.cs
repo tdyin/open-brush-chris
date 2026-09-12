@@ -93,7 +93,8 @@ namespace WebSocketServer {
         private void ListenForTcpConnection () { 		
             try {
                 // Create listener on <address>:<port>.
-                tcpListener = new TcpListener(port);
+                // Match CHRIS's local-only HTTP listener.
+                tcpListener = new TcpListener(IPAddress.Loopback, port);
                 tcpListener.Start();
                 while (true) {
                     // Accept a new client, then open a stream for reading and writing.
