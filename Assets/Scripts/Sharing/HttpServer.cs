@@ -50,7 +50,8 @@ namespace TiltBrush
             try
             {
                 m_HttpListener = new HttpListener();
-                m_HttpListener.Prefixes.Add(String.Format($"http://+:{HTTP_PORT}/"));
+                // CHRIS runs on this PC; bind locally instead of relying on peer filters.
+                m_HttpListener.Prefixes.Add($"http://127.0.0.1:{HTTP_PORT}/");
                 m_HttpListener.Start();
                 ThreadPool.QueueUserWorkItem((o) =>
                 {
