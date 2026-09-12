@@ -55,11 +55,9 @@ Shader "Custom/UnlitHDRColorButton" {
             };
 
             v2f vert (Input v) {
-                v2f o;
-                UNITY_TRANSFER_INSTANCE_ID(v, o);
-
+                v2f o = (v2f)0;
                 UNITY_SETUP_INSTANCE_ID(v);
-                UNITY_INITIALIZE_OUTPUT(Input, o);
+                UNITY_TRANSFER_INSTANCE_ID(v, o);
                 UNITY_INITIALIZE_VERTEX_OUTPUT_STEREO(o);
 
                 o.pos = UnityObjectToClipPos(v.vertex);
