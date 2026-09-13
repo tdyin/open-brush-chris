@@ -192,6 +192,60 @@ namespace TiltBrush
             finally { EditorSceneManager.ClosePreviewScene(scene); PanelManager.m_Instance = previousManager; }
         }
 
+        [Test]
+        public void AssistanceExplainsBlockedRequestsAndReviewDoesNotDispatch()
+        {
+            var obj = new GameObject("CHRIS pending task test");
+            try
+            {
+                var client = obj.AddComponent<CHRISAssistanceClient>();
+                var model = obj.AddComponent<CHRISPanel>(); Property(model, "Assistance", client);
+                Property(client, "TaskId", "saved-task");
+                Assert.That(client.CanStart, Is.False);
+                Assert.That(client.StartBlockedReason, Does.Contain("Saved task"));
+                var task = new JObject { ["task_id"] = "saved-task", ["status"] = "awaiting_approval",
+                    ["reason"] = "Review the proposed change", ["approval"] = new JObject { ["approval_id"] = "pending" } };
+                Property(client, "Task", task);
+                foreach (bool polling in new[] { false, true })
+                {
+                    Property(client, "Busy", polling);
+                    Assert.That(client.CanStart, Is.False);
+                    Assert.That(client.StartBlockedReason, Does.Contain("Review proposal or Cancel task"));
+                    Assert.That(client.CanReview, Is.True, "Read-only review is available during status polls");
+                    model.ReviewProposal();
+                    Assert.That(JToken.DeepEquals(model.ReviewedApproval, task["approval"]), Is.True);
+                    Assert.That(model.ReviewedApproval, Is.Not.SameAs(task["approval"]));
+                    Assert.That(model.WaitingForRelease, Is.False, "Opening review cannot queue approval");
+                    Assert.That((string)task["status"], Is.EqualTo("awaiting_approval"));
+                }
+                Property(client, "CancelWanted", true);
+                Assert.That(client.CanReview, Is.False); Assert.That(client.CanStart, Is.False);
+                Assert.That(client.StartBlockedReason, Does.Contain("Cancellation unconfirmed"));
+                Property(client, "CancelWanted", false); Property(client, "Busy", false);
+                Property(client, "PendingRequest", new JObject { ["request_id"] = "uncertain" });
+                Assert.That(client.StartBlockedReason, Does.Contain("Submission reply missing"));
+                Property(client, "PendingRequest", null);
+                foreach (string state in new[] { "paused", "unverified", "running" })
+                {
+                    task["status"] = state;
+                    Assert.That(client.CanStart, Is.False); Assert.That(client.CanReview, Is.False);
+                    Assert.That(client.StartBlockedReason, Does.Contain("Cancel task"));
+                }
+                task["status"] = "rejected";
+                Assert.That(client.CanStart, Is.True); Assert.That(client.StartBlockedReason, Is.Null);
+                foreach (string reason in new[] { "Direct palette owns control",
+                    "Close the CHRIS palette with F8, then submit a new browser request" })
+                {
+                    task["reason"] = reason;
+                    Assert.That(model.AssistanceStatus(), Does.Contain("Assistance mode"));
+                    Assert.That(model.AssistanceStatus(), Does.Not.Contain("F8"));
+                    Assert.That((string)task["reason"], Is.EqualTo(reason), "Historical records stay intact");
+                }
+                Assert.That(CHRISPanel.AssistanceReason("Other failure"), Is.EqualTo("Other failure"));
+            }
+            finally { UnityEngine.Object.DestroyImmediate(obj); }
+        }
+
         [MenuItem("CHRIS/Verify native UI (Edit mode)")]
         public static void VerifyInEditor()
         {
@@ -217,6 +271,7 @@ namespace TiltBrush
                 tests.ConfirmWaitsForReleaseAndLocalStopClearsIt();
                 tests.NativeAssetsProvideMenuPopupKeyboardAndClickableButtons();
                 tests.FloatingPanelStaysInWorldAndDragStopsOnRelease();
+                tests.AssistanceExplainsBlockedRequestsAndReviewDoesNotDispatch();
                 Render(output);
                 File.WriteAllText(output + "/checks.txt", "PASS: native UI assets, 35 validated direct choices, context invalidation, cancellation/recovery interlocks, floating placement independent of hand/head, drag/release/stop, native collider layout and rendered review. No Play mode, HTTP, paid model calls or sketch changes.");
             }
@@ -244,6 +299,7 @@ namespace TiltBrush
                 foreach (var key in new[] { "host_session", "revision", "authority_epoch" }) approval[key] = nativeContext[key];
                 approval["expires_at"] = CHRISCommandGateway.Now + 300;
                 Property(client, "Task", new JObject { ["task_id"] = "preview", ["status"] = "awaiting_approval", ["reason"] = "Review the proposed change", ["approval"] = approval, ["context"] = Context() });
+                Property(client, "TaskId", "preview");
                 Property(model, "ReviewedApproval", approval); Set(popup, "m_Model", model);
                 typeof(CHRISNativePopup).GetMethod("Draw", BindingFlags.NonPublic | BindingFlags.Instance).Invoke(popup, null);
                 Physics.SyncTransforms();
@@ -266,6 +322,16 @@ namespace TiltBrush
                 image.ReadPixels(new Rect(0, 0, rt.width, rt.height), 0, 0); image.Apply();
                 File.WriteAllBytes(output + "/native-review.png", image.EncodeToPNG());
                 RenderTexture.active = null;
+                Property(model, "ReviewedApproval", null);
+                typeof(CHRISNativePopup).GetMethod("Draw", BindingFlags.NonPublic | BindingFlags.Instance).Invoke(popup, null);
+                var pendingButtons = obj.GetComponentsInChildren<CHRISNativeButton>();
+                Assert.That(pendingButtons.Single(b => b.name == "Choice 0").Label.text, Is.EqualTo("Review proposal"));
+                Assert.That(pendingButtons.Single(b => b.name == "Choice 0").IsAvailable(), Is.True);
+                Assert.That(pendingButtons.Single(b => b.name == "Choice 2").IsAvailable(), Is.False);
+                Assert.That(obj.GetComponentsInChildren<TextMeshPro>().Any(t => t.text.Contains("Finish this proposal")), Is.True);
+                foreach (var text in obj.GetComponentsInChildren<TextMeshPro>()) text.ForceMeshUpdate();
+                camera.Render(); RenderTexture.active = rt; image.ReadPixels(new Rect(0, 0, rt.width, rt.height), 0, 0); image.Apply();
+                File.WriteAllBytes(output + "/native-pending.png", image.EncodeToPNG()); RenderTexture.active = null;
                 Property(model, "ReviewedApproval", null); Property(model, "Mode", "Direct");
                 typeof(CHRISNativePopup).GetMethod("Draw", BindingFlags.NonPublic | BindingFlags.Instance).Invoke(popup, null);
                 foreach (var text in obj.GetComponentsInChildren<TextMeshPro>()) text.ForceMeshUpdate();

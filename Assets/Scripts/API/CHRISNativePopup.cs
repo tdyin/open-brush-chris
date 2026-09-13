@@ -121,14 +121,26 @@ namespace TiltBrush
                 Choice(1, "Reject proposal", () => m_Model.Decide(false), current && !client.Busy);
                 Choice(2, "Cancel task", m_Model.StopLocal); Choice(3, "Back", m_Model.Back); return;
             }
-            m_Detail.text = "Request: " + m_Model.Prompt;
             bool hostReady = (bool)m_Model.Gateway.Capture()["ready"];
-            if (client.Task?["approval"] is JObject approval)
-                m_Detail.text = CHRISPanel.Summary((JObject)approval["action"], (JObject)client.Task["context"]);
+            string blocked = client.StartBlockedReason ?? (hostReady ? null :
+                "Native host not ready. Open a sketch and wait for loading to finish.");
+            m_Detail.text = blocked ?? "Request: " + m_Model.Prompt;
+            if (client.CanReview)
+            {
+                var approval = (JObject)client.Task["approval"];
+                m_Detail.text = CHRISPanel.Summary((JObject)approval["action"], (JObject)client.Task["context"]) +
+                    "\n" + client.StartBlockedReason;
+                Choice(0, "Review proposal", m_Model.ReviewProposal);
+                Choice(1, "Cancel task", m_Model.StopLocal);
+                Choice(2, "No-model example", null, false);
+                Choice(3, "Enter request…", null, false);
+                Choice(4, "Check / Retry", client.Refresh, !client.Busy);
+                return;
+            }
             Choice(0, "Enter request…", EnterRequest, client.CanStart);
             Choice(1, "Propose change", () => m_Model.Propose(false), hostReady && client.CanStart && !string.IsNullOrWhiteSpace(m_Model.Prompt) && m_Model.Prompt.Length <= 2000);
             Choice(2, "No-model example", () => m_Model.Propose(true), hostReady && client.CanStart);
-            Choice(3, "Review proposal", m_Model.ReviewProposal, (string)client.Task?["status"] == "awaiting_approval" && !client.Busy);
+            Choice(3, "Review proposal", m_Model.ReviewProposal, client.CanReview);
             Choice(4, "Cancel task", m_Model.StopLocal, client.TaskId != null || client.PendingRequest != null);
             Choice(5, "Check / Retry", () =>
             {

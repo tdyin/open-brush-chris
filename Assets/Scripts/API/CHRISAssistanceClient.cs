@@ -31,6 +31,28 @@ namespace TiltBrush
              (string)task["status"] == "failed" || ((string)task["status"] == "cancelled" && (bool?)task["native_cancel_acknowledged"] == true));
         public bool CanStart => !Busy && !CancelWanted && PendingRequest == null &&
             (TaskId == null || Terminal(Task));
+        // Reviewing a captured proposal does not dispatch anything. A status poll must not
+        // make the review button flicker; approval still waits for Busy to clear and revalidates.
+        public bool CanReview => !CancelWanted && (string)Task?["status"] == "awaiting_approval" &&
+            Task?["approval"] is JObject;
+        public string StartBlockedReason
+        {
+            get
+            {
+                if (CanStart) return null;
+                if (CancelWanted) return "Cancellation unconfirmed. Select Check / Retry.";
+                if (PendingRequest != null) return "Submission reply missing. Select Check / Retry.";
+                if (TaskId != null && !Terminal(Task))
+                {
+                    if (Task == null) return "Saved task needs checking. Select Check / Retry.";
+                    if (CanReview) return "Finish this proposal before a new request: Review proposal or Cancel task.";
+                    if ((string)Task["status"] == "paused" || (string)Task["status"] == "unverified")
+                        return "Task needs reconciliation. Select Check / Retry or Cancel task.";
+                    return "A task is in progress. Wait or select Cancel task.";
+                }
+                return "Contacting assistance. Please wait.";
+            }
+        }
         void Awake()
         {
             string id = PlayerPrefs.GetString("CHRIS.AssistanceTask", "");

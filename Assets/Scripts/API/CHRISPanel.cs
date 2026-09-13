@@ -132,7 +132,7 @@ namespace TiltBrush
         { if (Mode == "Assistance") AfterRelease(() => Assistance.Submit(Prompt, example)); }
         public void ReviewProposal()
         {
-            if ((string)Assistance.Task?["status"] != "awaiting_approval") return;
+            if (!Assistance.CanReview) return;
             ReviewedApproval = (JObject)Assistance.Task["approval"].DeepClone();
             Notice = "Review the proposed change. Approval expires or becomes stale after manual changes."; Refresh();
         }
@@ -188,17 +188,25 @@ namespace TiltBrush
         }
         public string AssistanceStatus()
         {
-            if (Assistance.CancelWanted) return "Cancellation is unconfirmed. Check / Retry before more work. " + Assistance.Error;
-            if (Assistance.Error != null) return Assistance.Error;
+            if (Assistance.CancelWanted) return "Cancellation is unconfirmed. Check / Retry before more work. " + AssistanceReason(Assistance.Error);
+            if (Assistance.Error != null) return AssistanceReason(Assistance.Error);
             var task = Assistance.Task;
             if (task == null) return Assistance.Busy ? "Contacting assistance…" : "Enter a request or try the no-model example.";
-            string result = ((string)task["status"])?.Replace('_', ' ') + ": " + (string)task["reason"];
+            string result = ((string)task["status"])?.Replace('_', ' ') + ": " + AssistanceReason((string)task["reason"]);
             if (task["result"] is JObject observed) result += "\n" + Outcome(observed, (JObject)task["approval"]?["action"]);
             return result;
         }
+        public static string AssistanceReason(string reason)
+        {
+            // Display-only compatibility for stored tasks from the old shortcut palette.
+            if (reason == "Direct palette owns control" ||
+                reason == "Close the CHRIS palette with F8, then submit a new browser request")
+                return "Switch CHRIS to Assistance mode (or close CHRIS), then submit a new request.";
+            return reason;
+        }
         public static string Outcome(JObject result, JObject action)
         {
-            string text = (string)result["status"] + ": " + (string)result["reason"];
+            string text = (string)result["status"] + ": " + AssistanceReason((string)result["reason"]);
             if ((string)result["status"] != "succeeded" || !(result["observed"] is JObject observed)) return text;
             switch ((string)action?["tool"])
             {
