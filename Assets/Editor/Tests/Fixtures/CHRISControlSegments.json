@@ -23,7 +23,7 @@
       "active_task": null,
       "unknown": []
     },
-    "summary": "1. Set brush size to 0.123456789 (0 to 1 scale).\n2. Set brush color to blue (#0000FF).\n3. Use the \"Ink\" brush.\n4. Open the Color panel.\n5. Move the scene by X 0.25, Y 0.0, Z -0.25 native units.",
+    "summary": "1. Set brush size to 0.123456789 (0 to 1 scale).\n2. Set brush color to blue (#0000FF).\n3. Use the \"Ink\" brush.\n4. Open the Color panel.\n5. Move your viewpoint by X 0.25, Y 0.0, Z -0.25 native units.",
     "envelope": {
       "command_id": "task-0-1",
       "task_id": "task-0",
@@ -116,7 +116,7 @@
       "active_task": null,
       "unknown": []
     },
-    "summary": "1. Turn the scene by -15 degrees.",
+    "summary": "1. Turn your viewpoint by -15 degrees.",
     "envelope": {
       "command_id": "task-1-1",
       "task_id": "task-1",

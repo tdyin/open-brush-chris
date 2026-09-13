@@ -153,7 +153,8 @@ namespace TiltBrush
             var context = m_Model.Gateway.Capture();
             bool fresh = CHRISPanel.ApprovalCurrent(reviewedApproval, context, CHRISCommandGateway.Now);
             bool ready = (bool)context["ready"] && !(bool)context["stroke_active"];
-            if (!proposalMatchesReview) m_Status.text = "This proposal changed or was cancelled. Re-record or edit your request.";
+            if (m_Model.WaitingForRelease) m_Status.text = m_Model.Notice;
+            else if (!proposalMatchesReview) m_Status.text = "This proposal changed or was cancelled. Re-record or edit your request.";
             else if (!fresh) m_Status.text = "The sketch changed or this review expired. Re-record or edit your request.";
             else if (!ready) m_Status.text = "Wait for the sketch to be ready before confirming.";
             else m_Status.text = m_ReviewPages.Length == 1 ? "Review these exact commands. Confirm to apply them in order." :

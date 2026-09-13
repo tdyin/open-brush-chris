@@ -243,6 +243,10 @@ namespace TiltBrush
                 var confirm = popupObject.GetComponentsInChildren<CHRISNativeButton>().Single(b => b.Label.text == "Confirm commands");
                 Assert.That(confirm.IsAvailable(), Is.True); confirm.Click();
                 Assert.That(model.WaitingForRelease, Is.True);
+                TestCHRISAssistance.Call(popup, "Draw");
+                Assert.That(popupObject.GetComponentsInChildren<TextMeshPro>().Any(t =>
+                    t.text == "Release the trigger or mouse button to continue."), Is.True);
+                capture("assist-release", popupObject);
                 Property(model.Assistance, "TaskId", null); Property(model.Assistance, "PendingRequest", null);
                 long stops = host.StopCount;
                 popupObject.GetComponentsInChildren<CHRISNativeButton>().Single(b => b.name == "Local Stop").Click();

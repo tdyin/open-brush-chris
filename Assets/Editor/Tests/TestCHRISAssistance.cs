@@ -217,6 +217,39 @@ namespace TiltBrush
         static JArray Q(Quaternion q) => new JArray(q.x, q.y, q.z, q.w);
 
         [Test]
+        public void SignedViewpointCommandsVerifyInverseSceneMotion()
+        {
+            foreach (int sign in new[] { -1, 1 })
+                Host(host =>
+                {
+                    host.State["scene_position"] = new JArray(1.0, 2.0, 3.0);
+                    host.State["scene_rotation"] = Q(Quaternion.Euler(0, 90, 0));
+                    var before = host.Capture();
+                    var move = Action("view.move", "vector", new JArray(sign * 0.25, 0.0, sign * -0.25));
+                    var turn = Action("view.turn", "number", sign * 15);
+                    var envelope = Envelope(host, new JArray(move, turn));
+                    host.Submit(envelope);
+                    for (int i = 0; i < 4; i++) host.Tick();
+                    var result = Lookup(host, envelope);
+                    Result(result, "succeeded", 2, 2);
+                    var after = host.Capture();
+                    Assert.That((double)after["scene_position"][0], Is.EqualTo(sign > 0 ? 0.75 : 1.25));
+                    Assert.That((double)after["scene_position"][1], Is.EqualTo(2.0));
+                    Assert.That((double)after["scene_position"][2], Is.EqualTo(sign > 0 ? 3.25 : 2.75));
+                    var rotation = after["scene_rotation"];
+                    var actual = new Quaternion((float)rotation[0], (float)rotation[1], (float)rotation[2], (float)rotation[3]);
+                    Assert.That(Quaternion.Angle(actual, Quaternion.Euler(0, sign > 0 ? 75 : 105, 0)), Is.LessThan(0.01f));
+                    var wrongDirection = (JObject)after.DeepClone();
+                    wrongDirection["scene_position"] = new JArray(sign > 0 ? 1.25 : 0.75, 2.0, sign > 0 ? 2.75 : 3.25);
+                    wrongDirection["scene_rotation"] = Q(Quaternion.Euler(0, sign > 0 ? 105 : 75, 0));
+                    Assert.That(host.Readback(move, before, wrongDirection), Is.False);
+                    Assert.That(host.Readback(turn, before, wrongDirection), Is.False);
+                    Exported.Add(new JObject { ["before"] = before, ["context"] = after,
+                        ["envelope"] = envelope, ["result"] = result }.DeepClone());
+                });
+        }
+
+        [Test]
         public void PythonSegmentsValidateAndAllSixActionFamiliesExecute()
         {
             var fixtures = JArray.Parse(File.ReadAllText(Path.Combine(Application.dataPath, "Editor/Tests/Fixtures/CHRISControlSegments.json")));
