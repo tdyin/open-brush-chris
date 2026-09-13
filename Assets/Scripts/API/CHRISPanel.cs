@@ -6,8 +6,6 @@ using System.Linq;
 using Newtonsoft.Json.Linq;
 using UnityEngine;
 using UnityEngine.InputSystem;
-using UnityEngine.InputSystem.Controls;
-using UnityEngine.InputSystem.XR;
 
 namespace TiltBrush
 {
@@ -24,9 +22,6 @@ namespace TiltBrush
         public string Notice { get; private set; } = "Choose Direct or Assistance.";
         public string Prompt { get; set; } = "Make my brush blue";
         public int Page { get; private set; }
-        public bool KeyboardShortcuts { get; set; }
-        public bool ControllerShortcuts { get; set; }
-        bool m_ToggleHeld, m_NextHeld, m_ConfirmHeld, m_BackHeld, m_StopHeld;
         public JObject ReviewedAction { get; private set; }
         public JObject ReviewedApproval { get; private set; }
         JObject m_ReviewContext;
@@ -65,7 +60,7 @@ namespace TiltBrush
         public void SetCategory(string category) { ClearReview(); Category = category; Page = 0; Refresh(); }
         public void ChangePage(int delta)
         {
-            if (Mode != "Direct" || Category == "" || Category == "Shortcuts") return;
+            if (Mode != "Direct" || Category == "") return;
             int pages = Math.Max(1, (Choices(Category, Gateway.Capture()).Count + 3) / 4);
             Page = Mathf.Clamp(Page + delta, 0, pages - 1); Refresh();
         }
@@ -198,7 +193,7 @@ namespace TiltBrush
         }
         public static string AssistanceReason(string reason)
         {
-            // Display-only compatibility for stored tasks from the old shortcut palette.
+            // Display-only compatibility for historical task records.
             if (reason == "Direct palette owns control" ||
                 reason == "Close the CHRIS palette with F8, then submit a new browser request")
                 return "Switch CHRIS to Assistance mode (or close CHRIS), then submit a new request.";
@@ -221,27 +216,9 @@ namespace TiltBrush
         }
         public void Refresh() { Changed?.Invoke(); }
         static string ResultKey(JObject result) => result == null ? null : (string)result["command_id"] + ":" + (string)result["status"];
-        static bool Press(InputDevice device, string name) => device != null && device.enabled && device.TryGetChildControl<ButtonControl>(name)?.isPressed == true;
-        static bool Edge(bool value, ref bool old) { bool edge = value && !old; old = value; return edge; }
-        void TogglePopup()
-        {
-            if (Popup != null) { Popup.RequestClose(true); return; }
-            CHRISFloatingPanel.Show();
-        }
         void Update()
         {
             if (Gateway == null || Assistance == null) return;
-            bool KeyDown(Key key) => KeyboardShortcuts && Keyboard.current != null && Keyboard.current[key].wasPressedThisFrame;
-            bool toggle = Edge(ControllerShortcuts && Press(XRController.leftHand, "gripPressed") && Press(XRController.leftHand, "primaryButton"), ref m_ToggleHeld);
-            bool next = Edge(ControllerShortcuts && Press(XRController.leftHand, "primaryButton"), ref m_NextHeld);
-            bool confirm = Edge(ControllerShortcuts && Press(XRController.rightHand, "primaryButton"), ref m_ConfirmHeld);
-            bool back = Edge(ControllerShortcuts && Press(XRController.rightHand, "secondaryButton"), ref m_BackHeld);
-            bool stop = Edge(ControllerShortcuts && Press(XRController.leftHand, "secondaryButton"), ref m_StopHeld);
-            if (KeyDown(Key.Escape) || stop) StopLocal();
-            if (KeyDown(Key.F8) || toggle) TogglePopup();
-            if (Popup != null && (KeyDown(Key.F9) || back)) Back();
-            if (Popup != null && !toggle && (KeyDown(Key.F6) || next)) ChangePage(1);
-            if (Popup != null && (KeyDown(Key.F7) || confirm)) { if (ReviewedAction != null) ConfirmDirect(); else if (ReviewedApproval != null) Decide(true); }
             if (m_AfterRelease != null)
             {
                 if (Popup == null || Time.unscaledTime > m_ReleaseDeadline)

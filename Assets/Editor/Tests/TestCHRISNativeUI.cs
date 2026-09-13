@@ -103,12 +103,16 @@ namespace TiltBrush
                 Property(model, "Mode", "Direct");
                 Property(model, "ReviewedAction", CHRISPanel.Action("brush.size", "number", 0.3));
                 Set(model, "m_ReviewContext", model.Gateway.Capture());
-                model.ConfirmDirect(); Assert.That(model.WaitingForRelease, Is.True);
+                model.Popup.BuildView(); Set(model.Popup, "m_Model", model);
+                typeof(CHRISNativePopup).GetMethod("Draw", BindingFlags.NonPublic | BindingFlags.Instance).Invoke(model.Popup, null);
+                var buttons = model.Popup.GetComponentsInChildren<CHRISNativeButton>();
+                buttons.Single(b => b.Label.text == "Confirm change").Click();
+                Assert.That(model.WaitingForRelease, Is.True);
                 typeof(CHRISPanel).GetMethod("Update", BindingFlags.NonPublic | BindingFlags.Instance).Invoke(model, null);
                 Assert.That(model.WaitingForRelease, Is.True, "no initialized controller input means no dispatch");
                 Assert.That(model.Gateway.LastDirectResult, Is.Null);
                 Property(model.Assistance, "TaskId", null); Property(model.Assistance, "PendingRequest", null);
-                long count = model.Gateway.StopCount; model.StopLocal();
+                long count = model.Gateway.StopCount; buttons.Single(b => b.name == "Local Stop").Click();
                 Assert.That(model.WaitingForRelease, Is.False); Assert.That(model.ReviewedAction, Is.Null);
                 Assert.That(model.Gateway.StopCount, Is.EqualTo(count + 1));
                 Assert.That(model.Notice, Does.Contain("STOP received"));
@@ -273,7 +277,7 @@ namespace TiltBrush
                 tests.FloatingPanelStaysInWorldAndDragStopsOnRelease();
                 tests.AssistanceExplainsBlockedRequestsAndReviewDoesNotDispatch();
                 Render(output);
-                File.WriteAllText(output + "/checks.txt", "PASS: native UI assets, 35 validated direct choices, context invalidation, cancellation/recovery interlocks, floating placement independent of hand/head, drag/release/stop, native collider layout and rendered review. No Play mode, HTTP, paid model calls or sketch changes.");
+                File.WriteAllText(output + "/checks.txt", "PASS: native UI assets, 35 validated direct choices, context invalidation, cancellation/recovery interlocks, floating placement independent of hand/head, drag/release/stop, native collider layout, clickable confirmation and STOP in the panel/More menu, pending-task explanations and rendered review. No Play mode, HTTP, paid model calls or sketch changes.");
             }
             catch (Exception ex)
             { File.WriteAllText(output + "/checks.txt", "FAIL: " + ex); throw; }
@@ -288,6 +292,7 @@ namespace TiltBrush
                 var obj = UnityEngine.Object.Instantiate(resources.PopupPrefab); obj.name = "CHRIS layout verification";
                 UnityEngine.SceneManagement.SceneManager.MoveGameObjectToScene(obj, scene);
                 var popup = obj.GetComponent<CHRISNativePopup>(); popup.BuildView();
+                Assert.That(obj.GetComponentsInChildren<CHRISNativeButton>().Any(b => b.Label.text == "Shortcuts"), Is.False);
                 var modelObj = new GameObject("CHRIS preview model");
                 UnityEngine.SceneManagement.SceneManager.MoveGameObjectToScene(modelObj, scene);
                 var model = modelObj.AddComponent<CHRISPanel>(); model.Gateway = modelObj.AddComponent<CHRISCommandGateway>();
@@ -342,6 +347,24 @@ namespace TiltBrush
                 menu.transform.position = Vector3.zero; menu.transform.rotation = Quaternion.identity;
                 UnityEngine.SceneManagement.SceneManager.MoveGameObjectToScene(menu, scene);
                 typeof(CHRISMenuEntry).GetMethod("Start", BindingFlags.NonPublic | BindingFlags.Instance).Invoke(menu.GetComponent<CHRISMenuEntry>(), null);
+                var menuButtons = menu.GetComponentsInChildren<CHRISNativeButton>();
+                foreach (string name in new[] { "CHRIS entry", "CHRIS local Stop" })
+                {
+                    var button = menuButtons.Single(b => b.name == name);
+                    Assert.That(button.IsAvailable(), Is.True); Assert.That(button.Click, Is.Not.Null);
+                    Assert.That(button.GetComponent<BoxCollider>(), Is.Not.Null);
+                }
+                var instance = typeof(CHRISPanel).GetField("<Instance>k__BackingField", BindingFlags.Static | BindingFlags.NonPublic);
+                var previousInstance = instance.GetValue(null);
+                try
+                {
+                    instance.SetValue(null, model);
+                    Property(client, "TaskId", null); Property(client, "PendingRequest", null);
+                    long stopped = model.Gateway.StopCount;
+                    menuButtons.Single(b => b.name == "CHRIS local Stop").Click();
+                    Assert.That(model.Gateway.StopCount, Is.EqualTo(stopped + 1), "More-menu STOP works with CHRIS hidden");
+                }
+                finally { instance.SetValue(null, previousInstance); }
                 camera.orthographicSize = 1.15f;
                 foreach (var text in menu.GetComponentsInChildren<TextMeshPro>()) text.ForceMeshUpdate();
                 camera.Render(); RenderTexture.active = rt; image.ReadPixels(new Rect(0, 0, rt.width, rt.height), 0, 0); image.Apply();

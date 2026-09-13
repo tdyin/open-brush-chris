@@ -46,9 +46,8 @@ namespace TiltBrush
             for (int i = 0; i < 6; i++)
                 m_Choices[i] = m_Resources.Button(transform, "Choice " + i,
                     new Vector3(i % 2 == 0 ? -0.9f : 0.9f, -0.46f - i / 2 * 0.4f, -0.06f), new Vector2(1.7f, 0.32f), "", null);
-            m_Resources.Button(transform, "Cancel review / Back", new Vector3(-1.2f, -1.73f, -0.06f), new Vector2(1.1f, 0.32f), "Cancel / Back", () => m_Model?.Back());
-            m_Resources.Button(transform, "Shortcuts", new Vector3(0, -1.73f, -0.06f), new Vector2(1.1f, 0.32f), "Shortcuts", () => m_Model?.SetCategory("Shortcuts"));
-            m_Resources.Button(transform, "Close CHRIS", new Vector3(1.2f, -1.73f, -0.06f), new Vector2(1.1f, 0.32f), "Close", () => RequestClose(true));
+            m_Resources.Button(transform, "Cancel review / Back", new Vector3(-0.9f, -1.73f, -0.06f), new Vector2(1.7f, 0.32f), "Cancel / Back", () => m_Model?.Back());
+            m_Resources.Button(transform, "Close CHRIS", new Vector3(0.9f, -1.73f, -0.06f), new Vector2(1.7f, 0.32f), "Close", () => RequestClose(true));
         }
         void MarkDirty() { m_Dirty = true; }
         protected override void BaseUpdate()
@@ -68,12 +67,6 @@ namespace TiltBrush
             foreach (var button in m_Choices) { button.gameObject.SetActive(false); button.Click = null; }
             m_Status.text = m_Model.Mode + "\n" + m_Model.Notice;
             m_Detail.text = "";
-            if (m_Model.Category == "Shortcuts")
-            {
-                m_Detail.text = "Optional: F8 open/close, F6 page, F7 confirm, F9 back, Escape Stop. Quest: X page, A confirm, B back, Y Stop, left grip+X toggle. Shared native actions remain.";
-                Choice(0, m_Model.KeyboardShortcuts ? "Keyboard: ON" : "Keyboard: OFF", () => { m_Model.KeyboardShortcuts = !m_Model.KeyboardShortcuts; MarkDirty(); });
-                Choice(1, m_Model.ControllerShortcuts ? "Controller: ON" : "Controller: OFF", () => { m_Model.ControllerShortcuts = !m_Model.ControllerShortcuts; MarkDirty(); }); return;
-            }
             if (m_Model.Mode == "Choose controls")
             { m_Detail.text = "Use the mode buttons above.\nHold the title bar with the trigger to move this window. Release to leave it in place."; return; }
             if (m_Model.Mode == "Direct") { DrawDirect(); return; }
