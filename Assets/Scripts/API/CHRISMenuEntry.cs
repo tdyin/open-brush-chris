@@ -10,14 +10,13 @@ namespace TiltBrush
         void Start()
         {
             var resources = CHRISUIResources.Load();
-            resources.Button(transform, "CHRIS entry", new Vector3(-0.22f, -0.73f, -0.06f),
-                new Vector2(0.88f, 0.26f), "CHRIS", () =>
-                {
-                    CHRISFloatingPanel.Show();
-                    GetComponent<PopUpWindow>().RequestClose(true);
-                });
-            resources.Button(transform, "CHRIS local Stop", new Vector3(0.47f, -0.73f, -0.06f),
-                new Vector2(0.42f, 0.26f), "STOP", () => CHRISPanel.Instance?.StopLocal(), true);
+            resources.Button(transform, "CHRIS entry", new Vector3(-0.22f, -0.73f, -0.06f), new Vector2(0.88f, 0.26f), "CHRIS", () =>
+            {
+                CHRISFloatingPanel.Show();
+                GetComponent<PopUpWindow>().RequestClose(true);
+            });
+            resources.Button(transform, "CHRIS local Stop", new Vector3(0.47f, -0.73f, -0.06f), new Vector2(0.42f, 0.26f), "STOP",
+                () => CHRISPanel.Instance?.StopLocal(), true);
         }
     }
 }
