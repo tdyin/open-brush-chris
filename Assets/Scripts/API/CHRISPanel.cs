@@ -11,279 +11,256 @@ using UnityEngine.InputSystem.XR;
 
 namespace TiltBrush
 {
-    // Small native list UI. No backend, model, prefab, or web page is needed.
+    // Persistent state. The view uses Open Brush's native popup, pointer and button machinery.
     [DefaultExecutionOrder(9000)]
     public class CHRISPanel : MonoBehaviour
     {
+        public static CHRISPanel Instance { get; private set; }
         public CHRISCommandGateway Gateway;
-        private readonly List<KeyValuePair<string, JObject>> m_Options = new List<KeyValuePair<string, JObject>>();
-        private TextMesh m_Text;
-        private bool m_Open, m_Confirm, m_ToggleHeld, m_NextHeld, m_ConfirmHeld, m_BackHeld, m_StopHeld;
-        private int m_Index;
-        private long m_SelectedRevision, m_SelectedEpoch;
-        private bool m_WasReady;
-        private string m_SelectedSession;
-        private string m_Notice, m_LastActionLabel, m_LastTool, m_ResultShown;
-        private float m_NoticeUntil;
-        private Key m_Next = Key.F6, m_Accept = Key.F7,
-            m_Back = Key.F9, m_Stop = Key.Escape, m_Toggle = Key.F8;
-        private string m_Rebind;
-        private readonly string[] m_ButtonNames = { "primaryButton", "secondaryButton", "primary2DAxisClick" };
-        private int m_XrNext, m_XrAccept, m_XrBack = 1, m_XrStop = 1;
-        // Controller shortcuts stay off until the user checks shared native bindings in-headset.
-        private bool m_ControllerShortcuts;
-
+        public CHRISAssistanceClient Assistance { get; private set; }
+        public CHRISNativePopup Popup { get; private set; }
+        public string Mode { get; private set; } = "Choose controls";
+        public string Category { get; private set; } = "";
+        public string Notice { get; private set; } = "Choose Direct or Assistance.";
+        public string Prompt { get; set; } = "Make my brush blue";
+        public int Page { get; private set; }
+        public bool KeyboardShortcuts { get; set; }
+        public bool ControllerShortcuts { get; set; }
+        bool m_ToggleHeld, m_NextHeld, m_ConfirmHeld, m_BackHeld, m_StopHeld;
+        public JObject ReviewedAction { get; private set; }
+        public JObject ReviewedApproval { get; private set; }
+        JObject m_ReviewContext;
+        JObject m_LastDirectAction;
+        System.Action m_AfterRelease;
+        float m_ReleaseDeadline, m_NextPoll;
+        string m_ResultShown;
+        public bool WaitingForRelease => m_AfterRelease != null;
+        public event System.Action Changed;
         void Start()
         {
-            m_Next = LoadKey("Next", m_Next); m_Accept = LoadKey("Confirm", m_Accept);
-            m_Back = LoadKey("Back", m_Back); m_Stop = LoadKey("Stop", m_Stop);
-            m_Toggle = LoadKey("Toggle", m_Toggle);
-            m_XrNext = LoadButton("Next", 0); m_XrAccept = LoadButton("Confirm", 0);
-            m_XrBack = LoadButton("Back", 1); m_XrStop = LoadButton("Stop", 1);
-            if (m_XrNext == m_XrStop) m_XrStop = (m_XrNext + 1) % 3;
-            if (m_XrAccept == m_XrBack) m_XrBack = (m_XrAccept + 1) % 3;
-            var obj = new GameObject("CHRIS direct palette");
-            obj.transform.SetParent(transform, false);
-            m_Text = obj.AddComponent<TextMesh>();
-            m_Text.fontSize = 40; m_Text.characterSize = 0.025f;
-            m_Text.anchor = TextAnchor.UpperLeft; m_Text.color = Color.white;
-            obj.SetActive(false);
+            Instance = this;
+            Assistance = GetComponent<CHRISAssistanceClient>() ?? gameObject.AddComponent<CHRISAssistanceClient>();
+            Assistance.Changed += Refresh;
         }
-        static Key LoadKey(string name, Key fallback)
+        public void Opened(CHRISNativePopup popup)
         {
-            int value = PlayerPrefs.GetInt("CHRIS.InputKey." + name, (int)fallback);
-            return Enum.IsDefined(typeof(Key), value) && value != (int)Key.None ? (Key)value : fallback;
+            if (Popup != null && Popup != popup) Popup.RequestClose(true);
+            Popup = popup; ClearReview(); Mode = "Choose controls"; Category = "";
+            Gateway.DirectPaletteOpen = false;
+            Notice = "Direct changes stay local. Assistance uses the Python service.";
+            if (Assistance.TaskId != null) Assistance.Refresh(); Refresh();
         }
-        static int LoadButton(string name, int fallback) =>
-            Mathf.Clamp(PlayerPrefs.GetInt("CHRIS.Xr" + name, fallback), 0, 2);
-        static bool KeyDown(Key key) => Keyboard.current != null && Keyboard.current[key].wasPressedThisFrame;
-        static bool Press(InputDevice device, string name)
+        public void Closed(CHRISNativePopup popup)
+        { if (Popup == popup) { Popup = null; ClearReview(); Gateway.DirectPaletteOpen = false; Mode = "Choose controls"; } }
+        public void SwitchMode(string mode)
         {
-            // OpenXR buttons are populated by the same Input System action bindings
-            // used by native Open Brush. Legacy XR feature polling can stay false.
-            string control = name == "primary2DAxisClick" ? "thumbstickClicked" :
-                name == "gripButton" ? "gripPressed" : name;
-            return device != null && device.enabled &&
-                device.TryGetChildControl<ButtonControl>(control)?.isPressed == true;
+            if (Mode == mode) return;
+            if (mode == "Direct" && !Assistance.CanStart)
+            { Notice = "Cancel or finish assistance first. Check / Retry if disconnected."; Refresh(); return; }
+            ClearReview(); Gateway.Stop("CHRIS control mode changed");
+            Mode = mode; Category = ""; Page = 0; Gateway.DirectPaletteOpen = mode == "Direct";
+            Notice = mode == "Direct" ? "Direct control. Choose a change, review it, then Confirm." : "Assistance control. Proposals require your approval.";
+            Refresh();
         }
-        static bool Edge(bool value, ref bool previous)
-        { bool edge = value && !previous; previous = value; return edge; }
-
+        public void SetCategory(string category) { ClearReview(); Category = category; Page = 0; Refresh(); }
+        public void ChangePage(int delta)
+        {
+            if (Mode != "Direct" || Category == "" || Category == "Shortcuts") return;
+            int pages = Math.Max(1, (Choices(Category, Gateway.Capture()).Count + 3) / 4);
+            Page = Mathf.Clamp(Page + delta, 0, pages - 1); Refresh();
+        }
+        public void Back()
+        {
+            if (ReviewedAction != null || ReviewedApproval != null || WaitingForRelease) ClearReview();
+            else { Category = ""; Page = 0; }
+            Notice = "Review cancelled. No new change sent."; Refresh();
+        }
+        void ClearReview() { ReviewedAction = null; ReviewedApproval = null; m_ReviewContext = null; m_AfterRelease = null; }
+        public void StopLocal()
+        {
+            ClearReview(); Gateway.Stop(); Assistance?.Cancel();
+            m_ResultShown = ResultKey(Gateway.LastDirectResult);
+            Notice = "STOP received locally. Completed changes remain. Check assistance cancellation acknowledgement."; Refresh();
+        }
+        public static bool InputReleased()
+        {
+            if (InputManager.m_Instance == null || InputManager.Controllers == null) return false;
+            return !InputManager.m_Instance.GetCommand(InputManager.SketchCommands.Activate) &&
+                !InputManager.Controllers.Any(c => c != null && (c.GetVrInput(VrInput.Trigger) || c.GetVrInput(VrInput.Grip))) &&
+                !(Mouse.current?.leftButton.isPressed ?? false);
+        }
+        public static bool PassiveNativeUIHover()
+        {
+            var popup = Instance?.Popup; var controls = SketchControlsScript.m_Instance;
+            return popup != null && popup.IsOpen() && popup.GetParentPanel()?.PanelPopUp == popup &&
+                controls != null && controls.IsUserLookingAtPanel(popup.GetParentPanel()) && InputReleased();
+        }
+        void AfterRelease(System.Action action)
+        {
+            if (m_AfterRelease != null) return;
+            m_AfterRelease = action; m_ReleaseDeadline = Time.unscaledTime + 8;
+            Notice = "Release the trigger / mouse button to continue."; Refresh();
+        }
+        public static bool SameContext(JObject a, JObject b) => a != null && b != null &&
+            (string)a["host_session"] == (string)b["host_session"] && (long)a["revision"] == (long)b["revision"] &&
+            (long)a["authority_epoch"] == (long)b["authority_epoch"];
+        public static bool ApprovalCurrent(JObject approval, JObject context, double now) =>
+            SameContext(approval, context) && (double?)approval["expires_at"] > now;
+        bool Ready(JObject c) => (bool)c["ready"] && !(bool)c["stroke_active"] && c["active_task"].Type == JTokenType.Null;
+        public void Review(JObject action)
+        {
+            var context = Gateway.Capture();
+            if (Mode != "Direct" || !Ready(context)) { Notice = "Host unavailable or busy. Finish drawing / active work first."; Refresh(); return; }
+            ReviewedAction = (JObject)action.DeepClone(); m_ReviewContext = context;
+            Notice = "Review this one change, then Confirm or Cancel."; Refresh();
+        }
+        public void ConfirmDirect()
+        {
+            if (ReviewedAction == null || Mode != "Direct") return;
+            var action = (JObject)ReviewedAction.DeepClone(); var context = m_ReviewContext;
+            AfterRelease(() =>
+            {
+                var current = Gateway.Capture();
+                if (!SameContext(context, current) || !Ready(current))
+                { ClearReview(); Notice = "State changed. Choose and review again."; return; }
+                m_LastDirectAction = action; Gateway.Direct(action); ClearReview(); Notice = "Sent. Waiting for native readback.";
+            });
+        }
+        public void Propose(bool example)
+        { if (Mode == "Assistance") AfterRelease(() => Assistance.Submit(Prompt, example)); }
+        public void ReviewProposal()
+        {
+            if ((string)Assistance.Task?["status"] != "awaiting_approval") return;
+            ReviewedApproval = (JObject)Assistance.Task["approval"].DeepClone();
+            Notice = "Review the proposed change. Approval expires or becomes stale after manual changes."; Refresh();
+        }
+        public void Decide(bool approve)
+        {
+            if (Mode != "Assistance" || ReviewedApproval == null) return;
+            var reviewed = (JObject)ReviewedApproval.DeepClone();
+            AfterRelease(() =>
+            {
+                if (approve && !ApprovalCurrent(reviewed, Gateway.Capture(), CHRISCommandGateway.Now))
+                { Notice = "Approval expired or native state changed. Reject / cancel and request a fresh proposal."; return; }
+                Assistance.Decide(reviewed, approve); ReviewedApproval = null;
+            });
+        }
+        public static JObject Action(string tool, string parameter, JToken value) => new JObject {
+            ["action_id"] = Guid.NewGuid().ToString("N"), ["version"] = 1, ["tool"] = tool,
+            ["number"] = null, ["text"] = null, ["vector"] = null, ["visible"] = null, [parameter] = value };
+        public static List<KeyValuePair<string, JObject>> Choices(string category, JObject c)
+        {
+            var list = new List<KeyValuePair<string, JObject>>();
+            System.Action<string, JObject> add = (label, action) => list.Add(new KeyValuePair<string, JObject>(label, action));
+            switch (category)
+            {
+                case "Brush":
+                    foreach (var brush in ((JObject)c["brushes"]).Properties().OrderBy(p => (string)p.Value)) add((string)brush.Value, Action("brush.select", "text", brush.Name)); break;
+                case "Color":
+                    foreach (var color in new[] { "#FFFFFF", "#FF4040", "#40A0FF", "#40FF80" }) add(color, Action("brush.color", "text", color)); break;
+                case "Size":
+                    foreach (double size in new[] { 0.1, 0.3, 0.5, 0.8 }) add("Size " + size.ToString("0.0", System.Globalization.CultureInfo.InvariantCulture), Action("brush.size", "number", size)); break;
+                case "Panels":
+                    foreach (string panel in new[] { "Brush", "Color" }) foreach (bool visible in new[] { true, false })
+                    { var action = Action("panel.visibility", "text", panel); action["visible"] = visible; add((visible ? "Open " : "Close ") + panel, action); } break;
+                case "Move":
+                    add("Move +X", Action("view.move", "vector", new JArray(0.25, 0, 0))); add("Move -X", Action("view.move", "vector", new JArray(-0.25, 0, 0)));
+                    add("Move +Z", Action("view.move", "vector", new JArray(0, 0, 0.25))); add("Move -Z", Action("view.move", "vector", new JArray(0, 0, -0.25))); break;
+                case "Turn": add("Turn left 15°", Action("view.turn", "number", -15)); add("Turn right 15°", Action("view.turn", "number", 15)); break;
+            }
+            return list;
+        }
+        public static string Summary(JObject a, JObject c)
+        {
+            if (a == null) return "No change selected.";
+            switch ((string)a["tool"])
+            {
+                case "brush.select": return "Select brush: " + ((string)c?["brushes"]?[(string)a["text"]] ?? (string)a["text"]);
+                case "brush.color": return "Set color " + (string)a["text"];
+                case "brush.size": return "Set brush size " + a["number"] + " (0–1). Draw a new stroke to compare.";
+                case "panel.visibility": return ((bool)a["visible"] ? "Open " : "Close ") + a["text"] + " panel";
+                case "view.move": return "Move scene by " + string.Join(", ", (JArray)a["vector"]) + " native units";
+                case "view.turn": return "Turn scene " + a["number"] + " degrees";
+                default: return "Unsupported action";
+            }
+        }
+        public string AssistanceStatus()
+        {
+            if (Assistance.CancelWanted) return "Cancellation is unconfirmed. Check / Retry before more work. " + Assistance.Error;
+            if (Assistance.Error != null) return Assistance.Error;
+            var task = Assistance.Task;
+            if (task == null) return Assistance.Busy ? "Contacting assistance…" : "Enter a request or try the no-model example.";
+            string result = ((string)task["status"])?.Replace('_', ' ') + ": " + (string)task["reason"];
+            if (task["result"] is JObject observed) result += "\n" + Outcome(observed, (JObject)task["approval"]?["action"]);
+            return result;
+        }
+        public static string Outcome(JObject result, JObject action)
+        {
+            string text = (string)result["status"] + ": " + (string)result["reason"];
+            if ((string)result["status"] != "succeeded" || !(result["observed"] is JObject observed)) return text;
+            switch ((string)action?["tool"])
+            {
+                case "brush.size": return "Applied. Observed brush size: " + observed["brush_size"] + " (0–1). Draw a new stroke to compare.";
+                case "brush.color": return "Applied. Observed color: " + observed["brush_color"];
+                case "brush.select": return "Applied. Observed brush: " + ((string)observed["brushes"]?[(string)observed["brush_id"]] ?? (string)observed["brush_id"]);
+                case "panel.visibility": return "Applied. " + action["text"] + " panel is " + ((bool?)observed["panels"]?[(string)action["text"]] == true ? "open." : "closed.");
+                case "view.move": return "Applied. Observed scene position: " + string.Join(", ", (JArray)observed["scene_position"]);
+                case "view.turn": return "Applied " + action["number"] + "° scene turn. Native rotation verified; compare existing artwork.";
+                default: return text;
+            }
+        }
+        public void Refresh() { Changed?.Invoke(); }
+        static string ResultKey(JObject result) => result == null ? null : (string)result["command_id"] + ":" + (string)result["status"];
+        static bool Press(InputDevice device, string name) => device != null && device.enabled && device.TryGetChildControl<ButtonControl>(name)?.isPressed == true;
+        static bool Edge(bool value, ref bool old) { bool edge = value && !old; old = value; return edge; }
+        void TogglePopup()
+        {
+            if (Popup != null) { Popup.RequestClose(true); return; }
+            var manager = PanelManager.m_Instance;
+            var parent = manager?.GetAllPanels().Select(p => p.m_Panel).FirstOrDefault(p => p is AdminPanel && manager.IsPanelAvailable(p));
+            if (parent != null) parent.CreatePopUp(CHRISUIResources.Load().PopupPrefab, Vector3.zero, false, true);
+        }
         void Update()
         {
-            if (Gateway == null || m_Text == null) return;
-            var left = XRController.leftHand;
-            var right = XRController.rightHand;
-            bool toggle = Edge(m_ControllerShortcuts && Press(left, "gripButton") && Press(left, "primaryButton"), ref m_ToggleHeld);
-            bool next = Edge(m_ControllerShortcuts && Press(left, m_ButtonNames[m_XrNext]), ref m_NextHeld);
-            bool confirm = Edge(m_ControllerShortcuts && Press(right, m_ButtonNames[m_XrAccept]), ref m_ConfirmHeld);
-            bool back = Edge(m_ControllerShortcuts && Press(right, m_ButtonNames[m_XrBack]), ref m_BackHeld);
-            bool stop = Edge(m_ControllerShortcuts && Press(left, m_ButtonNames[m_XrStop]), ref m_StopHeld);
-            if (KeyDown(m_Stop) || stop)
-            { StopSelection(); Render(); return; }
-            if (m_Rebind != null) { RebindKey(); return; }
-            if (KeyDown(m_Toggle) || toggle)
+            if (Gateway == null || Assistance == null) return;
+            bool KeyDown(Key key) => KeyboardShortcuts && Keyboard.current != null && Keyboard.current[key].wasPressedThisFrame;
+            bool toggle = Edge(ControllerShortcuts && Press(XRController.leftHand, "gripPressed") && Press(XRController.leftHand, "primaryButton"), ref m_ToggleHeld);
+            bool next = Edge(ControllerShortcuts && Press(XRController.leftHand, "primaryButton"), ref m_NextHeld);
+            bool confirm = Edge(ControllerShortcuts && Press(XRController.rightHand, "primaryButton"), ref m_ConfirmHeld);
+            bool back = Edge(ControllerShortcuts && Press(XRController.rightHand, "secondaryButton"), ref m_BackHeld);
+            bool stop = Edge(ControllerShortcuts && Press(XRController.leftHand, "secondaryButton"), ref m_StopHeld);
+            if (KeyDown(Key.Escape) || stop) StopLocal();
+            if (KeyDown(Key.F8) || toggle) TogglePopup();
+            if (Popup != null && (KeyDown(Key.F9) || back)) Back();
+            if (Popup != null && !toggle && (KeyDown(Key.F6) || next)) ChangePage(1);
+            if (Popup != null && (KeyDown(Key.F7) || confirm)) { if (ReviewedAction != null) ConfirmDirect(); else if (ReviewedApproval != null) Decide(true); }
+            if (m_AfterRelease != null)
             {
-                m_Open = !m_Open; m_Confirm = false; m_Text.gameObject.SetActive(m_Open);
-                Gateway.DirectPaletteOpen = m_Open;
-                if (m_Open) { Gateway.Stop("Direct palette opened"); BuildOptions(); Position(); }
-                return;
+                if (Popup == null || Time.unscaledTime > m_ReleaseDeadline)
+                { m_AfterRelease = null; Notice = "Input was not released. Nothing new sent; review again."; Refresh(); }
+                else if (InputReleased() && !CHRISCommandGateway.NativeInteractionBusy())
+                {
+                    var action = m_AfterRelease; m_AfterRelease = null;
+                    try { action(); } catch (Exception ex) { Notice = "Change rejected: " + ex.Message; }
+                    Refresh();
+                }
             }
-            if (!m_Open) { Render(); return; }
-            var c = Gateway.Capture();
-            if ((bool)c["ready"] != m_WasReady) { BuildOptions(); m_Confirm = false; }
-            if (m_Confirm && !SelectionCurrent(c)) { m_Confirm = false; Notice("State changed. Review the choice again."); }
-            if (KeyDown(m_Back) || back) BackSelection();
-            else if (KeyDown(m_Next) || next)
-            { m_Confirm = false; m_Index = (m_Index + 1) % Math.Max(1, m_Options.Count); }
-            else if (KeyDown(m_Accept) || confirm) ConfirmSelection();
-            Render();
-        }
-        void Notice(string message)
-        { m_Notice = message; m_NoticeUntil = Time.unscaledTime + 8; }
-        void StopSelection()
-        {
-            Gateway.Stop(); m_Confirm = false; m_Rebind = null;
-            var result = Gateway.LastDirectResult;
-            if (result != null) m_ResultShown = (string)result["command_id"] + ":" + (string)result["status"];
-            Notice("STOP received. Pending work cancelled.\nCompleted changes are kept.");
-            if (!m_Open) Position();
-        }
-        void BackSelection()
-        {
-            if (m_Confirm) { m_Confirm = false; Notice("Confirmation cancelled. No change applied."); }
-            else if (m_Options.Count > 0)
-            { m_Index = (m_Index - 1 + m_Options.Count) % m_Options.Count; Notice("Previous option"); }
-        }
-        string ResultText(JObject result)
-        {
-            string status = (string)result["status"];
-            if (status != "succeeded") return "Change " + status + ": " + (string)result["reason"];
-            var observed = result["observed"];
-            string detail = "";
-            if (m_LastTool == "brush.size" && observed?["brush_size"] is JValue size &&
-                (size.Type == JTokenType.Float || size.Type == JTokenType.Integer))
-                detail = "\nObserved size: " + ((double)size).ToString("F2") + " (0-1).\nDraw a new stroke to compare.";
-            else if (m_LastTool == "view.move" && observed?["scene_position"] is JArray position)
-                detail = "\nObserved scene position: " + string.Join(", ", position.Select(v => ((double)v).ToString("F3")));
-            else if (m_LastTool == "view.turn") detail = "\nScene turn verified. Compare against existing artwork.";
-            return "APPLIED: " + m_LastActionLabel + detail;
-        }
-        void Render()
-        {
+            if (ReviewedAction != null && !WaitingForRelease && !SameContext(m_ReviewContext, Gateway.Capture()))
+            { ClearReview(); Notice = "State changed. Review the choice again."; Refresh(); }
             var result = Gateway.LastDirectResult;
             if (result != null && (string)result["status"] != "queued")
             {
-                string key = (string)result["command_id"] + ":" + (string)result["status"];
-                if (key != m_ResultShown) { m_ResultShown = key; Notice(ResultText(result)); }
-            }
-            bool notice = !string.IsNullOrEmpty(m_Notice) && Time.unscaledTime < m_NoticeUntil;
-            m_Text.gameObject.SetActive(m_Open || notice);
-            if (!m_Open) { m_Text.text = notice ? m_Notice : ""; return; }
-            var c = Gateway.Capture();
-            string selected = m_Options.Count == 0 ? "Waiting for host" : m_Options[m_Index].Key;
-            m_Text.text = "CHRIS / Direct controls\n" + (m_Confirm ? "REVIEW: " : "> ") + selected +
-                "\n" + (Available(c) ? m_Next + " Next / " + m_Accept + " Confirm / " + m_Back + " Back" : "Waiting for idle native host") +
-                "\n" + (m_Confirm ? "Confirm again to apply; Back cancels." : "Back goes to the previous option.") +
-                "\nStop: " + m_Stop + (m_ControllerShortcuts ? " / left " + m_ButtonNames[m_XrStop] : "") +
-                "\n" + (notice ? m_Notice : Gateway.Status);
-        }
-        bool Available(JObject c) => (bool)c["ready"] && !(bool)c["stroke_active"] &&
-            !CHRISCommandGateway.NativeInteractionBusy() && c["active_task"].Type == JTokenType.Null;
-        bool SelectionCurrent(JObject c) => Available(c) && m_SelectedRevision == (long)c["revision"] &&
-            m_SelectedEpoch == (long)c["authority_epoch"] && m_SelectedSession == (string)c["host_session"];
-        void ConfirmSelection()
-        {
-            if (m_Rebind != null) return;
-            var c = Gateway.Capture();
-            if (!Available(c) || m_Options.Count == 0) { m_Confirm = false; Notice("No change: finish drawing or using native controls first."); return; }
-            if (m_Confirm)
-            {
-                if (SelectionCurrent(c))
+                string key = ResultKey(result);
+                if (key != m_ResultShown)
                 {
-                    m_LastActionLabel = m_Options[m_Index].Key;
-                    m_LastTool = (string)m_Options[m_Index].Value["tool"];
-                    try { Gateway.Direct((JObject)m_Options[m_Index].Value.DeepClone()); Notice("Applying: " + m_LastActionLabel); }
-                    catch (ArgumentException ex) { Notice("Change rejected: " + ex.Message); }
-                    catch (Exception) { Notice("Change failed. Check native status before trying again."); }
+                    m_ResultShown = key; Notice = Outcome(result, m_LastDirectAction);
+                    Refresh();
                 }
-                else Notice("State changed. Review the choice again.");
-                m_Confirm = false;
             }
-            else
-            {
-                m_Confirm = true; m_SelectedRevision = (long)c["revision"];
-                m_SelectedEpoch = (long)c["authority_epoch"]; m_SelectedSession = (string)c["host_session"];
-            }
+            if (Popup != null && Time.unscaledTime >= m_NextPoll)
+            { m_NextPoll = Time.unscaledTime + 1; if (Mode == "Assistance") Assistance.Refresh(); Refresh(); }
         }
-        void Position()
-        {
-            if (App.CurrentState != App.AppState.Standard) return;
-            var camera = App.VrSdk == null ? null : App.VrSdk.GetVrCamera();
-            if (camera == null) return;
-            var head = camera.transform;
-            m_Text.transform.position = head.position + head.forward * 3 + head.right * -1 + head.up * 0.6f;
-            m_Text.transform.rotation = head.rotation;
-        }
-        void Add(string label, string tool, JToken number = null, string text = null,
-            JArray vector = null, JToken visible = null)
-        {
-            var action = new JObject { ["action_id"] = Guid.NewGuid().ToString("N"), ["version"] = 1,
-                ["tool"] = tool, ["number"] = number, ["text"] = text,
-                ["vector"] = vector, ["visible"] = visible };
-            m_Options.Add(new KeyValuePair<string, JObject>(label, action));
-        }
-        void BuildOptions()
-        {
-            m_Options.Clear(); m_Index = 0;
-            var c = Gateway.Capture();
-            m_WasReady = (bool)c["ready"];
-            if (!m_WasReady) return;
-            foreach (float size in new[] { 0.1f, 0.3f, 0.5f, 0.8f }) Add("Brush size " + size, "brush.size", size);
-            foreach (string color in new[] { "#FFFFFF", "#FF4040", "#40A0FF", "#40FF80" })
-                Add("Color " + color, "brush.color", text: color);
-            foreach (var brush in ((JObject)c["brushes"]).Properties().OrderBy(p => (string)p.Value).Take(8))
-                Add("Brush " + (string)brush.Value, "brush.select", text: brush.Name);
-            foreach (var panel in ((JObject)c["panels"]).Properties())
-            {
-                Add("Open " + panel.Name, "panel.visibility", text: panel.Name, visible: true);
-                Add("Close " + panel.Name, "panel.visibility", text: panel.Name, visible: false);
-            }
-            Add("Move +X (0.25 native units)", "view.move", vector: new JArray(0.25, 0, 0));
-            Add("Move -X (0.25 native units)", "view.move", vector: new JArray(-0.25, 0, 0));
-            Add("Move +Z (0.25 native units)", "view.move", vector: new JArray(0, 0, 0.25));
-            Add("Move -Z (0.25 native units)", "view.move", vector: new JArray(0, 0, -0.25));
-            Add("Turn left 15 degrees", "view.turn", -15);
-            Add("Turn right 15 degrees", "view.turn", 15);
-        }
-        void KeyButton(string name, Key code)
-        {
-            if (GUILayout.Button(name + ": " + code)) { m_Rebind = name; m_Confirm = false; }
-        }
-        void RebindKey()
-        {
-            if (Keyboard.current == null) return;
-            foreach (var control in Keyboard.current.allKeys)
-            {
-                if (!control.wasPressedThisFrame) continue;
-                var key = control.keyCode;
-                var keys = new[] { m_Next, m_Accept, m_Back, m_Stop, m_Toggle };
-                if (keys.Contains(key)) return;
-                switch (m_Rebind)
-                {
-                    case "Next": m_Next = key; break;
-                    case "Confirm": m_Accept = key; break;
-                    case "Back": m_Back = key; break;
-                    case "Stop": m_Stop = key; break;
-                    case "Toggle": m_Toggle = key; break;
-                }
-                PlayerPrefs.SetInt("CHRIS.InputKey." + m_Rebind, (int)key);
-                PlayerPrefs.Save(); m_Rebind = null; return;
-            }
-        }
-        void XrButton(string name, ref int value, int conflict)
-        {
-            if (!GUILayout.Button(name + ": " + m_ButtonNames[value])) return;
-            do { value = (value + 1) % 3; } while (value == conflict);
-            PlayerPrefs.SetInt("CHRIS.Xr" + name, value); PlayerPrefs.Save();
-        }
-        void OnGUI()
-        {
-            if (!m_Open || Gateway == null) return;
-            GUILayout.BeginArea(new Rect(15, 15, 390, 700), GUI.skin.box);
-            GUILayout.Label("CHRIS direct controls / bindings");
-            if (GUILayout.Button("STOP")) { StopSelection(); Render(); }
-            GUILayout.Label(Time.unscaledTime < m_NoticeUntil ? m_Notice : Gateway.Status);
-            GUILayout.Label("Stop handler: " + Gateway.LastStopMilliseconds.ToString("F3") +
-                " ms / authority invalidations: " + Gateway.StopCount);
-            if (GUILayout.Button("Close palette"))
-            { m_Open = false; m_Confirm = false; m_Rebind = null; Gateway.DirectPaletteOpen = false; m_Text.gameObject.SetActive(false); }
-            GUILayout.Label(m_Options.Count == 0 ? "Waiting for host" : m_Options[m_Index].Key);
-            if (GUILayout.Button("Next")) { m_Confirm = false; m_Index = (m_Index + 1) % Math.Max(1, m_Options.Count); }
-            if (GUILayout.Button(m_Confirm ? "Confirm change" : "Review change")) ConfirmSelection();
-            if (GUILayout.Button(m_Confirm ? "Cancel confirmation" : "Previous option")) BackSelection();
-            KeyButton("Toggle", m_Toggle); KeyButton("Next", m_Next);
-            KeyButton("Confirm", m_Accept); KeyButton("Back", m_Back); KeyButton("Stop", m_Stop);
-            bool shortcuts = GUILayout.Toggle(m_ControllerShortcuts, "Enable shared controller shortcuts for this session");
-            if (shortcuts != m_ControllerShortcuts) { m_ControllerShortcuts = shortcuts; m_Confirm = false; Gateway.Stop("Controller bindings changed"); }
-            GUILayout.Label("Controller buttons also retain Open Brush actions. Check bindings before enabling.");
-            GUILayout.Label("Controller: Next/Stop left; Confirm/Back right");
-            GUILayout.Label("Quest: primary = X/A, secondary = Y/B, axis click = press thumbstick.");
-            if (m_ControllerShortcuts)
-                GUILayout.Label("Input devices: left " + (XRController.leftHand != null ? "connected" : "not detected") +
-                    ", right " + (XRController.rightHand != null ? "connected" : "not detected"));
-            XrButton("Next", ref m_XrNext, m_XrStop); XrButton("Stop", ref m_XrStop, m_XrNext);
-            XrButton("Confirm", ref m_XrAccept, m_XrBack); XrButton("Back", ref m_XrBack, m_XrAccept);
-            GUILayout.Label("Toggle: left grip + primary button");
-            if (m_Rebind != null) GUILayout.Label("Press an unused key for " + m_Rebind);
-            GUILayout.EndArea();
-        }
-        void OnDisable()
-        {
-            m_Open = false; m_Confirm = false;
-            if (Gateway != null) { Gateway.DirectPaletteOpen = false; Gateway.Stop("Direct palette disabled"); }
-            if (m_Text != null) m_Text.gameObject.SetActive(false);
-        }
-        void OnDestroy() { if (m_Text != null) Destroy(m_Text.gameObject); }
+        void OnDisable() { ClearReview(); if (Gateway != null) { Gateway.DirectPaletteOpen = false; Gateway.Stop("CHRIS UI disabled"); } }
+        void OnDestroy() { if (Instance == this) Instance = null; if (Assistance != null) Assistance.Changed -= Refresh; }
     }
 }

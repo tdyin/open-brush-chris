@@ -1,0 +1,17 @@
+%YAML 1.1
+%TAG !u! tag:unity3d.com,2011:
+--- !u!114 &11400000
+MonoBehaviour:
+  m_ObjectHideFlags: 0
+  m_CorrespondingSourceObject: {fileID: 0}
+  m_PrefabInstance: {fileID: 0}
+  m_PrefabAsset: {fileID: 0}
+  m_GameObject: {fileID: 0}
+  m_Enabled: 1
+  m_Script: {fileID: 11500000, guid: 418175670e40c664d895147dc487ad44, type: 3}
+  m_Name: UI
+  m_EditorClassIdentifier:
+  SurfaceShader: {fileID: 4800000, guid: d5fa22b5dc8af0341ac6b66fa7c71dec, type: 3}
+  Font: {fileID: 11400000, guid: fce54057bad3d2d4cb3c36ee394be518, type: 2}
+  KeyboardPrefab: {fileID: 8644332587479430734, guid: bdb7d2ac05cca8346b210c2b576878cb, type: 3}
+  PopupPrefab: {fileID: 100000, guid: b2fefc944710408b813c486c1c47c930, type: 3}
