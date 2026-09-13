@@ -435,6 +435,8 @@ Success. If you are not automatically redirected, please visit <a href='{success
                 }
             }
             App.HttpServer.AddHttpHandler(ROOT_API_URL, ApiCommandCallback);
+            if (GetComponent<CHRISCommandGateway>() == null)
+                gameObject.AddComponent<CHRISCommandGateway>();
         }
 
         private string InvokeEndpoint(EnqueuedApiCommand command)
