@@ -394,7 +394,7 @@ namespace TiltBrush
                 StringValue(envelope["payload"]) && StringValue(envelope["payload_digest"]), "Invalid approval types");
             Require(approval["actions"] is JArray, "Actions must be an array");
             var actions = (JArray)approval["actions"];
-            Require(actions.Count >= 1 && actions.Count <= 5 && actions.All(a => a is JObject), "Expected 1–5 actions");
+            Require(actions.Count >= 1 && actions.Count <= 5 && actions.All(a => a is JObject), "Expected 1-5 actions");
             string payload = (string)envelope["payload"], hash = Hash(payload);
             var parsedPayload = Parse(payload);
             Fields(parsedPayload, "actions");
