@@ -56,8 +56,7 @@ namespace TiltBrush
         public static void Show()
         {
             var manager = PanelManager.m_Instance;
-            var panel = manager?.GetAllPanels().Select(p => p.m_Panel)
-                .OfType<CHRISFloatingPanel>().FirstOrDefault();
+            var panel = manager?.GetOrCreateCHRISPanel();
             if (panel == null || !manager.IsPanelAvailable(panel)) return;
             panel.PlaceInFront(ViewpointScript.Head);
             panel.gameObject.SetActive(true);

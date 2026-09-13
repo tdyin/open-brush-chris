@@ -583,14 +583,6 @@ namespace TiltBrush
                 }
             }
 
-            // Register before SketchControls allocates its per-panel gaze results. CHRIS has
-            // its own world-space owner, independent of the controller-mounted More menu.
-            var chrisPanel = CHRISFloatingPanel.Create(transform);
-            m_AllPanels.Add(new PanelData {
-                m_Panel = chrisPanel,
-                m_MapKey = new PanelMapKey { m_Basic = true, m_Advanced = true },
-            });
-
             // Init rotation.
             m_WandPanelsRotationDiffCount = 4;
             m_WandPanelsRotationDiffHistory = new float[m_WandPanelsRotationDiffCount];
@@ -631,6 +623,31 @@ namespace TiltBrush
             if (App.Config.IsMobileHardware)
             {
                 Shader.SetGlobalFloat("_PanelMipmapBias", m_PanelMipmapBias);
+            }
+        }
+
+        public CHRISFloatingPanel GetOrCreateCHRISPanel()
+        {
+            var existing = m_AllPanels.Select(p => p.m_Panel).OfType<CHRISFloatingPanel>().FirstOrDefault();
+            if (existing != null) return existing;
+
+            // CHRIS is optional. Never create or initialize it as part of native menu startup.
+            var panel = CHRISFloatingPanel.Create(transform);
+            try
+            {
+                panel.InitPanel();
+                m_AllPanels.Add(new PanelData {
+                    m_Panel = panel,
+                    m_MapKey = new PanelMapKey { m_Basic = true, m_Advanced = true },
+                });
+                SketchControlsScript.m_Instance.InitGazePanels();
+                return panel;
+            }
+            catch
+            {
+                m_AllPanels.RemoveAll(p => p.m_Panel == panel);
+                Destroy(panel.gameObject);
+                throw;
             }
         }
 
