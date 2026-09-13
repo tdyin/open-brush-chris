@@ -36,7 +36,8 @@ namespace TiltBrush
         {
             m_Resources = CHRISUIResources.Load();
             m_Resources.Surface(transform, "CHRIS background", Vector3.zero, new Vector2(3.8f, 4), new Color(0.025f, 0.045f, 0.06f));
-            m_Resources.Text(transform, "Title", new Vector3(-0.55f, 1.78f, -0.04f), new Vector2(2.1f, 0.35f), "CHRIS", 2.1f);
+            m_Resources.Button(transform, "Drag CHRIS", new Vector3(-0.65f, 1.77f, -0.06f), new Vector2(2.25f, 0.34f),
+                "CHRIS — hold to move", () => (m_ParentPanel as CHRISFloatingPanel)?.BeginDrag());
             m_Resources.Button(transform, "Local Stop", new Vector3(1.15f, 1.77f, -0.06f), new Vector2(1.2f, 0.34f), "STOP", () => m_Model?.StopLocal(), true);
             m_Resources.Button(transform, "Direct mode", new Vector3(-0.9f, 1.34f, -0.06f), new Vector2(1.7f, 0.32f), "Direct controls", () => m_Model?.SwitchMode("Direct"));
             m_Resources.Button(transform, "Assistance mode", new Vector3(0.9f, 1.34f, -0.06f), new Vector2(1.7f, 0.32f), "Assistance", () => m_Model?.SwitchMode("Assistance"));
@@ -74,7 +75,7 @@ namespace TiltBrush
                 Choice(1, m_Model.ControllerShortcuts ? "Controller: ON" : "Controller: OFF", () => { m_Model.ControllerShortcuts = !m_Model.ControllerShortcuts; MarkDirty(); }); return;
             }
             if (m_Model.Mode == "Choose controls")
-            { m_Detail.text = "Use the mode buttons above.\nStop is always local. Close returns to the More menu."; return; }
+            { m_Detail.text = "Use the mode buttons above.\nHold the title bar with the trigger to move this window. Release to leave it in place."; return; }
             if (m_Model.Mode == "Direct") { DrawDirect(); return; }
             DrawAssistance();
         }
@@ -147,6 +148,12 @@ namespace TiltBrush
                 if (key.IsPress && key.Key.KeyType == KeyboardKeyType.Enter)
                 { m_Model.Prompt = keyboard.ConsoleContent.Trim(); m_Model.Refresh(); }
             };
+        }
+        protected override void DestroyPopUpWindow()
+        {
+            var host = m_ParentPanel as CHRISFloatingPanel;
+            base.DestroyPopUpWindow();
+            if (host != null) host.gameObject.SetActive(false);
         }
         void OnDestroy()
         {

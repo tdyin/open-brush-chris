@@ -78,6 +78,7 @@ namespace TiltBrush
         void ClearReview() { ReviewedAction = null; ReviewedApproval = null; m_ReviewContext = null; m_AfterRelease = null; }
         public void StopLocal()
         {
+            (Popup?.GetParentPanel() as CHRISFloatingPanel)?.EndDrag();
             ClearReview(); Gateway.Stop(); Assistance?.Cancel();
             m_ResultShown = ResultKey(Gateway.LastDirectResult);
             Notice = "STOP received locally. Completed changes remain. Check assistance cancellation acknowledgement."; Refresh();
@@ -92,7 +93,8 @@ namespace TiltBrush
         public static bool PassiveNativeUIHover()
         {
             var popup = Instance?.Popup; var controls = SketchControlsScript.m_Instance;
-            return popup != null && popup.IsOpen() && popup.GetParentPanel()?.PanelPopUp == popup &&
+            return popup != null && popup.IsOpen() && popup.GetParentPanel() is CHRISFloatingPanel floating &&
+                !floating.IsDragging && popup.GetParentPanel()?.PanelPopUp == popup &&
                 controls != null && controls.IsUserLookingAtPanel(popup.GetParentPanel()) && InputReleased();
         }
         void AfterRelease(System.Action action)
@@ -216,9 +218,7 @@ namespace TiltBrush
         void TogglePopup()
         {
             if (Popup != null) { Popup.RequestClose(true); return; }
-            var manager = PanelManager.m_Instance;
-            var parent = manager?.GetAllPanels().Select(p => p.m_Panel).FirstOrDefault(p => p is AdminPanel && manager.IsPanelAvailable(p));
-            if (parent != null) parent.CreatePopUp(CHRISUIResources.Load().PopupPrefab, Vector3.zero, false, true);
+            CHRISFloatingPanel.Show();
         }
         void Update()
         {

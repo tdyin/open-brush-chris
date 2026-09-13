@@ -129,7 +129,74 @@ namespace TiltBrush
             var menuCollider = menu.GetComponent<BoxCollider>();
             Assert.That(menuCollider.center.y - menuCollider.size.y / 2, Is.LessThan(-0.86f));
         }
+        [Test]
+        public void FloatingPanelStaysInWorldAndDragStopsOnRelease()
+        {
+            var scene = EditorSceneManager.NewPreviewScene();
+            var previousManager = PanelManager.m_Instance;
+            try
+            {
+                var room = new GameObject("Room");
+                UnityEngine.SceneManagement.SceneManager.MoveGameObjectToScene(room, scene);
+                var head = new GameObject("Head").transform; head.SetParent(room.transform);
+                var hand = new GameObject("Left hand").transform; hand.SetParent(room.transform);
+                head.position = new Vector3(0, 16, 0);
+                var panel = CHRISFloatingPanel.Create(room.transform);
+                var manager = room.AddComponent<PanelManager>();
+                PanelManager.m_Instance = manager;
+                var components = panel.GetComponent<UIComponentManager>();
+                typeof(UIComponentManager).GetMethod("Awake", BindingFlags.NonPublic | BindingFlags.Instance).Invoke(components, null);
+                panel.InitPanel();
+                Assert.That(panel.gameObject.activeSelf, Is.False, "Starts closed");
+                panel.gameObject.SetActive(true);
+                Assert.That(panel.Type, Is.EqualTo(BasePanel.PanelType.CHRIS));
+                Assert.That(panel.m_Fixed, Is.False);
+                Assert.That(panel.transform.IsChildOf(hand), Is.False);
+                panel.PlaceInFront(head);
+                var placed = panel.transform.position; var rotation = panel.transform.rotation;
+                Assert.That(placed.x, Is.GreaterThan(head.position.x));
+                Assert.That(placed.z, Is.GreaterThan(head.position.z));
+                hand.position += new Vector3(-8, 3, 2); hand.rotation = Quaternion.Euler(70, 30, 20);
+                head.position += new Vector3(1, 0, 0); head.rotation = Quaternion.Euler(0, 30, 0);
+                Assert.That(panel.transform.position, Is.EqualTo(placed), "Head and hand motion must not carry the window");
+                Assert.That(panel.transform.rotation, Is.EqualTo(rotation));
+                Physics.SyncTransforms();
+                Assert.That(panel.RaycastAgainstMeshCollider(new Ray(placed - panel.transform.forward * 8,
+                    panel.transform.forward), out _, 4), Is.True, "Floating controls remain reachable beyond the short wand-menu ray");
+                var ray = new Ray(new Vector3(0, 12, 0), Vector3.forward);
+                var hit = ray.GetPoint(7);
+                panel.BeginDrag(ray, hit);
+                Assert.That(panel.IsDragging, Is.True);
+                panel.MoveDrag(ray, true);
+                Assert.That(Vector3.Distance(panel.transform.position, placed), Is.LessThan(0.0001f), "No snap when drag starts");
+                var movedRay = new Ray(ray.origin + new Vector3(2, 1, 1), ray.direction);
+                panel.MoveDrag(movedRay, true);
+                Assert.That(Vector3.Distance(panel.transform.position, placed + new Vector3(2, 1, 1)), Is.LessThan(0.0001f));
+                var released = panel.transform.position;
+                panel.MoveDrag(ray, false); panel.MoveDrag(ray, true);
+                Assert.That(panel.IsDragging, Is.False);
+                Assert.That(panel.transform.position, Is.EqualTo(released), "Release leaves the window where placed");
+                panel.BeginDrag(ray, hit); panel.EndDrag(); panel.MoveDrag(movedRay, true);
+                Assert.That(panel.transform.position, Is.EqualTo(released), "Stop must end an active drag");
+                Assert.That(manager.IsPanelUnique(panel.Type), Is.True, "One owner shared by basic and advanced modes");
+            }
+            finally { EditorSceneManager.ClosePreviewScene(scene); PanelManager.m_Instance = previousManager; }
+        }
+
+        [MenuItem("CHRIS/Verify native UI (Edit mode)")]
+        public static void VerifyInEditor()
+        {
+            if (EditorApplication.isPlayingOrWillChangePlaymode)
+                throw new InvalidOperationException("Exit Play mode before running CHRIS editor checks.");
+            RunChecks();
+        }
+
         public static void Run()
+        {
+            try { RunChecks(); EditorApplication.Exit(0); }
+            catch (Exception ex) { Debug.LogException(ex); EditorApplication.Exit(1); }
+        }
+        static void RunChecks()
         {
             string output = Path.GetFullPath("Build/CHRISNativeUI");
             Directory.CreateDirectory(output);
@@ -140,12 +207,12 @@ namespace TiltBrush
                 tests.UncertainSubmissionAndStopNeverCreateAnotherProposal();
                 tests.ConfirmWaitsForReleaseAndLocalStopClearsIt();
                 tests.NativeAssetsProvideMenuPopupKeyboardAndClickableButtons();
+                tests.FloatingPanelStaysInWorldAndDragStopsOnRelease();
                 Render(output);
-                File.WriteAllText(output + "/checks.txt", "PASS: native UI assets, 35 validated direct choices, context invalidation, cancellation/recovery interlocks, native collider layout and rendered review. No Play mode, HTTP, paid model calls or sketch changes.");
-                EditorApplication.Exit(0);
+                File.WriteAllText(output + "/checks.txt", "PASS: native UI assets, 35 validated direct choices, context invalidation, cancellation/recovery interlocks, floating placement independent of hand/head, drag/release/stop, native collider layout and rendered review. No Play mode, HTTP, paid model calls or sketch changes.");
             }
             catch (Exception ex)
-            { File.WriteAllText(output + "/checks.txt", "FAIL: " + ex); Debug.LogException(ex); EditorApplication.Exit(1); }
+            { File.WriteAllText(output + "/checks.txt", "FAIL: " + ex); throw; }
         }
         static void Render(string output)
         {

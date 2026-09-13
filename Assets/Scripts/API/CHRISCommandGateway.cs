@@ -169,7 +169,8 @@ namespace TiltBrush
         public static bool NativeInteractionBusy()
         {
             var controls = SketchControlsScript.m_Instance;
-            return controls == null || (controls.IsUserInteractingWithUI() && !CHRISPanel.PassiveNativeUIHover()) ||
+            return (CHRISPanel.Instance?.Popup?.GetParentPanel() as CHRISFloatingPanel)?.IsDragging == true ||
+                controls == null || (controls.IsUserInteractingWithUI() && !CHRISPanel.PassiveNativeUIHover()) ||
                 controls.IsUserInteractingWithAnyWidget() || controls.IsUserGrabbingWorld();
         }
 

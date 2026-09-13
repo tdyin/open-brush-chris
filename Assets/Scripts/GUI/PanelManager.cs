@@ -490,7 +490,8 @@ namespace TiltBrush
                 type == BasePanel.PanelType.AppSettings || type == BasePanel.PanelType.AppSettingsMobile ||
                 type == BasePanel.PanelType.Sketchbook || type == BasePanel.PanelType.SketchbookMobile ||
                 type == BasePanel.PanelType.Camera || type == BasePanel.PanelType.MemoryWarning ||
-                type == BasePanel.PanelType.Multiplayer || type == BasePanel.PanelType.QuillLibrary;
+                type == BasePanel.PanelType.Multiplayer || type == BasePanel.PanelType.QuillLibrary ||
+                type == BasePanel.PanelType.CHRIS;
         }
 
         // Core panels are those that exist in the basic mode experience.  Practically, those that
@@ -581,6 +582,14 @@ namespace TiltBrush
                     }
                 }
             }
+
+            // Register before SketchControls allocates its per-panel gaze results. CHRIS has
+            // its own world-space owner, independent of the controller-mounted More menu.
+            var chrisPanel = CHRISFloatingPanel.Create(transform);
+            m_AllPanels.Add(new PanelData {
+                m_Panel = chrisPanel,
+                m_MapKey = new PanelMapKey { m_Basic = true, m_Advanced = true },
+            });
 
             // Init rotation.
             m_WandPanelsRotationDiffCount = 4;
