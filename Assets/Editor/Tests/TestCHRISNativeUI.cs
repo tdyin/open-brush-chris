@@ -159,7 +159,14 @@ namespace TiltBrush
                 hand.position += new Vector3(-8, 3, 2); hand.rotation = Quaternion.Euler(70, 30, 20);
                 head.position += new Vector3(1, 0, 0); head.rotation = Quaternion.Euler(0, 30, 0);
                 Assert.That(panel.transform.position, Is.EqualTo(placed), "Head and hand motion must not carry the window");
-                Assert.That(panel.transform.rotation, Is.EqualTo(rotation));
+                panel.FaceUser(head.position);
+                Assert.That(panel.transform.position, Is.EqualTo(placed), "Facing the user only rotates the window");
+                Assert.That(Vector3.Dot(-panel.transform.forward, (head.position - placed).normalized), Is.GreaterThan(0.9999f));
+                var facing = panel.transform.rotation;
+                head.rotation = Quaternion.Euler(20, 90, 45); panel.FaceUser(head.position);
+                Assert.That(Quaternion.Angle(panel.transform.rotation, facing), Is.LessThan(0.001f), "Follow head position, not head roll or gaze");
+                panel.FaceUser(placed);
+                Assert.That(panel.transform.rotation, Is.EqualTo(facing), "Coincident positions must not produce an invalid rotation");
                 Physics.SyncTransforms();
                 Assert.That(panel.RaycastAgainstMeshCollider(new Ray(placed - panel.transform.forward * 8,
                     panel.transform.forward), out _, 4), Is.True, "Floating controls remain reachable beyond the short wand-menu ray");
@@ -171,6 +178,8 @@ namespace TiltBrush
                 Assert.That(Vector3.Distance(panel.transform.position, placed), Is.LessThan(0.0001f), "No snap when drag starts");
                 var movedRay = new Ray(ray.origin + new Vector3(2, 1, 1), ray.direction);
                 panel.MoveDrag(movedRay, true);
+                panel.FaceUser(head.position);
+                Assert.That(Vector3.Dot(-panel.transform.forward, (head.position - panel.transform.position).normalized), Is.GreaterThan(0.9999f));
                 Assert.That(Vector3.Distance(panel.transform.position, placed + new Vector3(2, 1, 1)), Is.LessThan(0.0001f));
                 var released = panel.transform.position;
                 panel.MoveDrag(ray, false); panel.MoveDrag(ray, true);

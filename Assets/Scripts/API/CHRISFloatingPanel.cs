@@ -73,7 +73,16 @@ namespace TiltBrush
             var right = Vector3.Cross(Vector3.up, forward);
             transform.position = head.position + App.METERS_TO_UNITS *
                 (forward * 0.75f + right * 0.32f - Vector3.up * 0.08f);
-            transform.rotation = Quaternion.LookRotation(transform.position - head.position, Vector3.up);
+            FaceUser(head.position);
+        }
+
+        public void FaceUser(Vector3 headPosition)
+        {
+            // Native panel fronts point along local -Z. Rotate around the panel's fixed
+            // position, using world up so head roll does not tilt the controls sideways.
+            var forward = transform.position - headPosition;
+            if (forward.sqrMagnitude < 0.000001f) return;
+            transform.rotation = Quaternion.LookRotation(forward, Vector3.up);
             m_Mesh.transform.rotation = transform.rotation;
         }
 
@@ -124,10 +133,14 @@ namespace TiltBrush
         void Update()
         {
             BaseUpdate();
-            if (!IsDragging) return;
-            if (PanelPopUp == null || !PanelPopUp.IsOpen() || !PointerRay(out var ray))
-            { EndDrag(); return; }
-            MoveDrag(ray, InputManager.m_Instance.GetCommand(InputManager.SketchCommands.Activate));
+            if (IsDragging)
+            {
+                if (PanelPopUp == null || !PanelPopUp.IsOpen() || !PointerRay(out var ray))
+                    EndDrag();
+                else MoveDrag(ray, InputManager.m_Instance.GetCommand(InputManager.SketchCommands.Activate));
+            }
+            var head = ViewpointScript.Head;
+            if (head != null) FaceUser(head.position);
         }
 
         protected override void OnDisablePanel()
