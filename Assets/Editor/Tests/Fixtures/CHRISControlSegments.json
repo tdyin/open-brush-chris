@@ -1,0 +1,148 @@
+[
+  {
+    "context": {
+      "host_session": "host1",
+      "revision": 1,
+      "captured_at": 1789337665.948541,
+      "authority_epoch": 0,
+      "ready": true,
+      "stroke_active": false,
+      "brush_id": "ink",
+      "brush_size": 0.5,
+      "brush_color": "#FFFFFF",
+      "brushes": {
+        "ink": "Ink"
+      },
+      "panels": {
+        "Brush": false,
+        "Color": true
+      },
+      "scene_position": null,
+      "scene_rotation": null,
+      "scene_scale": null,
+      "active_task": null,
+      "unknown": []
+    },
+    "summary": "1. Set brush size to 0.123456789 (0 to 1 scale).\n2. Set brush color to blue (#0000FF).\n3. Use the \"Ink\" brush.\n4. Open the Color panel.\n5. Move the scene by X 0.25, Y 0.0, Z -0.25 native units.",
+    "envelope": {
+      "command_id": "task-0-1",
+      "task_id": "task-0",
+      "payload": "{\"actions\":[{\"action_id\":\"size\",\"number\":0.123456789,\"text\":null,\"tool\":\"brush.size\",\"vector\":null,\"version\":1,\"visible\":null},{\"action_id\":\"color\",\"number\":null,\"text\":\"#0000FF\",\"tool\":\"brush.color\",\"vector\":null,\"version\":1,\"visible\":null},{\"action_id\":\"select\",\"number\":null,\"text\":\"ink\",\"tool\":\"brush.select\",\"vector\":null,\"version\":1,\"visible\":null},{\"action_id\":\"panel\",\"number\":null,\"text\":\"Color\",\"tool\":\"panel.visibility\",\"vector\":null,\"version\":1,\"visible\":true},{\"action_id\":\"move\",\"number\":null,\"text\":null,\"tool\":\"view.move\",\"vector\":[0.25,0.0,-0.25],\"version\":1,\"visible\":null}]}",
+      "payload_digest": "ab920f5cfe0ffb824f7acad770111db883ad68464e7526d71936bac470e99909",
+      "approval": {
+        "actions": [
+          {
+            "action_id": "size",
+            "version": 1,
+            "tool": "brush.size",
+            "number": 0.123456789,
+            "text": null,
+            "vector": null,
+            "visible": null
+          },
+          {
+            "action_id": "color",
+            "version": 1,
+            "tool": "brush.color",
+            "number": null,
+            "text": "#0000FF",
+            "vector": null,
+            "visible": null
+          },
+          {
+            "action_id": "select",
+            "version": 1,
+            "tool": "brush.select",
+            "number": null,
+            "text": "ink",
+            "vector": null,
+            "visible": null
+          },
+          {
+            "action_id": "panel",
+            "version": 1,
+            "tool": "panel.visibility",
+            "number": null,
+            "text": "Color",
+            "vector": null,
+            "visible": true
+          },
+          {
+            "action_id": "move",
+            "version": 1,
+            "tool": "view.move",
+            "number": null,
+            "text": null,
+            "vector": [
+              0.25,
+              0.0,
+              -0.25
+            ],
+            "visible": null
+          }
+        ],
+        "approval_id": "approval-0",
+        "task_id": "task-0",
+        "action_digest": "ab920f5cfe0ffb824f7acad770111db883ad68464e7526d71936bac470e99909",
+        "host_session": "host1",
+        "revision": 1,
+        "authority_epoch": 0,
+        "expires_at": 1789337965.948541,
+        "scope": "control_segment"
+      }
+    }
+  },
+  {
+    "context": {
+      "host_session": "host1",
+      "revision": 1,
+      "captured_at": 1789337665.948541,
+      "authority_epoch": 0,
+      "ready": true,
+      "stroke_active": false,
+      "brush_id": "ink",
+      "brush_size": 0.5,
+      "brush_color": "#FFFFFF",
+      "brushes": {
+        "ink": "Ink"
+      },
+      "panels": {
+        "Brush": false,
+        "Color": true
+      },
+      "scene_position": null,
+      "scene_rotation": null,
+      "scene_scale": null,
+      "active_task": null,
+      "unknown": []
+    },
+    "summary": "1. Turn the scene by -15 degrees.",
+    "envelope": {
+      "command_id": "task-1-1",
+      "task_id": "task-1",
+      "payload": "{\"actions\":[{\"action_id\":\"turn\",\"number\":-15.0,\"text\":null,\"tool\":\"view.turn\",\"vector\":null,\"version\":1,\"visible\":null}]}",
+      "payload_digest": "e8755a4c7b47e00d732c2b86f666c4a0b831316d963b223665cbb70da8eff130",
+      "approval": {
+        "actions": [
+          {
+            "action_id": "turn",
+            "version": 1,
+            "tool": "view.turn",
+            "number": -15.0,
+            "text": null,
+            "vector": null,
+            "visible": null
+          }
+        ],
+        "approval_id": "approval-1",
+        "task_id": "task-1",
+        "action_digest": "e8755a4c7b47e00d732c2b86f666c4a0b831316d963b223665cbb70da8eff130",
+        "host_session": "host1",
+        "revision": 1,
+        "authority_epoch": 0,
+        "expires_at": 1789337965.948541,
+        "scope": "control_segment"
+      }
+    }
+  }
+]

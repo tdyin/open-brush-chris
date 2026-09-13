@@ -32,6 +32,10 @@ namespace TiltBrush
             public JObject Envelope, Before, Result;
             public string Wire;
             public float Deadline;
+            public int Completed;
+            public bool AwaitingReadback;
+            public JArray Actions => (JArray)Envelope["approval"]["actions"];
+            public JObject CurrentAction => (JObject)Actions[Completed];
         }
         private readonly Queue<Request> m_Requests = new Queue<Request>();
         private readonly Dictionary<string, Record> m_Records = new Dictionary<string, Record>();
@@ -44,10 +48,9 @@ namespace TiltBrush
         private bool m_Closed, m_Registered;
         private HttpServer m_Server;
         public string Status { get; private set; } = "Waiting for native host";
-        public JObject LastDirectResult { get; private set; }
-        public bool DirectPaletteOpen { get; set; }
         public double LastStopMilliseconds { get; private set; }
         public long StopCount { get; private set; }
+        public event Action Stopped;
         private int m_StopLogs;
         public static double Now => DateTimeOffset.UtcNow.ToUnixTimeMilliseconds() / 1000.0;
 
@@ -118,7 +121,7 @@ namespace TiltBrush
             return ReadContext();
         }
 
-        JObject ReadContext()
+        protected virtual JObject ReadContext()
         {
             var pointer = m_Closed || App.CurrentState != App.AppState.Standard || PointerManager.m_Instance == null
                 ? null : PointerManager.m_Instance.MainPointer;
@@ -135,7 +138,6 @@ namespace TiltBrush
                 ["brushes"] = new JObject(), ["panels"] = new JObject(),
                 ["scene_position"] = null, ["scene_rotation"] = null, ["scene_scale"] = null,
                 ["active_task"] = m_ActiveTask == null ? JValue.CreateNull() : new JValue(m_ActiveTask),
-                ["direct_palette_open"] = DirectPaletteOpen,
                 ["unknown"] = new JArray("active_layer", "selected_model", "physical_scale", "generation") };
             if (!ready) return c;
             c["brush_id"] = pointer.CurrentBrush.m_Guid.ToString();
@@ -214,7 +216,8 @@ namespace TiltBrush
         }
         static bool ExpectedPendingChange(Record record, JObject current)
         {
-            var action = (JObject)record.Envelope["approval"]["action"];
+            if (!record.AwaitingReadback) return false;
+            var action = record.CurrentAction;
             // Panel visibility may change on a later animation frame. Other setters are
             // synchronous and have already established their baseline in Apply/Observe(false).
             if ((string)action["tool"] != "panel.visibility" ||
@@ -241,24 +244,8 @@ namespace TiltBrush
         {
             if (m_Closed) return;
             Observe(true);
-            if (m_Pending != null && NativeInteractionBusy()) Stop("Native interaction took control");
-            if (m_Pending != null)
-            {
-                var record = m_Pending;
-                var after = ReadContext();
-                bool verified = Verify((JObject)record.Envelope["approval"]["action"], record.Before, after);
-                if (verified || Time.realtimeSinceStartup >= record.Deadline)
-                {
-                    m_Pending = null;
-                    Invalidate((string)record.Envelope["task_id"]);
-                    m_ActiveTask = null;
-                    record.Result = Result(record.Envelope, verified ? "succeeded" : "unverified",
-                        verified ? "Native state verified" : "Native readback did not match", ReadContext());
-                    Status = (string)record.Result["reason"];
-                    if (LastDirectResult != null && (string)LastDirectResult["command_id"] == (string)record.Result["command_id"])
-                        LastDirectResult = record.Result;
-                }
-            }
+            if (m_Pending != null && IsNativeInteractionBusy()) Stop("Native interaction took control");
+            AdvanceSegment();
             // Bound request work per frame so an HTTP caller cannot starve native controls.
             for (int i = 0; i < 4; ++i)
             {
@@ -275,6 +262,73 @@ namespace TiltBrush
                     request.Done.Set();
                 }
             }
+        }
+
+        protected virtual double AuthorityTime => Now;
+
+        protected virtual bool IsNativeInteractionBusy() => NativeInteractionBusy();
+
+        void AdvanceSegment()
+        {
+            var record = m_Pending;
+            if (record == null) return;
+            var current = ReadContext();
+            if (!record.AwaitingReadback)
+            {
+                if ((double)record.Envelope["approval"]["expires_at"] <= AuthorityTime)
+                {
+                    FinishSegment(record, record.Completed > 0 ? "partial" : "rejected", "Approval expired; remaining actions stopped");
+                    return;
+                }
+                if (!(bool)current["ready"] || (bool)current["stroke_active"] || MateriallyChanged(record.Before, current))
+                {
+                    FinishSegment(record, record.Completed > 0 ? "partial" : "rejected", "Native state changed before next action");
+                    return;
+                }
+                DispatchAction(record, current);
+                return;
+            }
+            if (Verify(record.CurrentAction, record.Before, current))
+            {
+                record.Completed++;
+                record.AwaitingReadback = false;
+                if (record.Completed == record.Actions.Count)
+                    FinishSegment(record, "succeeded", "All approved actions verified");
+                else
+                {
+                    record.Before = current;
+                    record.Result = Result(record, "queued", "Action verified; next action pending", current);
+                }
+            }
+            else if (Time.realtimeSinceStartup >= record.Deadline)
+                FinishSegment(record, "unverified", "Native readback did not match; remaining actions stopped");
+        }
+
+        void DispatchAction(Record record, JObject before)
+        {
+            record.Before = before;
+            try
+            {
+                // Mark dispatch before the adapter: exceptions can occur after a mutation.
+                record.AwaitingReadback = true;
+                Apply(record.CurrentAction);
+                Observe(false);
+                record.Deadline = Time.realtimeSinceStartup + 3;
+                record.Result = Result(record, "queued", "Awaiting native readback", null);
+            }
+            catch (Exception)
+            {
+                FinishSegment(record, "unverified", "Operation failed; inspect native state before further work");
+            }
+        }
+
+        void FinishSegment(Record record, string status, string reason)
+        {
+            m_Pending = null;
+            Invalidate((string)record.Envelope["task_id"]);
+            m_ActiveTask = null;
+            record.Result = Result(record, status, reason, ReadContext());
+            Status = reason;
         }
 
         JObject Route(Request request)
@@ -318,14 +372,13 @@ namespace TiltBrush
         static bool NumberValue(JToken token) => token != null &&
             (token.Type == JTokenType.Float || token.Type == JTokenType.Integer) && Finite((double)token);
 
-        public JObject Submit(JObject envelope) => Submit(envelope, false);
-        JObject Submit(JObject envelope, bool direct)
+        public JObject Submit(JObject envelope)
         {
             Require(!m_Closed && m_Registered, "Host closed or unavailable");
             Fields(envelope, "command_id", "task_id", "payload", "payload_digest", "approval");
             Require(StringValue(envelope["command_id"]) && StringValue(envelope["task_id"]), "Invalid IDs");
             string command = (string)envelope["command_id"], task = (string)envelope["task_id"];
-            Require(Id(command) && Id(task), "Invalid IDs");
+            Require(Id(command) && Id(task) && command == task + "-1", "Invalid segment IDs");
             string wire = envelope.ToString(Formatting.None);
             if (m_Records.TryGetValue(command, out var existing))
             {
@@ -334,59 +387,67 @@ namespace TiltBrush
             }
             Require(m_Records.Count < 4096 && m_InvalidTasks.Count < 4096, "Session ledger full; restart host");
             var approval = (JObject)envelope["approval"];
-            Fields(approval, "approval_id", "task_id", "action", "action_digest", "host_session", "revision", "authority_epoch", "expires_at", "scope");
+            Fields(approval, "approval_id", "task_id", "actions", "action_digest", "host_session", "revision", "authority_epoch", "expires_at", "scope");
             Require(new[] { "approval_id", "task_id", "action_digest", "host_session", "scope" }.All(k => StringValue(approval[k])) &&
                 approval["revision"].Type == JTokenType.Integer && approval["authority_epoch"].Type == JTokenType.Integer &&
                 (long)approval["revision"] >= 0 && (long)approval["authority_epoch"] >= 0 && NumberValue(approval["expires_at"]) &&
                 StringValue(envelope["payload"]) && StringValue(envelope["payload_digest"]), "Invalid approval types");
-            var action = (JObject)approval["action"];
+            Require(approval["actions"] is JArray, "Actions must be an array");
+            var actions = (JArray)approval["actions"];
+            Require(actions.Count >= 1 && actions.Count <= 5 && actions.All(a => a is JObject), "Expected 1–5 actions");
             string payload = (string)envelope["payload"], hash = Hash(payload);
+            var parsedPayload = Parse(payload);
+            Fields(parsedPayload, "actions");
             Require(payload.Length <= 4096 && hash == (string)envelope["payload_digest"] &&
-                hash == (string)approval["action_digest"] && JToken.DeepEquals(Parse(payload), action) &&
+                hash == (string)approval["action_digest"] && JToken.DeepEquals(parsedPayload["actions"], actions) &&
                 Id((string)approval["approval_id"]) && (string)approval["task_id"] == task &&
-                (string)approval["scope"] == "single_action", "Approval binding mismatch");
+                (string)approval["scope"] == "control_segment", "Approval binding mismatch");
             Observe(true);
             var before = ReadContext();
             string rejection = null;
             if (m_InvalidTasks.Contains(task)) rejection = "Task authority invalidated";
             else if (m_Pending != null) rejection = "Another command is active";
-            else if (!direct && DirectPaletteOpen) rejection = "Direct palette owns control";
             else if ((string)approval["host_session"] != m_Session ||
                 (long)approval["authority_epoch"] != m_Epoch || (long)approval["revision"] != m_Revision)
                 rejection = "Stale context or host session";
-            else if (!Finite((double)approval["expires_at"]) || (double)approval["expires_at"] < Now ||
-                (double)approval["expires_at"] > Now + 301) rejection = "Invalid approval expiry";
-            else if (!(bool)before["ready"] || (bool)before["stroke_active"] || NativeInteractionBusy()) rejection = "Host busy or unavailable";
+            else if (!Finite((double)approval["expires_at"]) || (double)approval["expires_at"] <= AuthorityTime ||
+                (double)approval["expires_at"] > AuthorityTime + 301) rejection = "Invalid approval expiry";
+            else if (!(bool)before["ready"] || (bool)before["stroke_active"] || IsNativeInteractionBusy()) rejection = "Host busy or unavailable";
             var record = new Record { Envelope = (JObject)envelope.DeepClone(), Wire = wire, Before = before };
             m_Records.Add(command, record);
             if (rejection != null)
             {
-                record.Result = Result(envelope, "rejected", rejection, before);
-                return record.Result;
-            }
-            try { Validate(action, before); }
-            catch (Exception)
-            {
-                record.Result = Result(envelope, "rejected", "Invalid action", before);
-                Invalidate(task);
+                record.Result = Result(record, "rejected", rejection, before);
                 return record.Result;
             }
             try
             {
-                m_ActiveTask = task;
-                Apply(action);
-                Observe(false);
-                m_Pending = record;
-                record.Deadline = Time.realtimeSinceStartup + 3;
-                record.Result = Result(envelope, "queued", "Awaiting native readback", null);
+                ValidateActions(actions, before);
             }
             catch (Exception)
             {
-                record.Result = Result(envelope, "unverified", "Operation failed; inspect native state", ReadContext());
+                record.Result = Result(record, "rejected", "Invalid control segment", before);
                 Invalidate(task);
-                m_ActiveTask = null;
+                return record.Result;
             }
+            m_ActiveTask = task;
+            m_Pending = record;
+            DispatchAction(record, before);
             return record.Result;
+        }
+
+        internal static void ValidateActions(JArray actions, JObject context)
+        {
+            Require(actions != null && actions.Count >= 1 && actions.Count <= 5, "Expected 1-5 actions");
+            var actionIds = new HashSet<string>();
+            foreach (var item in actions)
+            {
+                Require(item is JObject, "Invalid action object");
+                var action = (JObject)item;
+                Fields(action, "action_id", "version", "tool", "number", "text", "vector", "visible");
+                Validate(action, context);
+                Require(actionIds.Add((string)action["action_id"]), "Duplicate action ID");
+            }
         }
 
         static void Validate(JObject a, JObject c)
@@ -414,7 +475,7 @@ namespace TiltBrush
                 Require((a[key] != null && a[key].Type != JTokenType.Null) == required.Contains(key), "Mismatched parameters");
         }
 
-        static void Apply(JObject a)
+        protected virtual void Apply(JObject a)
         {
             switch ((string)a["tool"])
             {
@@ -450,7 +511,7 @@ namespace TiltBrush
         }
         static Vector3 Vector(JArray v) => new Vector3((float)v[0], (float)v[1], (float)v[2]);
         static Quaternion Rotation(JArray v) => new Quaternion((float)v[0], (float)v[1], (float)v[2], (float)v[3]);
-        static bool Verify(JObject a, JObject before, JObject after)
+        protected virtual bool Verify(JObject a, JObject before, JObject after)
         {
             if (!(bool)after["ready"]) return false;
             switch ((string)a["tool"])
@@ -472,10 +533,10 @@ namespace TiltBrush
                 default: return false;
             }
         }
-        JObject Result(JObject e, string status, string reason, JObject observed) => new JObject {
-            ["task_id"] = e["task_id"], ["command_id"] = e["command_id"], ["host_session"] = m_Session,
+        JObject Result(Record record, string status, string reason, JObject observed) => new JObject {
+            ["task_id"] = record.Envelope["task_id"], ["command_id"] = record.Envelope["command_id"], ["host_session"] = m_Session,
             ["status"] = status, ["reason"] = reason, ["observed"] = observed,
-            ["completed"] = status == "succeeded" ? 1 : 0, ["remaining"] = status == "succeeded" ? 0 : 1 };
+            ["completed"] = record.Completed, ["remaining"] = record.Actions.Count - record.Completed };
         void Invalidate(string task)
         {
             if (task != null && m_InvalidTasks.Count < 4096) m_InvalidTasks.Add(task);
@@ -486,38 +547,22 @@ namespace TiltBrush
             m_Epoch++;
             Invalidate(m_ActiveTask);
             m_ActiveTask = null;
-            // A mutation awaiting readback already happened. Preserve it and label the uncertain result.
             if (m_Pending != null)
             {
-                m_Pending.Result = Result(m_Pending.Envelope, "unverified", "Stopped after dispatch; completed change preserved", ReadContext());
-                if (LastDirectResult != null && (string)LastDirectResult["command_id"] == (string)m_Pending.Result["command_id"])
-                    LastDirectResult = m_Pending.Result;
+                var record = m_Pending;
+                string status = record.AwaitingReadback ? "unverified" : record.Completed > 0 ? "partial" : "cancelled";
+                record.Result = Result(record, status, "Stopped; verified changes kept and remaining actions cancelled", ReadContext());
             }
             m_Pending = null;
             if (announce) Status = reason == "Stopped locally"
                 ? "STOP received. Pending work cancelled; completed changes kept." : reason;
+            Stopped?.Invoke();
             LastStopMilliseconds = timer.Elapsed.TotalMilliseconds;
             if (StopCount < long.MaxValue) StopCount++;
             // Bounded, local measurement from handler entry through authority invalidation.
             // This does not include device polling, frame scheduling, or HTTP transport time.
             if (reason == "Stopped locally" && m_StopLogs++ < 64)
                 Debug.LogFormat("CHRIS Stop: count={0} handler_ms={1:F3}", StopCount, LastStopMilliseconds);
-        }
-        public void Direct(JObject action)
-        {
-            Stop("Direct manual control");
-            Observe(false);
-            string task = Guid.NewGuid().ToString("N"), payload = action.ToString(Formatting.None);
-            // The approved object and payload must use the same wire numeric representation.
-            action = Parse(payload);
-            var approval = new JObject { ["approval_id"] = Guid.NewGuid().ToString("N"), ["task_id"] = task,
-                ["action"] = action, ["action_digest"] = Hash(payload), ["host_session"] = m_Session,
-                ["revision"] = m_Revision, ["authority_epoch"] = m_Epoch, ["expires_at"] = Now + 30,
-                ["scope"] = "single_action" };
-            var result = Submit(new JObject { ["command_id"] = Guid.NewGuid().ToString("N"), ["task_id"] = task,
-                ["payload"] = payload, ["payload_digest"] = Hash(payload), ["approval"] = approval }, true);
-            LastDirectResult = result;
-            Status = (string)result["reason"];
         }
         void OnDisable() { Close(); }
         void OnDestroy() { Close(); }

@@ -1,6 +1,7 @@
 // Copyright 2026 The Open Brush Authors
 // Licensed under the Apache License, Version 2.0.
 using System;
+using System.Collections.Generic;
 using Newtonsoft.Json.Linq;
 using TMPro;
 using UnityEngine;
@@ -13,8 +14,12 @@ namespace TiltBrush
         CHRISPanel m_Model;
         TextMeshPro m_Status;
         TextMeshPro m_Detail;
-        readonly CHRISNativeButton[] m_Choices = new CHRISNativeButton[6];
+        readonly CHRISNativeButton[] m_Choices = new CHRISNativeButton[4];
         bool m_Dirty;
+        CHRISNativeButton m_Microphone, m_Edit;
+        string m_PagedSummary;
+        string[] m_ReviewPages;
+        int m_ReviewPage, m_LastViewedPage;
 
         public override void Init(GameObject parent, string text)
         {
@@ -48,16 +53,23 @@ namespace TiltBrush
                 "CHRIS — hold to move", () => (m_ParentPanel as CHRISFloatingPanel)?.BeginDrag());
             m_Resources.Button(transform, "Local Stop", new Vector3(1.15f, 1.77f, -0.06f), new Vector2(1.2f, 0.34f), "STOP",
                 () => m_Model?.StopLocal(), true);
-            m_Resources.Button(transform, "Direct mode", new Vector3(-0.9f, 1.34f, -0.06f), new Vector2(1.7f, 0.32f), "Direct controls",
-                () => m_Model?.SwitchMode("Direct"));
-            m_Resources.Button(transform, "Assistance mode", new Vector3(0.9f, 1.34f, -0.06f), new Vector2(1.7f, 0.32f), "Assistance",
-                () => m_Model?.SwitchMode("Assistance"));
-            m_Status = m_Resources.Text(transform, "Status", new Vector3(0, 0.87f, -0.04f), new Vector2(3.5f, 0.55f),
-                "Waiting for native gateway", 1.35f);
-            m_Detail = m_Resources.Text(transform, "Review", new Vector3(0, 0.19f, -0.04f), new Vector2(3.5f, 0.72f), "", 1.4f);
-            for (int i = 0; i < 6; i++)
+            m_Microphone = m_Resources.Button(transform, "Record request", new Vector3(-0.9f, 1.34f, -0.06f),
+                new Vector2(1.7f, 0.32f), "Record", () => m_Model?.TapMicrophone());
+            m_Edit = m_Resources.Button(transform, "Edit request", new Vector3(0.9f, 1.34f, -0.06f),
+                new Vector2(1.7f, 0.32f), "Edit request", EnterRequest);
+            m_Status = m_Resources.Text(transform, "Status", new Vector3(0, 0.96f, -0.04f),
+                new Vector2(3.5f, 0.38f), "Assist", 1.15f);
+            m_Detail = m_Resources.Text(transform, "Review", new Vector3(0, -0.02f, -0.04f),
+                new Vector2(3.5f, 1.48f), "", 1.15f);
+            m_Detail.enableAutoSizing = true;
+            m_Detail.fontSizeMin = 0.7f;
+            m_Detail.fontSizeMax = 1.15f;
+            // Up to five exact command rows must remain visible, not silently ellipsized.
+            m_Detail.overflowMode = TextOverflowModes.Overflow;
+            for (int i = 0; i < 4; i++)
                 m_Choices[i] = m_Resources.Button(transform, "Choice " + i,
-                    new Vector3(i % 2 == 0 ? -0.9f : 0.9f, -0.46f - i / 2 * 0.4f, -0.06f), new Vector2(1.7f, 0.32f), "", null);
+                    new Vector3(i % 2 == 0 ? -0.9f : 0.9f, -0.95f - i / 2 * 0.4f, -0.06f),
+                    new Vector2(1.7f, 0.32f), "", null);
             m_Resources.Button(transform, "Cancel review / Back", new Vector3(-0.9f, -1.73f, -0.06f), new Vector2(1.7f, 0.32f),
                 "Cancel / Back", () => m_Model?.Back());
             m_Resources.Button(transform, "Close CHRIS", new Vector3(0.9f, -1.73f, -0.06f), new Vector2(1.7f, 0.32f), "Close",
@@ -91,145 +103,96 @@ namespace TiltBrush
 
         void Draw()
         {
-            if (m_Model == null)
-                return;
+            if (m_Model == null) return;
             foreach (var button in m_Choices)
             {
                 button.gameObject.SetActive(false);
                 button.Click = null;
             }
-
-            m_Status.text = m_Model.Mode + "\n" + m_Model.Notice;
-            m_Detail.text = "";
-            if (m_Model.Mode == "Choose controls")
+            var voice = m_Model.Voice;
+            bool recording = voice?.Session.State == CHRISVoiceSession.Phase.Recording;
+            bool voiceBusy = voice?.Session.IsActive == true;
+            m_Microphone.Label.text = recording ? "Finish recording" : "Record / Re-record";
+            m_Microphone.SetButtonAvailable(!voiceBusy || recording);
+            m_Edit.SetButtonAvailable(true);
+            m_Status.text = m_Model.AssistanceStatus();
+            if (voiceBusy)
             {
-                m_Detail.text = "Use the mode buttons above.\nHold the title bar with the trigger to move this window. Release to leave it in place.";
+                string transcript = voice.Session.Transcript;
+                m_Detail.text = transcript.Length <= 320 ? transcript : "..." + transcript.Substring(transcript.Length - 320);
+                ConfigureChoice(0, "Cancel recording", m_Model.StopLocal);
                 return;
             }
-
-            if (m_Model.Mode == "Direct")
-            {
-                DrawDirect();
-                return;
-            }
-
-            DrawAssistance();
-        }
-
-        void DrawDirect()
-        {
-            var context = m_Model.Gateway.Capture();
-            if (m_Model.ReviewedAction != null)
-            {
-                m_Detail.text = CHRISPanel.Summary(m_Model.ReviewedAction, context);
-                ConfigureChoice(0, "Confirm change", m_Model.ConfirmDirect);
-                ConfigureChoice(1, "Cancel review", m_Model.Back);
-                return;
-            }
-
-            if (m_Model.Category == "")
-            {
-                m_Detail.text = (bool)context["ready"] ? "Choose a control. Changes require a review and confirmation." : "Native host unavailable. Wait for the sketch to finish loading.";
-                var categories = new[]
-                {
-                    "Brush",
-                    "Color",
-                    "Size",
-                    "Panels",
-                    "Move",
-                    "Turn"
-                };
-                for (int i = 0; i < categories.Length; i++)
-                {
-                    string category = categories[i];
-                    ConfigureChoice(i, category, () => m_Model.SetCategory(category), (bool)context["ready"]);
-                }
-
-                return;
-            }
-
-            var choices = CHRISPanel.Choices(m_Model.Category, context);
-            const int choicesPerPage = CHRISPanel.DirectChoicesPerPage;
-            int pages = Math.Max(1, (choices.Count + choicesPerPage - 1) / choicesPerPage);
-            int page = Math.Min(m_Model.Page, pages - 1);
-            m_Detail.text = m_Model.Category + " — page " + (page + 1) + " / " + pages + "\nSelect an option to review.";
-            for (int i = 0; i < choicesPerPage && page * choicesPerPage + i < choices.Count; i++)
-            {
-                var option = choices[page * choicesPerPage + i];
-                ConfigureChoice(i, option.Key, () => m_Model.Review(option.Value));
-            }
-
-            ConfigureChoice(4, "Previous page", () => m_Model.ChangePage(-1), page > 0);
-            ConfigureChoice(5, "Next page", () => m_Model.ChangePage(1), page + 1 < pages);
-        }
-
-        void DrawAssistance()
-        {
             var client = m_Model.Assistance;
-            m_Status.text = "Assistance\n" + (m_Model.WaitingForRelease ? m_Model.Notice : m_Model.AssistanceStatus());
-            if (m_Model.Notice.StartsWith("STOP received"))
-                m_Status.text = "STOP received locally.\n" + m_Model.AssistanceStatus();
-            if (m_Model.ReviewedApproval != null)
+            if (m_Model.ReviewedApproval != null && !m_Model.Correcting)
             {
                 DrawApprovalReview(client);
                 return;
             }
-
-            bool hostReady = (bool)m_Model.Gateway.Capture()["ready"];
-            string blocked = client.StartBlockedReason ?? (hostReady ? null : "Native host not ready. Open a sketch and wait for loading to finish.");
-            m_Detail.text = blocked ?? "Request: " + m_Model.Prompt;
-            if (client.CanReview)
-            {
-                DrawPendingProposal(client);
-                return;
-            }
-
-            DrawRequestControls(client, hostReady);
+            m_Detail.text = m_Model.HasReplacement ? "Replacement request: " + m_Model.Prompt :
+                client.CanReview ? m_Model.Notice : client.StartBlockedReason ?? "Request: " + m_Model.Prompt;
+            ConfigureChoice(0, "No-model example", m_Model.ProposeExample, !m_Model.HasReplacement && !client.Busy);
+            ConfigureChoice(1, "Check / Retry", () => RetryAssistance(client), !client.Busy);
+            ConfigureChoice(2, "Cancel task", m_Model.StopLocal, client.TaskId != null || client.PendingRequest != null || m_Model.Correcting);
+            ConfigureChoice(3, "Mic: " + (voice?.MicrophoneLabel ?? "Windows default"), m_Model.ChangeMicrophone);
         }
 
         void DrawApprovalReview(CHRISAssistanceClient client)
         {
             var reviewedApproval = m_Model.ReviewedApproval;
-            m_Detail.text = CHRISPanel.Summary((JObject)reviewedApproval["action"], (JObject)client.Task?["context"]);
-            bool proposalMatchesReview = (string)client.Task?["status"] == "awaiting_approval" &&
-                JToken.DeepEquals(reviewedApproval, client.Task["approval"]);
-            var nativeContext = m_Model.Gateway.Capture();
-            bool approvalIsFresh = CHRISPanel.ApprovalCurrent(reviewedApproval, nativeContext, CHRISCommandGateway.Now);
-            bool hostIsReady = (bool)nativeContext["ready"] && !(bool)nativeContext["stroke_active"];
-            if (!approvalIsFresh)
-                m_Status.text = "Approval expired or state changed. Reject / cancel, then request a fresh proposal.";
-            else if (!hostIsReady)
-                m_Status.text = "Native host unavailable or drawing. Wait before approving.";
-            ConfigureChoice(0, "Approve change", () => m_Model.Decide(true),
-                proposalMatchesReview && approvalIsFresh && hostIsReady && !client.Busy && !client.CancelWanted);
-            ConfigureChoice(1, "Reject proposal", () => m_Model.Decide(false), proposalMatchesReview && !client.Busy);
-            ConfigureChoice(2, "Cancel task", m_Model.StopLocal);
-            ConfigureChoice(3, "Back", m_Model.Back);
-        }
-
-        void DrawPendingProposal(CHRISAssistanceClient client)
-        {
-            var approval = (JObject)client.Task["approval"];
-            m_Detail.text = CHRISPanel.Summary((JObject)approval["action"],
-                (JObject)client.Task["context"]) + "\n" + client.StartBlockedReason;
-            ConfigureChoice(0, "Review proposal", m_Model.ReviewProposal);
+            if (m_PagedSummary != m_Model.ReviewText)
+            {
+                m_PagedSummary = m_Model.ReviewText;
+                m_ReviewPages = ReviewPages(m_PagedSummary);
+                m_ReviewPage = m_LastViewedPage = 0;
+            }
+            m_Detail.text = m_ReviewPages[m_ReviewPage];
+            bool allViewed = m_LastViewedPage == m_ReviewPages.Length - 1;
+            bool proposalMatchesReview = client.CanReview && JToken.DeepEquals(reviewedApproval, client.Task["approval"]) &&
+                m_Model.ReviewText == (string)client.Task["summary"];
+            var context = m_Model.Gateway.Capture();
+            bool fresh = CHRISPanel.ApprovalCurrent(reviewedApproval, context, CHRISCommandGateway.Now);
+            bool ready = (bool)context["ready"] && !(bool)context["stroke_active"];
+            if (!proposalMatchesReview) m_Status.text = "This proposal changed or was cancelled. Re-record or edit your request.";
+            else if (!fresh) m_Status.text = "The sketch changed or this review expired. Re-record or edit your request.";
+            else if (!ready) m_Status.text = "Wait for the sketch to be ready before confirming.";
+            else m_Status.text = m_ReviewPages.Length == 1 ? "Review these exact commands. Confirm to apply them in order." :
+                "Review page " + (m_ReviewPage + 1) + " of " + m_ReviewPages.Length + ". Read every page before confirming.";
+            ConfigureChoice(0, "Confirm commands", () => m_Model.Decide(true),
+                allViewed && proposalMatchesReview && fresh && ready && !client.Busy && !client.CancelWanted);
             ConfigureChoice(1, "Cancel task", m_Model.StopLocal);
-            ConfigureChoice(2, "No-model example", null, false);
-            ConfigureChoice(3, "Enter request…", null, false);
-            ConfigureChoice(4, "Check / Retry", client.Refresh, !client.Busy);
+            ConfigureChoice(2, "Previous page", () => ChangeReviewPage(-1), m_ReviewPage > 0);
+            ConfigureChoice(3, "Next page", () => ChangeReviewPage(1), m_ReviewPage + 1 < m_ReviewPages.Length);
         }
 
-        void DrawRequestControls(CHRISAssistanceClient client, bool hostReady)
+        void ChangeReviewPage(int delta)
         {
-            ConfigureChoice(0, "Enter request…", EnterRequest, client.CanStart);
-            ConfigureChoice(1, "Propose change", () => m_Model.Propose(false),
-                hostReady && client.CanStart && !string.IsNullOrWhiteSpace(m_Model.Prompt) &&
-                m_Model.Prompt.Length <= CHRISAssistanceClient.MaxPromptLength);
-            ConfigureChoice(2, "No-model example", () => m_Model.Propose(true), hostReady && client.CanStart);
-            ConfigureChoice(3, "Review proposal", m_Model.ReviewProposal, client.CanReview);
-            ConfigureChoice(4, "Cancel task", m_Model.StopLocal, client.TaskId != null || client.PendingRequest != null);
-            ConfigureChoice(5, "Check / Retry", () => RetryAssistance(client),
-                !client.Busy && (client.TaskId != null || client.PendingRequest != null));
+            m_ReviewPage = Math.Max(0, Math.Min(m_ReviewPages.Length - 1, m_ReviewPage + delta));
+            m_LastViewedPage = Math.Max(m_LastViewedPage, m_ReviewPage);
+            MarkDirty();
+        }
+
+        internal static string[] ReviewPages(string summary)
+        {
+            var pages = new List<string>();
+            int offset = 0;
+            while (offset < summary.Length)
+            {
+                int length = Math.Min(320, summary.Length - offset);
+                int lines = 0;
+                for (int i = offset; i < offset + length; i++)
+                    if (summary[i] == '\n' && ++lines == 6) { length = i - offset + 1; break; }
+                if (offset + length < summary.Length)
+                {
+                    int boundary = summary.LastIndexOf('\n', offset + length - 1, length);
+                    if (boundary < offset) boundary = summary.LastIndexOf(' ', offset + length - 1, length);
+                    if (boundary >= offset) length = boundary - offset + 1;
+                    else if (char.IsHighSurrogate(summary[offset + length - 1])) length--;
+                }
+                pages.Add(summary.Substring(offset, length));
+                offset += length;
+            }
+            return pages.Count == 0 ? new[] { "" } : pages.ToArray();
         }
 
         void RetryAssistance(CHRISAssistanceClient client)
@@ -246,6 +209,8 @@ namespace TiltBrush
 
         void EnterRequest()
         {
+            if (m_Model == null) return;
+            long intent = m_Model.BeginCorrection();
             KeyboardPopUpWindow.m_InitialText = m_Model.Prompt;
             var obj = m_ParentPanel.CreatePopUp(m_Resources.KeyboardPrefab, transform.position - transform.forward * 0.3f, true, true);
             var keyboard = obj.GetComponentInChildren<KeyboardUI>();
@@ -253,8 +218,7 @@ namespace TiltBrush
             {
                 if (key.IsPress && key.Key.KeyType == KeyboardKeyType.Enter)
                 {
-                    m_Model.Prompt = keyboard.ConsoleContent.Trim();
-                    m_Model.Refresh();
+                    m_Model.CompleteTextEdit(intent, keyboard.ConsoleContent);
                 }
             };
         }

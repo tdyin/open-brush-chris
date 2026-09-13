@@ -35,12 +35,17 @@ namespace TiltBrush
             ((string)task["status"] == "succeeded" ||
              (string)task["status"] == "rejected" ||
              (string)task["status"] == "failed" ||
+             (string)task["status"] == "partial" ||
              ((string)task["status"] == "cancelled" && (bool?)task["native_cancel_acknowledged"] == true));
 
         public bool CanStart => !Busy && !CancelWanted && PendingRequest == null && (TaskId == null || Terminal(Task));
         // Reviewing a captured proposal does not dispatch anything. A status poll must not
         // make the review button flicker; approval still waits for Busy to clear and revalidates.
-        public bool CanReview => !CancelWanted && (string)Task?["status"] == "awaiting_approval" && Task?["approval"] is JObject;
+        public bool CanReview => !CancelWanted && (string)Task?["status"] == "awaiting_approval" &&
+            Task?["approval"] is JObject approval && (string)approval["scope"] == "control_segment" &&
+            approval["actions"] is JArray actions && actions.Count >= 1 && actions.Count <= 5 &&
+            JToken.DeepEquals(actions, Task["actions"]) && Task["summary"]?.Type == JTokenType.String &&
+            !string.IsNullOrWhiteSpace((string)Task["summary"]) && ((string)Task["summary"]).Length <= 4000;
 
         public string StartBlockedReason
         {
@@ -57,7 +62,9 @@ namespace TiltBrush
                     if (Task == null)
                         return "Saved task needs checking. Select Check / Retry.";
                     if (CanReview)
-                        return "Finish this proposal before a new request: Review proposal or Cancel task.";
+                        return "Review the commands, or re-record / edit to replace this request.";
+                    if ((string)Task["status"] == "awaiting_approval")
+                        return "This old or invalid proposal must be cancelled. Re-record or edit to request a new one.";
                     if ((string)Task["status"] == "paused" || (string)Task["status"] == "unverified")
                         return "Task needs reconciliation. Select Check / Retry or Cancel task.";
                     return "A task is in progress. Wait or select Cancel task.";
@@ -144,7 +151,7 @@ namespace TiltBrush
             if (Busy ||
                 CancelWanted ||
                 reviewed == null ||
-                (string)Task?["status"] != "awaiting_approval" ||
+                !CanReview ||
                 !JToken.DeepEquals(reviewed, Task["approval"]))
             {
                 Error = "Proposal changed. Review it again.";

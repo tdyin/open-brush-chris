@@ -1,7 +1,6 @@
 // Copyright 2026 The Open Brush Authors
 // Licensed under the Apache License, Version 2.0.
 using System;
-using System.Collections.Generic;
 using System.Linq;
 using Newtonsoft.Json.Linq;
 using UnityEngine;
@@ -9,149 +8,154 @@ using UnityEngine.InputSystem;
 
 namespace TiltBrush
 {
-    // Persistent state. The view uses Open Brush's native popup, pointer and button machinery.
+    // Assistance is the only CHRIS mode. Native drawing and panel input remain Open Brush's.
     [DefaultExecutionOrder(9000)]
     public class CHRISPanel : MonoBehaviour
     {
-        internal const int DirectChoicesPerPage = 4;
-        const float InputReleaseTimeoutSeconds = 8;
-        const float AssistancePollIntervalSeconds = 1;
-
         public static CHRISPanel Instance { get; private set; }
-
         public CHRISCommandGateway Gateway;
         public CHRISAssistanceClient Assistance { get; private set; }
+        public CHRISVoiceInput Voice { get; private set; }
         public CHRISNativePopup Popup { get; private set; }
-        public string Mode { get; private set; } = "Choose controls";
-        public string Category { get; private set; } = "";
-        public string Notice { get; private set; } = "Choose Direct or Assistance.";
-        public string Prompt { get; set; } = "Make my brush blue";
-        public int Page { get; private set; }
-        public JObject ReviewedAction { get; private set; }
+        public string Notice { get; private set; } = "Record or type a request. Confirm only after reviewing the commands.";
+        public string Prompt { get; private set; } = "Make my brush blue";
         public JObject ReviewedApproval { get; private set; }
-
-        JObject m_ReviewContext;
-        JObject m_LastDirectAction;
-        System.Action m_AfterRelease;
-        float m_ReleaseDeadline;
-        float m_NextPoll;
-        string m_ResultShown;
+        public string ReviewText { get; private set; }
         public bool WaitingForRelease => m_AfterRelease != null;
-
-        public event System.Action Changed;
+        public bool Correcting { get; private set; }
+        public bool HasReplacement => m_ReplacementPrompt != null;
+        public event Action Changed;
+        Action m_AfterRelease;
+        float m_ReleaseDeadline, m_NextPoll;
+        long m_IntentVersion, m_RecordingIntent;
+        string m_ReplacementPrompt;
+        bool m_ReplacementExample;
 
         void Start()
         {
             Instance = this;
             Assistance = GetComponent<CHRISAssistanceClient>() ?? gameObject.AddComponent<CHRISAssistanceClient>();
+            Voice = GetComponent<CHRISVoiceInput>() ?? gameObject.AddComponent<CHRISVoiceInput>();
             Assistance.Changed += Refresh;
+            Voice.Changed += Refresh;
+            Voice.Finalized += AcceptVoice;
+            Gateway.Stopped += OnGatewayStopped;
         }
 
         public void Opened(CHRISNativePopup popup)
         {
-            if (Popup != null && Popup != popup)
-                Popup.RequestClose(true);
+            if (Popup != null && Popup != popup) Popup.RequestClose(true);
             Popup = popup;
             ClearReview();
-            Mode = "Choose controls";
-            Category = "";
-            Gateway.DirectPaletteOpen = false;
-            Notice = "Direct changes stay local. Assistance uses the Python service.";
-            if (Assistance.TaskId != null)
-                Assistance.Refresh();
+            if (Assistance.TaskId != null) Assistance.Refresh();
             Refresh();
         }
 
         public void Closed(CHRISNativePopup popup)
         {
-            if (Popup == popup)
-            {
-                Popup = null;
-                ClearReview();
-                Gateway.DirectPaletteOpen = false;
-                Mode = "Choose controls";
-            }
-        }
-
-        public void SwitchMode(string mode)
-        {
-            if (Mode == mode)
-                return;
-            if (mode == "Direct" && !Assistance.CanStart)
-            {
-                Notice = "Cancel or finish assistance first. Check / Retry if disconnected.";
-                Refresh();
-                return;
-            }
-
+            if (Popup != popup) return;
+            Popup = null;
+            CancelInput();
             ClearReview();
-            Gateway.Stop("CHRIS control mode changed");
-            Mode = mode;
-            Category = "";
-            Page = 0;
-            Gateway.DirectPaletteOpen = mode == "Direct";
-            Notice = mode == "Direct" ? "Direct control. Choose a change, review it, then Confirm." : "Assistance control. Proposals require your approval.";
-            Refresh();
-        }
-
-        public void SetCategory(string category)
-        {
-            ClearReview();
-            Category = category;
-            Page = 0;
-            Refresh();
-        }
-
-        public void ChangePage(int delta)
-        {
-            if (Mode != "Direct" || Category == "")
-                return;
-            int pages = Math.Max(1, (Choices(Category, Gateway.Capture()).Count + DirectChoicesPerPage - 1) / DirectChoicesPerPage);
-            Page = Mathf.Clamp(Page + delta, 0, pages - 1);
-            Refresh();
-        }
-
-        public void Back()
-        {
-            if (ReviewedAction != null || ReviewedApproval != null || WaitingForRelease)
-                ClearReview();
-            else
-            {
-                Category = "";
-                Page = 0;
-            }
-
-            Notice = "Review cancelled. No new change sent.";
-            Refresh();
         }
 
         void ClearReview()
         {
-            ReviewedAction = null;
             ReviewedApproval = null;
-            m_ReviewContext = null;
+            ReviewText = null;
             m_AfterRelease = null;
+        }
+
+        void CancelInput()
+        {
+            m_IntentVersion++;
+            Voice?.CancelRecording();
+            m_ReplacementPrompt = null;
+            Correcting = false;
+        }
+
+        void OnGatewayStopped()
+        {
+            CancelInput();
+            ClearReview();
+            Assistance?.Cancel();
+            Notice = "Stopped locally. Completed changes remain; pending work is cancelled.";
+            Refresh();
         }
 
         public void StopLocal()
         {
             (Popup?.GetParentPanel() as CHRISFloatingPanel)?.EndDrag();
-            ClearReview();
             Gateway.Stop();
-            Assistance?.Cancel();
-            m_ResultShown = ResultKey(Gateway.LastDirectResult);
-            Notice = "STOP received locally. Completed changes remain. Check assistance cancellation acknowledgement.";
+        }
+
+        public void Back()
+        {
+            StopLocal();
+        }
+
+        public long BeginCorrection()
+        {
+            StopLocal();
+            Correcting = true;
+            ClearReview();
+            Notice = "Previous request cancelled. Record or edit a replacement.";
+            Refresh();
+            return m_IntentVersion;
+        }
+
+        public void TapMicrophone()
+        {
+            if (Voice.Session.State == CHRISVoiceSession.Phase.Recording)
+            {
+                Voice.FinishRecording();
+                return;
+            }
+            m_RecordingIntent = BeginCorrection();
+            Voice.StartRecording();
+        }
+
+        public void ChangeMicrophone()
+        {
+            BeginCorrection();
+            Voice.NextMicrophone();
+        }
+
+        void AcceptVoice(string transcript)
+        {
+            CompleteTextEdit(m_RecordingIntent, transcript);
+        }
+
+        public void CompleteTextEdit(long intent, string text)
+        {
+            if (intent != m_IntentVersion || !Correcting) return;
+            text = text?.Trim();
+            if (!CHRISVoiceSession.ValidText(text, allowEmpty: false))
+            {
+                Notice = "Enter a request of 1-2000 characters, or re-record.";
+                Refresh();
+                return;
+            }
+            Prompt = text;
+            m_ReplacementPrompt = text;
+            m_ReplacementExample = false;
+            Notice = "Preparing your request. Previous cancellation must finish first.";
+            Refresh();
+        }
+
+        public void ProposeExample()
+        {
+            BeginCorrection();
+            m_ReplacementPrompt = Prompt;
+            m_ReplacementExample = true;
             Refresh();
         }
 
         public static bool InputReleased()
         {
-            if (InputManager.m_Instance == null || InputManager.Controllers == null)
-                return false;
+            if (InputManager.m_Instance == null || InputManager.Controllers == null) return false;
             return !InputManager.m_Instance.GetCommand(InputManager.SketchCommands.Activate) &&
-                !InputManager.Controllers.Any(c => c != null &&
-                (c.GetVrInput(VrInput.Trigger) ||
-                c.GetVrInput(VrInput.Grip))) &&
+                !InputManager.Controllers.Any(c => c != null && (c.GetVrInput(VrInput.Trigger) || c.GetVrInput(VrInput.Grip))) &&
                 !(Mouse.current?.leftButton.isPressed ?? false);
         }
 
@@ -159,358 +163,134 @@ namespace TiltBrush
         {
             var popup = Instance?.Popup;
             var controls = SketchControlsScript.m_Instance;
-            return popup != null &&
-                popup.IsOpen() &&
-                popup.GetParentPanel() is CHRISFloatingPanel floating &&
-                !floating.IsDragging &&
-                popup.GetParentPanel()?.PanelPopUp == popup &&
-                controls != null &&
-                controls.IsUserLookingAtPanel(popup.GetParentPanel()) &&
-                InputReleased();
+            return popup != null && popup.IsOpen() && popup.GetParentPanel() is CHRISFloatingPanel floating &&
+                !floating.IsDragging && popup.GetParentPanel()?.PanelPopUp == popup &&
+                controls != null && controls.IsUserLookingAtPanel(popup.GetParentPanel()) && InputReleased();
         }
 
-        void RunAfterInputRelease(System.Action action)
-        {
-            if (m_AfterRelease != null)
-                return;
-            m_AfterRelease = action;
-            m_ReleaseDeadline = Time.unscaledTime + InputReleaseTimeoutSeconds;
-            Notice = "Release the trigger / mouse button to continue.";
-            Refresh();
-        }
+        public static bool SameContext(JObject reviewed, JObject current) => reviewed != null && current != null &&
+            (string)reviewed["host_session"] == (string)current["host_session"] &&
+            (long)reviewed["revision"] == (long)current["revision"] &&
+            (long)reviewed["authority_epoch"] == (long)current["authority_epoch"];
 
-        public static bool SameContext(JObject reviewedContext, JObject currentContext) =>
-            reviewedContext != null && currentContext != null &&
-            (string)reviewedContext["host_session"] == (string)currentContext["host_session"] &&
-            (long)reviewedContext["revision"] == (long)currentContext["revision"] &&
-            (long)reviewedContext["authority_epoch"] == (long)currentContext["authority_epoch"];
-
-        public static bool ApprovalCurrent(JObject approval, JObject context, double now) => SameContext(approval, context) &&
-            (double?)approval["expires_at"] > now;
-        bool IsDirectHostReady(JObject context) => (bool)context["ready"] &&
-            !(bool)context["stroke_active"] &&
-            context["active_task"].Type == JTokenType.Null;
-        public void Review(JObject action)
-        {
-            var context = Gateway.Capture();
-            if (Mode != "Direct" || !IsDirectHostReady(context))
-            {
-                Notice = "Host unavailable or busy. Finish drawing / active work first.";
-                Refresh();
-                return;
-            }
-
-            ReviewedAction = (JObject)action.DeepClone();
-            m_ReviewContext = context;
-            Notice = "Review this one change, then Confirm or Cancel.";
-            Refresh();
-        }
-
-        public void ConfirmDirect()
-        {
-            if (ReviewedAction == null || Mode != "Direct")
-                return;
-            var action = (JObject)ReviewedAction.DeepClone();
-            var context = m_ReviewContext;
-            RunAfterInputRelease(() =>
-            {
-                var current = Gateway.Capture();
-                if (!SameContext(context, current) || !IsDirectHostReady(current))
-                {
-                    ClearReview();
-                    Notice = "State changed. Choose and review again.";
-                    return;
-                }
-
-                m_LastDirectAction = action;
-                Gateway.Direct(action);
-                ClearReview();
-                Notice = "Sent. Waiting for native readback.";
-            });
-        }
-
-        public void Propose(bool example)
-        {
-            if (Mode == "Assistance")
-                RunAfterInputRelease(() => Assistance.Submit(Prompt, example));
-        }
-
-        public void ReviewProposal()
-        {
-            if (!Assistance.CanReview)
-                return;
-            ReviewedApproval = (JObject)Assistance.Task["approval"].DeepClone();
-            Notice = "Review the proposed change. Approval expires or becomes stale after manual changes.";
-            Refresh();
-        }
+        public static bool ApprovalCurrent(JObject approval, JObject context, double now) =>
+            SameContext(approval, context) && (double?)approval["expires_at"] > now;
 
         public void Decide(bool approve)
         {
-            if (Mode != "Assistance" || ReviewedApproval == null)
-                return;
+            if (Correcting || Voice?.Session.IsActive == true || ReviewedApproval == null ||
+                WaitingForRelease || Assistance.Busy || Assistance.CancelWanted) return;
             var reviewed = (JObject)ReviewedApproval.DeepClone();
-            RunAfterInputRelease(() =>
+            string summary = ReviewText;
+            m_AfterRelease = () =>
             {
                 if (approve && !ApprovalCurrent(reviewed, Gateway.Capture(), CHRISCommandGateway.Now))
                 {
-                    Notice = "Approval expired or native state changed. Reject / cancel and request a fresh proposal.";
+                    Notice = "The sketch changed or the review expired. Re-record or edit your request.";
                     return;
                 }
-
+                if ((string)Assistance.Task?["summary"] != summary)
+                {
+                    Notice = "The command summary changed. Cancel and request a new review.";
+                    return;
+                }
                 Assistance.Decide(reviewed, approve);
-                ReviewedApproval = null;
-            });
-        }
-
-        public static JObject Action(string tool, string parameter, JToken value) => new JObject
-        {
-            ["action_id"] = Guid.NewGuid().ToString("N"),
-            ["version"] = 1,
-            ["tool"] = tool,
-            ["number"] = null,
-            ["text"] = null,
-            ["vector"] = null,
-            ["visible"] = null,
-            [parameter] = value
-        };
-        public static List<KeyValuePair<string, JObject>> Choices(string category, JObject context)
-        {
-            var list = new List<KeyValuePair<string, JObject>>();
-            System.Action<string, JObject> add = (label, action) => list.Add(new KeyValuePair<string, JObject>(label, action));
-            switch (category)
-            {
-                case "Brush":
-                    foreach (var brush in ((JObject)context["brushes"]).Properties().OrderBy(p => (string)p.Value))
-                        add((string)brush.Value, Action("brush.select", "text", brush.Name));
-                    break;
-                case "Color":
-                    foreach (var color in new[]
-                    {
-                        "#FFFFFF",
-                        "#FF4040",
-                        "#40A0FF",
-                        "#40FF80"
-                    }
-
-                    )
-                        add(color, Action("brush.color", "text", color));
-                    break;
-                case "Size":
-                    foreach (double size in new[]
-                    {
-                        0.1,
-                        0.3,
-                        0.5,
-                        0.8
-                    }
-
-                    )
-                        add("Size " + size.ToString("0.0", System.Globalization.CultureInfo.InvariantCulture),
-                            Action("brush.size", "number", size));
-                    break;
-                case "Panels":
-                    foreach (string panel in new[]
-                    {
-                        "Brush",
-                        "Color"
-                    }
-
-                    )
-                        foreach (bool visible in new[]
-                        {
-                            true,
-                            false
-                        }
-
-                        )
-                        {
-                            var action = Action("panel.visibility", "text", panel);
-                            action["visible"] = visible;
-                            add((visible ? "Open " : "Close ") + panel, action);
-                        }
-
-                    break;
-                case "Move":
-                    add("Move +X", Action("view.move", "vector", new JArray(0.25, 0, 0)));
-                    add("Move -X", Action("view.move", "vector", new JArray(-0.25, 0, 0)));
-                    add("Move +Z", Action("view.move", "vector", new JArray(0, 0, 0.25)));
-                    add("Move -Z", Action("view.move", "vector", new JArray(0, 0, -0.25)));
-                    break;
-                case "Turn":
-                    add("Turn left 15°", Action("view.turn", "number", -15));
-                    add("Turn right 15°", Action("view.turn", "number", 15));
-                    break;
-            }
-
-            return list;
-        }
-
-        public static string Summary(JObject action, JObject context)
-        {
-            if (action == null)
-                return "No change selected.";
-            switch ((string)action["tool"])
-            {
-                case "brush.select":
-                    return "Select brush: " + ((string)context?["brushes"]?[(string)action["text"]] ?? (string)action["text"]);
-                case "brush.color":
-                    return "Set color " + (string)action["text"];
-                case "brush.size":
-                    return "Set brush size " + action["number"] + " (0–1). Draw a new stroke to compare.";
-                case "panel.visibility":
-                    return ((bool)action["visible"] ? "Open " : "Close ") + action["text"] + " panel";
-                case "view.move":
-                    return "Move scene by " + string.Join(", ", (JArray)action["vector"]) + " native units";
-                case "view.turn":
-                    return "Turn scene " + action["number"] + " degrees";
-                default:
-                    return "Unsupported action";
-            }
+                ClearReview();
+            };
+            m_ReleaseDeadline = Time.unscaledTime + 8;
+            Notice = "Release the trigger or mouse button to continue.";
+            Changed?.Invoke();
         }
 
         public string AssistanceStatus()
         {
-            if (Assistance.CancelWanted)
-                return "Cancellation is unconfirmed. Check / Retry before more work. " + AssistanceReason(Assistance.Error);
-            if (Assistance.Error != null)
-                return AssistanceReason(Assistance.Error);
+            if (Voice?.Session.IsActive == true || Voice?.Session.State == CHRISVoiceSession.Phase.Failed)
+                return Voice.Status;
+            if (WaitingForRelease) return Notice;
+            if (Correcting) return HasReplacement ? Assistance.StartBlockedReason ?? "Preparing your replacement request..." : Notice;
+            if (Assistance.CancelWanted) return "Waiting for cancellation. Check / Retry before more work.";
+            if (Assistance.Error != null) return Assistance.Error;
             var task = Assistance.Task;
-            if (task == null)
-                return Assistance.Busy ? "Contacting assistance…" : "Enter a request or try the no-model example.";
-            string result = ((string)task["status"])?.Replace('_', ' ') + ": " + AssistanceReason((string)task["reason"]);
-            if (task["result"] is JObject observed)
-                result += "\n" + Outcome(observed, (JObject)task["approval"]?["action"]);
-            return result;
-        }
-
-        public static string AssistanceReason(string reason)
-        {
-            // Display-only compatibility for historical task records.
-            if (reason == "Direct palette owns control" || reason == "Close the CHRIS palette with F8, then submit a new browser request")
-                return "Switch CHRIS to Assistance mode (or close CHRIS), then submit a new request.";
-            return reason;
-        }
-
-        public static string Outcome(JObject result, JObject action)
-        {
-            string text = (string)result["status"] + ": " + AssistanceReason((string)result["reason"]);
-            if ((string)result["status"] != "succeeded" || !(result["observed"] is JObject observed))
-                return text;
-            switch ((string)action?["tool"])
-            {
-                case "brush.size":
-                    return "Applied. Observed brush size: " + observed["brush_size"] + " (0–1). Draw a new stroke to compare.";
-                case "brush.color":
-                    return "Applied. Observed color: " + observed["brush_color"];
-                case "brush.select":
-                    return "Applied. Observed brush: " + ((string)observed["brushes"]?[(string)observed["brush_id"]] ?? (string)observed["brush_id"]);
-                case "panel.visibility":
-                    return "Applied. " + action["text"] + " panel is " + ((bool?)observed["panels"]?[(string)action["text"]] == true ? "open." : "closed.");
-                case "view.move":
-                    return "Applied. Observed scene position: " + string.Join(", ", (JArray)observed["scene_position"]);
-                case "view.turn":
-                    return "Applied " + action["number"] + "° scene turn. Native rotation verified; compare existing artwork.";
-                default:
-                    return text;
-            }
+            if (task == null) return Assistance.Busy ? "Planning your request..." : Notice;
+            string status = ((string)task["status"])?.Replace('_', ' ') + ": " + (string)task["reason"];
+            if (task["result"] is JObject result)
+                status += "\nVerified " + result["completed"] + "; remaining " + result["remaining"] + ". " + result["reason"];
+            return status;
         }
 
         public void Refresh()
         {
+            if (ReviewedApproval != null && Assistance != null &&
+                (!Assistance.CanReview || !JToken.DeepEquals(ReviewedApproval, Assistance.Task["approval"]) ||
+                 ReviewText != (string)Assistance.Task["summary"]))
+                ClearReview();
+            if (!Correcting && !WaitingForRelease && Assistance != null && Assistance.CanReview && ReviewedApproval == null)
+            {
+                try
+                {
+                    var approval = (JObject)Assistance.Task["approval"];
+                    var context = (JObject)Assistance.Task["context"];
+                    CHRISCommandGateway.ValidateActions((JArray)approval["actions"], context);
+                    ReviewedApproval = (JObject)approval.DeepClone();
+                    ReviewText = (string)Assistance.Task["summary"];
+                }
+                catch (Exception)
+                {
+                    ClearReview();
+                    Notice = "This proposal cannot be reviewed. Cancel it and request a new one.";
+                }
+            }
             Changed?.Invoke();
         }
 
-        static string ResultKey(JObject result) => result == null ? null : (string)result["command_id"] + ":" + (string)result["status"];
         void Update()
         {
-            if (Gateway == null || Assistance == null)
-                return;
-            ProcessPendingInputRelease();
-            InvalidateStaleDirectReview();
-            ShowLatestDirectResult();
-            PollOpenPopup();
-        }
-
-        void ProcessPendingInputRelease()
-        {
+            if (Gateway == null || Assistance == null) return;
             if (m_AfterRelease != null)
             {
                 if (Popup == null || Time.unscaledTime > m_ReleaseDeadline)
                 {
                     m_AfterRelease = null;
-                    Notice = "Input was not released. Nothing new sent; review again.";
+                    Notice = "Input was not released. Review and confirm again.";
                     Refresh();
                 }
                 else if (InputReleased() && !CHRISCommandGateway.NativeInteractionBusy())
                 {
                     var action = m_AfterRelease;
                     m_AfterRelease = null;
-                    try
-                    {
-                        action();
-                    }
-                    catch (Exception ex)
-                    {
-                        Notice = "Change rejected: " + ex.Message;
-                    }
-
+                    action();
                     Refresh();
                 }
             }
-        }
-
-        void InvalidateStaleDirectReview()
-        {
-            if (ReviewedAction != null && !WaitingForRelease && !SameContext(m_ReviewContext, Gateway.Capture()))
+            if (m_ReplacementPrompt != null && Assistance.CanStart && InputReleased() &&
+                !CHRISCommandGateway.NativeInteractionBusy())
             {
-                ClearReview();
-                Notice = "State changed. Review the choice again.";
-                Refresh();
+                string prompt = m_ReplacementPrompt;
+                m_ReplacementPrompt = null;
+                Correcting = false;
+                Assistance.Submit(prompt, m_ReplacementExample);
             }
-        }
-
-        void ShowLatestDirectResult()
-        {
-            var result = Gateway.LastDirectResult;
-            if (result != null && (string)result["status"] != "queued")
-            {
-                string key = ResultKey(result);
-                if (key != m_ResultShown)
-                {
-                    m_ResultShown = key;
-                    Notice = Outcome(result, m_LastDirectAction);
-                    Refresh();
-                }
-            }
-        }
-
-        void PollOpenPopup()
-        {
             if (Popup != null && Time.unscaledTime >= m_NextPoll)
             {
-                m_NextPoll = Time.unscaledTime + AssistancePollIntervalSeconds;
-                if (Mode == "Assistance")
-                    Assistance.Refresh();
+                m_NextPoll = Time.unscaledTime + 1;
+                Assistance.Refresh();
                 Refresh();
             }
         }
 
         void OnDisable()
         {
+            CancelInput();
             ClearReview();
-            if (Gateway != null)
-            {
-                Gateway.DirectPaletteOpen = false;
-                Gateway.Stop("CHRIS UI disabled");
-            }
+            Gateway?.Stop("CHRIS UI disabled");
         }
 
         void OnDestroy()
         {
-            if (Instance == this)
-                Instance = null;
-            if (Assistance != null)
-                Assistance.Changed -= Refresh;
+            if (Instance == this) Instance = null;
+            if (Assistance != null) Assistance.Changed -= Refresh;
+            if (Voice != null) { Voice.Changed -= Refresh; Voice.Finalized -= AcceptVoice; }
+            if (Gateway != null) Gateway.Stopped -= OnGatewayStopped;
         }
     }
 }

@@ -27,37 +27,6 @@ namespace TiltBrush
             ["brushes"] = new JObject(Enumerable.Range(0, 17).Select(i => new JProperty("brush" + i, "Brush " + i))),
             ["panels"] = new JObject { ["Brush"] = false, ["Color"] = true } };
         [Test]
-        public void AllDirectChoicesAreValidatedAndBrushesAreNotTruncated()
-        {
-            var c = Context();
-            var validate = typeof(CHRISCommandGateway).GetMethod("Validate", BindingFlags.NonPublic | BindingFlags.Static);
-            int total = 0;
-            foreach (string category in new[] { "Brush", "Color", "Size", "Panels", "Move", "Turn" })
-            {
-                var choices = CHRISPanel.Choices(category, c);
-                Assert.That(choices.Count, Is.GreaterThan(0)); total += choices.Count;
-                foreach (var choice in choices)
-                {
-                    // Exercise the exact JObject serialized on the native approval path.
-                    var wire = JObject.Parse(choice.Value.ToString());
-                    Assert.DoesNotThrow(() => validate.Invoke(null, new object[] { wire, c }), choice.Key);
-                    Assert.That(CHRISPanel.Summary(wire, c), Is.Not.EqualTo("Unsupported action"));
-                }
-            }
-            Assert.That(total, Is.EqualTo(35));
-            Assert.That(CHRISPanel.Choices("Brush", c).Count, Is.EqualTo(17));
-            Assert.That(CHRISPanel.SameContext(c, (JObject)c.DeepClone()), Is.True);
-            var approval = (JObject)c.DeepClone(); approval["expires_at"] = 100.0;
-            Assert.That(CHRISPanel.ApprovalCurrent(approval, c, 99), Is.True);
-            Assert.That(CHRISPanel.ApprovalCurrent(approval, c, 100), Is.False);
-            foreach (string key in new[] { "host_session", "revision", "authority_epoch" })
-            {
-                var changed = (JObject)c.DeepClone(); changed[key] = key == "host_session" ? (JToken)"new" : new JValue(999);
-                Assert.That(CHRISPanel.SameContext(c, changed), Is.False, key);
-            }
-            Assert.That(CHRISPanel.PassiveNativeUIHover(), Is.False, "No live UI must not bypass native interaction safeguards");
-        }
-        [Test]
         public void UncertainSubmissionAndStopNeverCreateAnotherProposal()
         {
             var obj = new GameObject("CHRIS client unit test");
@@ -91,34 +60,7 @@ namespace TiltBrush
             }
             finally { UnityEngine.Object.DestroyImmediate(obj); }
         }
-        [Test]
-        public void ConfirmWaitsForReleaseAndLocalStopClearsIt()
-        {
-            var obj = new GameObject("CHRIS deferred click test");
-            try
-            {
-                var model = obj.AddComponent<CHRISPanel>(); model.Gateway = obj.AddComponent<CHRISCommandGateway>();
-                Property(model, "Assistance", obj.AddComponent<CHRISAssistanceClient>());
-                Property(model, "Popup", obj.AddComponent<CHRISNativePopup>());
-                Property(model, "Mode", "Direct");
-                Property(model, "ReviewedAction", CHRISPanel.Action("brush.size", "number", 0.3));
-                Set(model, "m_ReviewContext", model.Gateway.Capture());
-                model.Popup.BuildView(); Set(model.Popup, "m_Model", model);
-                typeof(CHRISNativePopup).GetMethod("Draw", BindingFlags.NonPublic | BindingFlags.Instance).Invoke(model.Popup, null);
-                var buttons = model.Popup.GetComponentsInChildren<CHRISNativeButton>();
-                buttons.Single(b => b.Label.text == "Confirm change").Click();
-                Assert.That(model.WaitingForRelease, Is.True);
-                typeof(CHRISPanel).GetMethod("Update", BindingFlags.NonPublic | BindingFlags.Instance).Invoke(model, null);
-                Assert.That(model.WaitingForRelease, Is.True, "no initialized controller input means no dispatch");
-                Assert.That(model.Gateway.LastDirectResult, Is.Null);
-                Property(model.Assistance, "TaskId", null); Property(model.Assistance, "PendingRequest", null);
-                long count = model.Gateway.StopCount; buttons.Single(b => b.name == "Local Stop").Click();
-                Assert.That(model.WaitingForRelease, Is.False); Assert.That(model.ReviewedAction, Is.Null);
-                Assert.That(model.Gateway.StopCount, Is.EqualTo(count + 1));
-                Assert.That(model.Notice, Does.Contain("STOP received"));
-            }
-            finally { UnityEngine.Object.DestroyImmediate(obj); }
-        }
+
         [Test]
         public void NativeAssetsProvideMenuPopupKeyboardAndClickableButtons()
         {
@@ -133,6 +75,7 @@ namespace TiltBrush
             var menuCollider = menu.GetComponent<BoxCollider>();
             Assert.That(menuCollider.center.y - menuCollider.size.y / 2, Is.LessThan(-0.86f));
         }
+
         [Test]
         public void FloatingPanelStaysInWorldAndDragStopsOnRelease()
         {
@@ -196,185 +139,137 @@ namespace TiltBrush
             finally { EditorSceneManager.ClosePreviewScene(scene); PanelManager.m_Instance = previousManager; }
         }
 
-        [Test]
-        public void AssistanceExplainsBlockedRequestsAndReviewDoesNotDispatch()
-        {
-            var obj = new GameObject("CHRIS pending task test");
-            try
-            {
-                var client = obj.AddComponent<CHRISAssistanceClient>();
-                var model = obj.AddComponent<CHRISPanel>(); Property(model, "Assistance", client);
-                Property(client, "TaskId", "saved-task");
-                Assert.That(client.CanStart, Is.False);
-                Assert.That(client.StartBlockedReason, Does.Contain("Saved task"));
-                var task = new JObject { ["task_id"] = "saved-task", ["status"] = "awaiting_approval",
-                    ["reason"] = "Review the proposed change", ["approval"] = new JObject { ["approval_id"] = "pending" } };
-                Property(client, "Task", task);
-                foreach (bool polling in new[] { false, true })
-                {
-                    Property(client, "Busy", polling);
-                    Assert.That(client.CanStart, Is.False);
-                    Assert.That(client.StartBlockedReason, Does.Contain("Review proposal or Cancel task"));
-                    Assert.That(client.CanReview, Is.True, "Read-only review is available during status polls");
-                    model.ReviewProposal();
-                    Assert.That(JToken.DeepEquals(model.ReviewedApproval, task["approval"]), Is.True);
-                    Assert.That(model.ReviewedApproval, Is.Not.SameAs(task["approval"]));
-                    Assert.That(model.WaitingForRelease, Is.False, "Opening review cannot queue approval");
-                    Assert.That((string)task["status"], Is.EqualTo("awaiting_approval"));
-                }
-                Property(client, "CancelWanted", true);
-                Assert.That(client.CanReview, Is.False); Assert.That(client.CanStart, Is.False);
-                Assert.That(client.StartBlockedReason, Does.Contain("Cancellation unconfirmed"));
-                Property(client, "CancelWanted", false); Property(client, "Busy", false);
-                Property(client, "PendingRequest", new JObject { ["request_id"] = "uncertain" });
-                Assert.That(client.StartBlockedReason, Does.Contain("Submission reply missing"));
-                Property(client, "PendingRequest", null);
-                foreach (string state in new[] { "paused", "unverified", "running" })
-                {
-                    task["status"] = state;
-                    Assert.That(client.CanStart, Is.False); Assert.That(client.CanReview, Is.False);
-                    Assert.That(client.StartBlockedReason, Does.Contain("Cancel task"));
-                }
-                task["status"] = "rejected";
-                Assert.That(client.CanStart, Is.True); Assert.That(client.StartBlockedReason, Is.Null);
-                foreach (string reason in new[] { "Direct palette owns control",
-                    "Close the CHRIS palette with F8, then submit a new browser request" })
-                {
-                    task["reason"] = reason;
-                    Assert.That(model.AssistanceStatus(), Does.Contain("Assistance mode"));
-                    Assert.That(model.AssistanceStatus(), Does.Not.Contain("F8"));
-                    Assert.That((string)task["reason"], Is.EqualTo(reason), "Historical records stay intact");
-                }
-                Assert.That(CHRISPanel.AssistanceReason("Other failure"), Is.EqualTo("Other failure"));
-            }
-            finally { UnityEngine.Object.DestroyImmediate(obj); }
-        }
-
         [MenuItem("CHRIS/Verify native UI (Edit mode)")]
-        public static void VerifyInEditor()
-        {
-            if (EditorApplication.isPlayingOrWillChangePlaymode)
-                throw new InvalidOperationException("Exit Play mode before running CHRIS editor checks.");
-            RunChecks();
-        }
+        public static void VerifyInEditor() => RunChecks();
 
         public static void Run()
         {
             try { RunChecks(); EditorApplication.Exit(0); }
-            catch (Exception ex) { Debug.LogException(ex); EditorApplication.Exit(1); }
+            catch (Exception error) { Debug.LogException(error); EditorApplication.Exit(1); }
         }
+
         static void RunChecks()
         {
-            string output = Path.GetFullPath("Build/CHRISNativeUI");
+            const string output = "Build/CHRISNativeUI";
             Directory.CreateDirectory(output);
+            CHRISVoiceBuild.VerifyResources();
+            string[] keys = { "CHRIS.AssistanceTask", "CHRIS.AssistancePending", "CHRIS.AssistanceCancel" };
+            var hadKeys = keys.Select(PlayerPrefs.HasKey).ToArray();
+            var savedStrings = keys.Take(2).Select(k => PlayerPrefs.GetString(k, "")).ToArray();
+            int savedCancel = PlayerPrefs.GetInt(keys[2], 0);
             try
             {
-                var tests = new TestCHRISNativeUI();
-                tests.AllDirectChoicesAreValidatedAndBrushesAreNotTruncated();
-                tests.UncertainSubmissionAndStopNeverCreateAnotherProposal();
-                tests.ConfirmWaitsForReleaseAndLocalStopClearsIt();
-                tests.NativeAssetsProvideMenuPopupKeyboardAndClickableButtons();
-                tests.FloatingPanelStaysInWorldAndDragStopsOnRelease();
-                tests.AssistanceExplainsBlockedRequestsAndReviewDoesNotDispatch();
-                Render(output);
-                File.WriteAllText(output + "/checks.txt", "PASS: native UI assets, 35 validated direct choices, context invalidation, cancellation/recovery interlocks, floating placement independent of hand/head, drag/release/stop, native collider layout, clickable confirmation and STOP in the panel/More menu, pending-task explanations and rendered review. No Play mode, HTTP, paid model calls or sketch changes.");
-            }
-            catch (Exception ex)
-            { File.WriteAllText(output + "/checks.txt", "FAIL: " + ex); throw; }
-        }
-        static void Render(string output)
-        {
-            var scene = EditorSceneManager.NewPreviewScene();
-            RenderTexture rt = null; Texture2D image = null; Camera camera = null;
-            try
-            {
-                var resources = CHRISUIResources.Load();
-                var obj = UnityEngine.Object.Instantiate(resources.PopupPrefab); obj.name = "CHRIS layout verification";
-                UnityEngine.SceneManagement.SceneManager.MoveGameObjectToScene(obj, scene);
-                var popup = obj.GetComponent<CHRISNativePopup>(); popup.BuildView();
-                Assert.That(obj.GetComponentsInChildren<CHRISNativeButton>().Any(b => b.Label.text == "Shortcuts"), Is.False);
-                var modelObj = new GameObject("CHRIS preview model");
-                UnityEngine.SceneManagement.SceneManager.MoveGameObjectToScene(modelObj, scene);
-                var model = modelObj.AddComponent<CHRISPanel>(); model.Gateway = modelObj.AddComponent<CHRISCommandGateway>();
-                var client = modelObj.AddComponent<CHRISAssistanceClient>(); Property(model, "Assistance", client);
-                Property(model, "Mode", "Assistance");
-                var approval = new JObject { ["approval_id"] = "preview", ["action_digest"] = new string('a', 64),
-                    ["action"] = CHRISPanel.Action("brush.size", "number", 0.3) };
-                var nativeContext = model.Gateway.Capture();
-                foreach (var key in new[] { "host_session", "revision", "authority_epoch" }) approval[key] = nativeContext[key];
-                approval["expires_at"] = CHRISCommandGateway.Now + 300;
-                Property(client, "Task", new JObject { ["task_id"] = "preview", ["status"] = "awaiting_approval", ["reason"] = "Review the proposed change", ["approval"] = approval, ["context"] = Context() });
-                Property(client, "TaskId", "preview");
-                Property(model, "ReviewedApproval", approval); Set(popup, "m_Model", model);
-                typeof(CHRISNativePopup).GetMethod("Draw", BindingFlags.NonPublic | BindingFlags.Instance).Invoke(popup, null);
-                Physics.SyncTransforms();
-                foreach (var button in obj.GetComponentsInChildren<CHRISNativeButton>())
+            TestCHRISAssistance.Exported.Clear();
+            int tests = 0;
+            foreach (var suite in new object[] { new TestCHRISNativeUI(), new TestCHRISAssistance() })
+                foreach (var method in suite.GetType().GetMethods().Where(m => m.GetCustomAttributes(typeof(TestAttribute), false).Length > 0))
                 {
-                    Assert.That(button.GetComponent<BoxCollider>(), Is.Not.Null);
-                    Assert.That(button.Label, Is.Not.Null);
-                    var collider = button.GetComponent<BoxCollider>();
-                    Assert.That(collider.Raycast(new Ray(collider.bounds.center - Vector3.forward * 2, Vector3.forward), out _, 3), Is.True, button.name);
+                    method.Invoke(suite, null);
+                    tests++;
                 }
-                var cameraObj = new GameObject("CHRIS preview camera"); camera = cameraObj.AddComponent<Camera>();
-                UnityEngine.SceneManagement.SceneManager.MoveGameObjectToScene(cameraObj, scene); camera.scene = scene;
-                cameraObj.AddComponent<UniversalAdditionalCameraData>(); camera.orthographic = true; camera.orthographicSize = 2.25f;
-                camera.transform.position = new Vector3(0, 0, -10); camera.clearFlags = CameraClearFlags.SolidColor;
-                camera.backgroundColor = new Color(0.08f, 0.08f, 0.08f); camera.nearClipPlane = 0.01f; camera.farClipPlane = 20;
-                rt = new RenderTexture(1100, 1200, 24); rt.Create(); camera.targetTexture = rt;
-                foreach (var text in obj.GetComponentsInChildren<TextMeshPro>()) text.ForceMeshUpdate();
-                camera.Render();
-                RenderTexture.active = rt; image = new Texture2D(rt.width, rt.height, TextureFormat.RGB24, false);
-                image.ReadPixels(new Rect(0, 0, rt.width, rt.height), 0, 0); image.Apply();
-                File.WriteAllBytes(output + "/native-review.png", image.EncodeToPNG());
-                RenderTexture.active = null;
-                Property(model, "ReviewedApproval", null);
-                typeof(CHRISNativePopup).GetMethod("Draw", BindingFlags.NonPublic | BindingFlags.Instance).Invoke(popup, null);
-                var pendingButtons = obj.GetComponentsInChildren<CHRISNativeButton>();
-                Assert.That(pendingButtons.Single(b => b.name == "Choice 0").Label.text, Is.EqualTo("Review proposal"));
-                Assert.That(pendingButtons.Single(b => b.name == "Choice 0").IsAvailable(), Is.True);
-                Assert.That(pendingButtons.Single(b => b.name == "Choice 2").IsAvailable(), Is.False);
-                Assert.That(obj.GetComponentsInChildren<TextMeshPro>().Any(t => t.text.Contains("Finish this proposal")), Is.True);
-                foreach (var text in obj.GetComponentsInChildren<TextMeshPro>()) text.ForceMeshUpdate();
-                camera.Render(); RenderTexture.active = rt; image.ReadPixels(new Rect(0, 0, rt.width, rt.height), 0, 0); image.Apply();
-                File.WriteAllBytes(output + "/native-pending.png", image.EncodeToPNG()); RenderTexture.active = null;
-                Property(model, "ReviewedApproval", null); Property(model, "Mode", "Direct");
-                typeof(CHRISNativePopup).GetMethod("Draw", BindingFlags.NonPublic | BindingFlags.Instance).Invoke(popup, null);
-                foreach (var text in obj.GetComponentsInChildren<TextMeshPro>()) text.ForceMeshUpdate();
-                camera.Render(); RenderTexture.active = rt; image.ReadPixels(new Rect(0, 0, rt.width, rt.height), 0, 0); image.Apply();
-                File.WriteAllBytes(output + "/native-direct.png", image.EncodeToPNG()); RenderTexture.active = null;
-                obj.SetActive(false);
-                var menu = UnityEngine.Object.Instantiate(AssetDatabase.LoadAssetAtPath<GameObject>("Assets/Prefabs/PopUps/PopUpWindow_Panels.prefab"));
-                menu.transform.position = Vector3.zero; menu.transform.rotation = Quaternion.identity;
-                UnityEngine.SceneManagement.SceneManager.MoveGameObjectToScene(menu, scene);
-                typeof(CHRISMenuEntry).GetMethod("Start", BindingFlags.NonPublic | BindingFlags.Instance).Invoke(menu.GetComponent<CHRISMenuEntry>(), null);
-                var menuButtons = menu.GetComponentsInChildren<CHRISNativeButton>();
-                foreach (string name in new[] { "CHRIS entry", "CHRIS local Stop" })
-                {
-                    var button = menuButtons.Single(b => b.name == name);
-                    Assert.That(button.IsAvailable(), Is.True); Assert.That(button.Click, Is.Not.Null);
-                    Assert.That(button.GetComponent<BoxCollider>(), Is.Not.Null);
-                }
-                var instance = typeof(CHRISPanel).GetField("<Instance>k__BackingField", BindingFlags.Static | BindingFlags.NonPublic);
-                var previousInstance = instance.GetValue(null);
-                try
-                {
-                    instance.SetValue(null, model);
-                    Property(client, "TaskId", null); Property(client, "PendingRequest", null);
-                    long stopped = model.Gateway.StopCount;
-                    menuButtons.Single(b => b.name == "CHRIS local Stop").Click();
-                    Assert.That(model.Gateway.StopCount, Is.EqualTo(stopped + 1), "More-menu STOP works with CHRIS hidden");
-                }
-                finally { instance.SetValue(null, previousInstance); }
-                camera.orthographicSize = 1.15f;
-                foreach (var text in menu.GetComponentsInChildren<TextMeshPro>()) text.ForceMeshUpdate();
-                camera.Render(); RenderTexture.active = rt; image.ReadPixels(new Rect(0, 0, rt.width, rt.height), 0, 0); image.Apply();
-                File.WriteAllBytes(output + "/native-menu.png", image.EncodeToPNG()); RenderTexture.active = null;
+            Render(output);
+            File.WriteAllText(output + "/protocol-fixtures.json", TestCHRISAssistance.Exported.ToString());
+            File.WriteAllText(output + "/checks.txt", "PASS: " + tests + " native regression methods; ordered segments, whole-list validation, replay, Stop/takeover/expiry, delayed panels, numeric/rotation tolerances, Python wire fixtures, cancelled/replaced speech callbacks, missing microphone/provider errors, correction/legacy-summary guards, floating native UI. No Play mode, HTTP, microphone recording, speech/model inference or sketch changes.");
             }
             finally
             {
+                for (int i = 0; i < keys.Length; i++)
+                {
+                    if (!hadKeys[i]) PlayerPrefs.DeleteKey(keys[i]);
+                    else if (i == 2) PlayerPrefs.SetInt(keys[i], savedCancel);
+                    else PlayerPrefs.SetString(keys[i], savedStrings[i]);
+                }
+                PlayerPrefs.Save();
+            }
+        }
+
+        static void Render(string output)
+        {
+            var scene = EditorSceneManager.NewPreviewScene();
+            RenderTexture texture = null;
+            Texture2D image = null;
+            Camera camera = null;
+            CHRISPanel model = null;
+            try
+            {
+                var resources = CHRISUIResources.Load();
+                var popupObject = UnityEngine.Object.Instantiate(resources.PopupPrefab);
+                UnityEngine.SceneManagement.SceneManager.MoveGameObjectToScene(popupObject, scene);
+                var popup = popupObject.GetComponent<CHRISNativePopup>(); popup.BuildView();
+                Assert.That(popupObject.GetComponentsInChildren<CHRISNativeButton>().Any(b => b.name == "Direct mode" || b.Label.text == "Shortcuts"), Is.False);
+                var hostObject = new GameObject("CHRIS preview host");
+                UnityEngine.SceneManagement.SceneManager.MoveGameObjectToScene(hostObject, scene);
+                var host = hostObject.AddComponent<CHRISGatewayTestHost>(); host.Initialize();
+                model = hostObject.AddComponent<CHRISPanel>(); model.Gateway = host;
+                TestCHRISAssistance.Call(model, "Start");
+                Property(model, "Popup", popup); Set(popup, "m_Model", model);
+                var fixtures = JArray.Parse(File.ReadAllText(Path.Combine(Application.dataPath, "Editor/Tests/Fixtures/CHRISControlSegments.json")));
+                var fixture = (JObject)fixtures[0];
+                var approval = (JObject)fixture["envelope"]["approval"].DeepClone();
+                var context = host.Capture();
+                foreach (string key in new[] { "host_session", "revision", "authority_epoch" }) approval[key] = context[key];
+                approval["expires_at"] = CHRISCommandGateway.Now + 300;
+                var task = new JObject { ["task_id"] = approval["task_id"], ["status"] = "awaiting_approval", ["reason"] = "Review the commands",
+                    ["actions"] = approval["actions"], ["approval"] = approval, ["context"] = context, ["summary"] = fixture["summary"] };
+                Property(model.Assistance, "Task", task); Property(model.Assistance, "TaskId", (string)task["task_id"]);
+                Property(model.Assistance, "Busy", false); Property(model.Assistance, "CancelWanted", false);
+                model.Refresh();
+                TestCHRISAssistance.Call(popup, "Draw");
+                Physics.SyncTransforms();
+                foreach (var button in popupObject.GetComponentsInChildren<CHRISNativeButton>())
+                {
+                    var collider = button.GetComponent<BoxCollider>();
+                    Assert.That(button.Label, Is.Not.Null); Assert.That(collider, Is.Not.Null);
+                    Assert.That(collider.Raycast(new Ray(collider.bounds.center - Vector3.forward * 2, Vector3.forward), out _, 3), Is.True);
+                }
+                var cameraObject = new GameObject("CHRIS preview camera"); camera = cameraObject.AddComponent<Camera>();
+                UnityEngine.SceneManagement.SceneManager.MoveGameObjectToScene(cameraObject, scene); camera.scene = scene;
+                cameraObject.AddComponent<UniversalAdditionalCameraData>(); camera.orthographic = true; camera.orthographicSize = 2.25f;
+                camera.transform.position = new Vector3(0, 0, -10); camera.clearFlags = CameraClearFlags.SolidColor;
+                camera.backgroundColor = new Color(0.08f, 0.08f, 0.08f); camera.nearClipPlane = 0.01f; camera.farClipPlane = 20;
+                texture = new RenderTexture(1100, 1200, 24); texture.Create(); camera.targetTexture = texture;
+                image = new Texture2D(texture.width, texture.height, TextureFormat.RGB24, false);
+                System.Action<string, GameObject> capture = (name, obj) =>
+                {
+                    foreach (var text in obj.GetComponentsInChildren<TextMeshPro>()) text.ForceMeshUpdate();
+                    camera.Render(); RenderTexture.active = texture;
+                    image.ReadPixels(new Rect(0, 0, texture.width, texture.height), 0, 0); image.Apply();
+                    File.WriteAllBytes(output + "/" + name + ".png", image.EncodeToPNG()); RenderTexture.active = null;
+                };
+                capture("assist-review", popupObject);
+                var detail = popupObject.GetComponentsInChildren<TextMeshPro>().Single(t => t.gameObject.name == "Review");
+                Assert.That(detail.isTextOverflowing, Is.False, "Exact commands must fit the review page");
+                Assert.That(model.ReviewText, Is.EqualTo((string)fixture["summary"]));
+                var confirm = popupObject.GetComponentsInChildren<CHRISNativeButton>().Single(b => b.Label.text == "Confirm commands");
+                Assert.That(confirm.IsAvailable(), Is.True); confirm.Click();
+                Assert.That(model.WaitingForRelease, Is.True);
+                Property(model.Assistance, "TaskId", null); Property(model.Assistance, "PendingRequest", null);
+                long stops = host.StopCount;
+                popupObject.GetComponentsInChildren<CHRISNativeButton>().Single(b => b.name == "Local Stop").Click();
+                Assert.That(host.StopCount, Is.EqualTo(stops + 1)); Assert.That(model.WaitingForRelease, Is.False);
+                Property(model.Assistance, "Task", null); model.BeginCorrection();
+                TestCHRISAssistance.Call(popup, "Draw"); capture("assist-ready", popupObject);
+                long recording = model.Voice.Session.Begin(); model.Voice.Session.Ready(recording);
+                model.Voice.Receive(recording, "partial", "make my brush blue and smaller");
+                TestCHRISAssistance.Call(popup, "Draw"); capture("assist-listening", popupObject);
+                model.Voice.CancelRecording();
+                popupObject.SetActive(false);
+                var menu = UnityEngine.Object.Instantiate(AssetDatabase.LoadAssetAtPath<GameObject>("Assets/Prefabs/PopUps/PopUpWindow_Panels.prefab"));
+                menu.transform.position = Vector3.zero; menu.transform.rotation = Quaternion.identity;
+                UnityEngine.SceneManagement.SceneManager.MoveGameObjectToScene(menu, scene);
+                TestCHRISAssistance.Call(menu.GetComponent<CHRISMenuEntry>(), "Start");
+                stops = host.StopCount;
+                var stop = menu.GetComponentsInChildren<CHRISNativeButton>().Single(b => b.name == "CHRIS local Stop");
+                Assert.That(stop.IsAvailable(), Is.True); stop.Click(); Assert.That(host.StopCount, Is.EqualTo(stops + 1));
+                camera.orthographicSize = 1.15f; capture("assist-menu", menu);
+            }
+            finally
+            {
+                if (model != null && model.Assistance != null)
+                { Property(model.Assistance, "TaskId", null); Property(model.Assistance, "PendingRequest", null); Property(model.Assistance, "Busy", false); }
                 if (camera != null) camera.targetTexture = null;
                 if (image != null) UnityEngine.Object.DestroyImmediate(image);
-                if (rt != null) { rt.Release(); UnityEngine.Object.DestroyImmediate(rt); }
+                if (texture != null) { texture.Release(); UnityEngine.Object.DestroyImmediate(texture); }
                 EditorSceneManager.ClosePreviewScene(scene);
             }
         }

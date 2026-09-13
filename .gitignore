@@ -103,3 +103,9 @@
 
 # Local planning / analysis notes, not repo content
 /LlmDocs/
+
+# Reproducibly acquired offline CHRIS speech resources (Support/Python/acquire-chris-voice.py).
+/Assets/Plugins/CHRISVoice/
+/Assets/Plugins/CHRISVoice.meta
+/Assets/StreamingAssets/CHRISVoice/
+/Assets/StreamingAssets/CHRISVoice.meta
