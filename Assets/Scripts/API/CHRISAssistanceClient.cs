@@ -54,20 +54,20 @@ namespace TiltBrush
                 if (CanStart)
                     return null;
                 if (CancelWanted)
-                    return "Cancellation unconfirmed. Select Check / Retry.";
+                    return "Cancellation unconfirmed. Select Retry.";
                 if (PendingRequest != null)
-                    return "Submission reply missing. Select Check / Retry.";
+                    return "Submission reply missing. Select Retry.";
                 if (TaskId != null && !Terminal(Task))
                 {
                     if (Task == null)
-                        return "Saved task needs checking. Select Check / Retry.";
+                        return "Saved task needs checking. Select Retry.";
                     if (CanReview)
                         return "Review the commands, or re-record / edit to replace this request.";
                     if ((string)Task["status"] == "awaiting_approval")
                         return "This old or invalid proposal must be cancelled. Re-record or edit to request a new one.";
                     if ((string)Task["status"] == "paused" || (string)Task["status"] == "unverified")
-                        return "Task needs reconciliation. Select Check / Retry or Cancel task.";
-                    return "A task is in progress. Wait or select Cancel task.";
+                        return "Task needs reconciliation. Select Retry or STOP.";
+                    return "A task is in progress. Wait or select STOP.";
                 }
 
                 return "Contacting assistance. Please wait.";
@@ -89,7 +89,10 @@ namespace TiltBrush
                 Error = "Saved request is unreadable. Check the assistance service before starting more work.";
             }
 
-            CancelWanted = PlayerPrefs.GetInt("CHRIS.AssistanceCancel", 0) != 0;
+            // Retired example submissions may already exist remotely. Reconcile and cancel
+            // their original request ID instead of posting the obsolete action payload again.
+            CancelWanted = PlayerPrefs.GetInt("CHRIS.AssistanceCancel", 0) != 0 ||
+                PendingRequest?.Property("action") != null;
         }
 
         void SaveRecoveryState()
@@ -100,11 +103,11 @@ namespace TiltBrush
             PlayerPrefs.Save();
         }
 
-        public void Submit(string prompt, bool example)
+        public void Submit(string prompt)
         {
             if (!CanStart)
                 return;
-            if (!example && (string.IsNullOrWhiteSpace(prompt) || prompt.Length > MaxPromptLength))
+            if (string.IsNullOrWhiteSpace(prompt) || prompt.Length > MaxPromptLength)
             {
                 Error = "Enter a request of 1–2000 characters.";
                 Changed?.Invoke();
@@ -115,16 +118,9 @@ namespace TiltBrush
             TaskId = null;
             PendingRequest = new JObject
             {
-                ["request_id"] = Guid.NewGuid().ToString("N")
+                ["request_id"] = Guid.NewGuid().ToString("N"),
+                ["request"] = prompt
             };
-            if (example)
-                PendingRequest["action"] = new JObject
-                {
-                    ["tool"] = "brush.size",
-                    ["number"] = 0.3
-                };
-            else
-                PendingRequest["request"] = prompt;
             SaveRecoveryState();
             RetrySubmission();
         }
@@ -229,7 +225,7 @@ namespace TiltBrush
             }
             else
             {
-                Error = value?["detail"]?.Type == JTokenType.String ? (string)value["detail"] : "Assistance service unavailable (127.0.0.1:8765). Start the Python service, then Check / Retry.";
+                Error = value?["detail"]?.Type == JTokenType.String ? (string)value["detail"] : "Assistance service unavailable (127.0.0.1:8765). Start the Python service, then select Retry.";
                 if (submission && isPost && code >= 400 && code < 500)
                 {
                     PendingRequest = null;

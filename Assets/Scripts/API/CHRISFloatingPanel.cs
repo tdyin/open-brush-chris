@@ -108,7 +108,7 @@ namespace TiltBrush
         {
             if (!PointerRay(out var ray) || PanelPopUp == null || !PanelPopUp.IsOpen())
                 return;
-            CHRISPanel.Instance?.Back(); // A pending confirmation must not survive a move gesture.
+            CHRISPanel.Instance?.StopLocal(); // A pending confirmation must not survive a move gesture.
             BeginDrag(ray, SketchControlsScript.m_Instance.GetUIReticlePos());
         }
 

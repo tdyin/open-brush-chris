@@ -70,8 +70,6 @@ namespace TiltBrush
                 m_Choices[i] = m_Resources.Button(transform, "Choice " + i,
                     new Vector3(i % 2 == 0 ? -0.9f : 0.9f, -0.95f - i / 2 * 0.4f, -0.06f),
                     new Vector2(1.7f, 0.32f), "", null);
-            m_Resources.Button(transform, "Cancel review / Back", new Vector3(-0.9f, -1.73f, -0.06f), new Vector2(1.7f, 0.32f),
-                "Cancel / Back", () => m_Model?.Back());
             m_Resources.Button(transform, "Close CHRIS", new Vector3(0.9f, -1.73f, -0.06f), new Vector2(1.7f, 0.32f), "Close",
                 () => RequestClose(true));
         }
@@ -120,7 +118,6 @@ namespace TiltBrush
             {
                 string transcript = voice.Session.Transcript;
                 m_Detail.text = transcript.Length <= 320 ? transcript : "..." + transcript.Substring(transcript.Length - 320);
-                ConfigureChoice(0, "Cancel recording", m_Model.StopLocal);
                 return;
             }
             var client = m_Model.Assistance;
@@ -131,10 +128,8 @@ namespace TiltBrush
             }
             m_Detail.text = m_Model.HasReplacement ? "Replacement request: " + m_Model.Prompt :
                 client.CanReview ? m_Model.Notice : client.StartBlockedReason ?? "Request: " + m_Model.Prompt;
-            ConfigureChoice(0, "No-model example", m_Model.ProposeExample, !m_Model.HasReplacement && !client.Busy);
-            ConfigureChoice(1, "Check / Retry", () => RetryAssistance(client), !client.Busy);
-            ConfigureChoice(2, "Cancel task", m_Model.StopLocal, client.TaskId != null || client.PendingRequest != null || m_Model.Correcting);
-            ConfigureChoice(3, "Mic: " + (voice?.MicrophoneLabel ?? "Windows default"), m_Model.ChangeMicrophone);
+            ConfigureChoice(0, "Retry", () => RetryAssistance(client), !client.Busy);
+            ConfigureChoice(1, "Mic: " + (voice?.MicrophoneLabel ?? "Windows default"), m_Model.ChangeMicrophone);
         }
 
         void DrawApprovalReview(CHRISAssistanceClient client)
@@ -161,7 +156,6 @@ namespace TiltBrush
                 "Review page " + (m_ReviewPage + 1) + " of " + m_ReviewPages.Length + ". Read every page before confirming.";
             ConfigureChoice(0, "Confirm commands", () => m_Model.Decide(true),
                 allViewed && proposalMatchesReview && fresh && ready && !client.Busy && !client.CancelWanted);
-            ConfigureChoice(1, "Cancel task", m_Model.StopLocal);
             ConfigureChoice(2, "Previous page", () => ChangeReviewPage(-1), m_ReviewPage > 0);
             ConfigureChoice(3, "Next page", () => ChangeReviewPage(1), m_ReviewPage + 1 < m_ReviewPages.Length);
         }

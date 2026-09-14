@@ -62,6 +62,40 @@ namespace TiltBrush
         }
 
         [Test]
+        public void SavedExampleRequestsRecoverCancellationWithoutResubmission()
+        {
+            const string pendingKey = "CHRIS.AssistancePending", cancelKey = "CHRIS.AssistanceCancel";
+            bool hadPending = PlayerPrefs.HasKey(pendingKey), hadCancel = PlayerPrefs.HasKey(cancelKey);
+            string savedPending = PlayerPrefs.GetString(pendingKey, "");
+            int savedCancel = PlayerPrefs.GetInt(cancelKey, 0);
+            var obj = new GameObject("CHRIS retired example recovery");
+            try
+            {
+                var client = obj.AddComponent<CHRISAssistanceClient>();
+                foreach (JToken action in new JToken[] { new JObject { ["tool"] = "brush.size", ["number"] = 0.3 }, JValue.CreateNull() })
+                {
+                    var pending = new JObject { ["request_id"] = "saved_example", ["action"] = action };
+                    PlayerPrefs.SetString(pendingKey, pending.ToString());
+                    PlayerPrefs.SetInt(cancelKey, 0);
+                    TestCHRISAssistance.Call(client, "Awake");
+                    Assert.That(client.CancelWanted, Is.True);
+                    Assert.That(client.CanStart, Is.False);
+                    Assert.That(client.RecoveryPath, Is.EqualTo("/requests/saved_example"));
+                    Reply(client, false, 404, null, true, false);
+                    Assert.That(JToken.DeepEquals(client.PendingRequest, pending), Is.True);
+                    Assert.That(client.CancelWanted, Is.True, "An unknown reply cannot authorize a replacement or replay");
+                }
+            }
+            finally
+            {
+                UnityEngine.Object.DestroyImmediate(obj);
+                if (hadPending) PlayerPrefs.SetString(pendingKey, savedPending); else PlayerPrefs.DeleteKey(pendingKey);
+                if (hadCancel) PlayerPrefs.SetInt(cancelKey, savedCancel); else PlayerPrefs.DeleteKey(cancelKey);
+                PlayerPrefs.Save();
+            }
+        }
+
+        [Test]
         public void NativeAssetsProvideMenuPopupKeyboardAndClickableButtons()
         {
             var resources = CHRISUIResources.Load();
@@ -253,10 +287,16 @@ namespace TiltBrush
                 Assert.That(host.StopCount, Is.EqualTo(stops + 1)); Assert.That(model.WaitingForRelease, Is.False);
                 Property(model.Assistance, "Task", null); model.BeginCorrection();
                 TestCHRISAssistance.Call(popup, "Draw"); capture("assist-ready", popupObject);
+                Assert.That(popupObject.GetComponentsInChildren<CHRISNativeButton>().Single(b => b.Label.text == "Retry").IsAvailable(), Is.True);
                 long recording = model.Voice.Session.Begin(); model.Voice.Session.Ready(recording);
                 model.Voice.Receive(recording, "partial", "make my brush blue and smaller");
                 TestCHRISAssistance.Call(popup, "Draw"); capture("assist-listening", popupObject);
-                model.Voice.CancelRecording();
+                stops = host.StopCount;
+                popupObject.GetComponentsInChildren<CHRISNativeButton>().Single(b => b.Label.text == "STOP").Click();
+                Assert.That(host.StopCount, Is.EqualTo(stops + 1));
+                Assert.That(model.Voice.Session.IsActive, Is.False);
+                model.Voice.Receive(recording, "final", "late cancelled speech");
+                Assert.That(model.HasReplacement, Is.False);
                 popupObject.SetActive(false);
                 var menu = UnityEngine.Object.Instantiate(AssetDatabase.LoadAssetAtPath<GameObject>("Assets/Prefabs/PopUps/PopUpWindow_Panels.prefab"));
                 menu.transform.position = Vector3.zero; menu.transform.rotation = Quaternion.identity;

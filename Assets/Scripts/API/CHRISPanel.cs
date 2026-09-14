@@ -29,7 +29,6 @@ namespace TiltBrush
         float m_ReleaseDeadline, m_NextPoll;
         long m_IntentVersion, m_RecordingIntent;
         string m_ReplacementPrompt;
-        bool m_ReplacementExample;
 
         void Start()
         {
@@ -89,11 +88,6 @@ namespace TiltBrush
             Gateway.Stop();
         }
 
-        public void Back()
-        {
-            StopLocal();
-        }
-
         public long BeginCorrection()
         {
             StopLocal();
@@ -138,16 +132,7 @@ namespace TiltBrush
             }
             Prompt = text;
             m_ReplacementPrompt = text;
-            m_ReplacementExample = false;
             Notice = "Preparing your request. Previous cancellation must finish first.";
-            Refresh();
-        }
-
-        public void ProposeExample()
-        {
-            BeginCorrection();
-            m_ReplacementPrompt = Prompt;
-            m_ReplacementExample = true;
             Refresh();
         }
 
@@ -208,7 +193,7 @@ namespace TiltBrush
                 return Voice.Status;
             if (WaitingForRelease) return Notice;
             if (Correcting) return HasReplacement ? Assistance.StartBlockedReason ?? "Preparing your replacement request..." : Notice;
-            if (Assistance.CancelWanted) return "Waiting for cancellation. Check / Retry before more work.";
+            if (Assistance.CancelWanted) return "Waiting for cancellation. Select Retry before more work.";
             if (Assistance.Error != null) return Assistance.Error;
             var task = Assistance.Task;
             if (task == null) return Assistance.Busy ? "Planning your request..." : Notice;
@@ -268,7 +253,7 @@ namespace TiltBrush
                 string prompt = m_ReplacementPrompt;
                 m_ReplacementPrompt = null;
                 Correcting = false;
-                Assistance.Submit(prompt, m_ReplacementExample);
+                Assistance.Submit(prompt);
             }
             if (Popup != null && Time.unscaledTime >= m_NextPoll)
             {
