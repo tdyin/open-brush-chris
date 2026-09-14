@@ -3,18 +3,20 @@
 ## Working checkout and ownership
 
 Use this repository root on
-`codex/chris-native-companion`. Source no longer needs to be edited through
-`Build/CHRISUI-worktree`; that detached checkout is retained temporarily for
-verified build evidence and safe retirement. Pixel owns native implementation
+`codex/chris-native-companion`. The former `Build/CHRISUI-worktree` checkout
+has been retired after root verification and local evidence preservation.
+Pixel owns native implementation
 and shared Git operations, Iris owns design content, and Logic owns the Python
 service. Coordinate Git changes before switching or retiring either checkout.
 Do not push as part of local cleanup.
 
 `design/chris/native-companion/` holds the approved v5 boards, exact image
 prompts, and design notes. The PNGs are concepts; editor renders and headset
-acceptance are separate evidence. Runtime relocation into `Assets/CHRIS` is
-pending approval review; until it lands, native source remains under
-`Assets/Scripts/API`, with editor checks under `Assets/Editor/Tests`.
+acceptance are separate evidence. CHRIS runtime code is in
+`Assets/CHRIS/Runtime`, editor code and checks in `Assets/CHRIS/Editor`,
+resource assets in `Assets/CHRIS/Resources/CHRIS`, and the icon shader in
+`Assets/CHRIS/Shaders`. The editor-conditional gateway test host stays under
+`Runtime/TestSupport` to preserve its existing runtime assembly membership.
 
 Keep engineering guidance in this file, reusable helpers in `agent/scripts`,
 generated evidence in ignored `agent/logs`, and failure captures in ignored
@@ -71,7 +73,12 @@ Run `./agent/scripts/verify-native-ui.ps1` from PowerShell; `-UnityPath` can
 override the editor executable. The helper resolves this checkout from its own
 location, rejects a second editor for the same project, and records its editor
 log and exit code in `agent/logs/native-ui-runs/<timestamp>/`. Current layout
-renders still go to `Build/CHRISNativeUI/`; no test output paths have moved.
+renders and protocol fixtures go to `agent/logs/native-ui/`.
+
+The approved directory relocation passed all 30 native editor checks. All 11
+preview PNGs matched the pre-move root renders byte-for-byte, with no source
+snapshot differences. Existing file GUIDs and runtime content were preserved;
+only editor asset/fixture paths and generated-output placement changed.
 
 The pre-consolidation source `48760d294d50ef4a1cdd7992cba3752e87ccd79b`
 passed 30 native checks and produced the Windows/OpenXR player at
@@ -92,16 +99,25 @@ which is patch-equivalent to retained commit `dab369e3`.
 four current v5 files are imported into `design/`.
 
 `agent/logs/consolidation/` contains the checkpoint manifest, original file
-hashes, the verified 566-file root review archive and the proposed asset move
-map. Keep old worktrees until root validation, evidence preservation and Iris's
-task relocation have succeeded. Delete local branches only after proving the
-work is reachable or equivalent and no worktree uses them; retain checkpoint
+hashes, the verified 566-file root review archive, the asset move map and the
+39-file archive of the retired worktree's local evidence. Iris's task now shares
+this checkout. The old app-managed detached worktree remains retained.
+`removed-local-branches.json` records the nine removed local branches and the
+commits/tags that preserve their work. Delete local branches only after proving
+the work is reachable or equivalent and no worktree uses them; retain checkpoint
 tags. Never delete remote branches as part of this cleanup.
 
 Unity builds can rewrite project settings, font and generated shader assets.
 Snapshot the actual working state before a build, preserve generated outputs,
 and restore only known build-mutated files to their snapshot. Verify the final
 source diff before recording a build as clean.
+
+Use `python agent/scripts/preserve-unity-state.py save agent/logs/<run>/snapshot`
+before a run and `check` with that same directory afterwards. `restore` archives
+and restores only the explicitly listed Unity-generated file changes; it fails
+if any other source hash or Git status differs. Newly generated build files must
+be inspected and archived separately before removal. Never restore over another
+agent's concurrent edits; keep shared-checkout writes paused during verification.
 
 ## Cloud voice (Windows PCVR)
 

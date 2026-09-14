@@ -199,7 +199,7 @@ namespace TiltBrush
 
         // Exported from Workflow.prepare/execute with tests.support's fake native host/proposer.
         static JArray WorkflowStates() => JArray.Parse(File.ReadAllText(Path.Combine(Application.dataPath,
-            "Editor/Tests/Fixtures/CHRISWorkflowStates.json")));
+            "CHRIS/Editor/Tests/Fixtures/CHRISWorkflowStates.json")));
 
         [Test]
         public void LongReviewsKeepEveryCharacterAtTheReadableFontSize()
@@ -308,7 +308,7 @@ namespace TiltBrush
 
         static void RunChecks()
         {
-            const string output = "Build/CHRISNativeUI";
+            const string output = "agent/logs/native-ui";
             Directory.CreateDirectory(output);
             CHRISCloudVoiceBuild.VerifyNoLegacyResources();
             string[] keys = { "CHRIS.AssistanceTask", "CHRIS.AssistancePending", "CHRIS.AssistanceCancel", CHRISConfirmationSpeech.Preference };
@@ -362,7 +362,7 @@ namespace TiltBrush
                 model = hostObject.AddComponent<CHRISPanel>(); model.Gateway = host;
                 TestCHRISAssistance.Call(model, "Start");
                 Property(model, "Popup", popup); Set(popup, "m_Model", model);
-                var fixtures = JArray.Parse(File.ReadAllText(Path.Combine(Application.dataPath, "Editor/Tests/Fixtures/CHRISControlSegments.json")));
+                var fixtures = JArray.Parse(File.ReadAllText(Path.Combine(Application.dataPath, "CHRIS/Editor/Tests/Fixtures/CHRISControlSegments.json")));
                 var fixture = (JObject)fixtures[0];
                 var approval = (JObject)fixture["envelope"]["approval"].DeepClone();
                 var context = host.Capture();

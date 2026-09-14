@@ -252,7 +252,7 @@ namespace TiltBrush
         [Test]
         public void PythonSegmentsValidateAndAllSixActionFamiliesExecute()
         {
-            var fixtures = JArray.Parse(File.ReadAllText(Path.Combine(Application.dataPath, "Editor/Tests/Fixtures/CHRISControlSegments.json")));
+            var fixtures = JArray.Parse(File.ReadAllText(Path.Combine(Application.dataPath, "CHRIS/Editor/Tests/Fixtures/CHRISControlSegments.json")));
             foreach (JObject fixture in fixtures)
                 Host(host =>
                 {

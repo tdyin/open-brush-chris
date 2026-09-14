@@ -25,7 +25,7 @@ namespace TiltBrush
             resources.HeadingMaterial = FontMaterial(resources.HeadingFont, "HeadingText");
             resources.RoundedMesh = AssetDatabase.LoadAllAssetsAtPath("Assets/Models/PanelButton_Large_Normalized.fbx").OfType<Mesh>().First();
             resources.BorderMesh = AssetDatabase.LoadAllAssetsAtPath("Assets/Models/PanelBorder_3x4_Rounded.fbx").OfType<Mesh>().First();
-            resources.IconShader = AssetDatabase.LoadAssetAtPath<Shader>("Assets/Shaders/CHRISIcon.shader");
+            resources.IconShader = AssetDatabase.LoadAssetAtPath<Shader>("Assets/CHRIS/Shaders/CHRISIcon.shader");
             EditorUtility.SetDirty(resources);
             string popupPath = AssetDatabase.GetAssetPath(resources.PopupPrefab);
             var popup = PrefabUtility.LoadPrefabContents(popupPath);
@@ -45,7 +45,7 @@ namespace TiltBrush
 
         static Material FontMaterial(TMP_FontAsset font, string name)
         {
-            string path = "Assets/Resources/CHRIS/" + name + ".mat";
+            string path = "Assets/CHRIS/Resources/CHRIS/" + name + ".mat";
             var material = AssetDatabase.LoadAssetAtPath<Material>(path);
             if (material == null)
             {
