@@ -37,7 +37,7 @@ namespace TiltBrush
             var material = new Material(SurfaceShader);
             material.SetColor("_Color", color);
             material.SetColor("_SecondaryColor", color * 0.7f);
-            obj.GetComponent<Renderer>().sharedMaterial = material;
+            CHRISMaterialOwner.Assign(obj.GetComponent<Renderer>(), material);
             obj.SetActive(true);
             return obj;
         }
@@ -59,7 +59,7 @@ namespace TiltBrush
             obj.transform.localScale = Vector3.one * size;
             DestroyImmediate(obj.GetComponent<Collider>());
             var renderer = obj.GetComponent<MeshRenderer>();
-            renderer.sharedMaterial = new Material(IconShader);
+            CHRISMaterialOwner.Assign(renderer, new Material(IconShader));
             SetIcon(renderer, name);
             renderer.sharedMaterial.color = Color.white;
             return renderer;

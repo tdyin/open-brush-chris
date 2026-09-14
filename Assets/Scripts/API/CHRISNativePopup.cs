@@ -459,17 +459,12 @@ namespace TiltBrush
 
         void OnDestroy()
         {
+            GetComponent<CHRISMaterialOwner>()?.Release();
             if (m_Model != null)
             {
                 m_Model.Changed -= MarkDirty;
                 m_Model.Closed(this);
             }
-            foreach (var renderer in GetComponentsInChildren<MeshRenderer>(true))
-                if (renderer.GetComponent<TextMeshPro>() == null && renderer.GetComponent<CHRISNativeButton>() == null)
-                {
-                    if (Application.isPlaying) Destroy(renderer.sharedMaterial);
-                    else DestroyImmediate(renderer.sharedMaterial);
-                }
         }
     }
 }

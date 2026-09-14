@@ -71,18 +71,5 @@ namespace TiltBrush
                 Label.color = IsAvailable() ? Color.white : Color.gray;
             if (Icon != null) Icon.sharedMaterial.color = IsAvailable() ? Color.white : Color.gray;
         }
-
-        protected override void OnDestroy()
-        {
-            if (m_ButtonRenderer != null)
-            {
-                if (Application.isPlaying)
-                    Destroy(m_ButtonRenderer.sharedMaterial);
-                else
-                    DestroyImmediate(m_ButtonRenderer.sharedMaterial);
-            }
-
-            base.OnDestroy();
-        }
     }
 }

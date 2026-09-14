@@ -21,6 +21,63 @@ namespace TiltBrush
         };
 
         [Test]
+        public void ClosingPopupPreservesNativeTooltipMaterials()
+        {
+            var resources = CHRISUIResources.Load();
+            var tooltipPrefab = AssetDatabase.LoadAssetAtPath<GameObject>(
+                "Assets/Prefabs/ButtonDescription_Pill_OneLine_Center.prefab");
+            // Use nonpersistent copies so a failing cleanup cannot destroy project assets.
+            var sharedMaterials = tooltipPrefab.GetComponentsInChildren<MeshRenderer>(true)
+                .Where(renderer => renderer.GetComponent<TMPro.TextMeshPro>() == null)
+                .Select(renderer => renderer.sharedMaterial).Distinct()
+                .ToDictionary(material => material, material => new Material(material));
+            GameObject popupObject = null;
+            var nativeTooltip = UnityEngine.Object.Instantiate(tooltipPrefab);
+            try
+            {
+                UseSharedTooltipMaterials(nativeTooltip, sharedMaterials);
+                for (int iteration = 0; iteration < 3; iteration++)
+                {
+                    popupObject = UnityEngine.Object.Instantiate(resources.PopupPrefab);
+                    popupObject.GetComponent<CHRISNativePopup>().BuildView();
+                    var generatedMaterials = popupObject.GetComponentsInChildren<MeshRenderer>(true)
+                        .Where(renderer => renderer.GetComponent<TMPro.TextMeshPro>() == null)
+                        .Select(renderer => renderer.sharedMaterial).Distinct().ToArray();
+                    // UIComponent.Awake creates this same native description under each live button.
+                    var button = popupObject.GetComponentInChildren<CHRISNativeButton>();
+                    var buttonTooltip = UnityEngine.Object.Instantiate(tooltipPrefab, button.transform);
+                    UseSharedTooltipMaterials(buttonTooltip, sharedMaterials);
+                    // The popup's play-mode lifecycle does not run automatically in editor previews.
+                    TestCHRISAssistance.Call(popupObject.GetComponent<CHRISNativePopup>(), "OnDestroy");
+                    UnityEngine.Object.DestroyImmediate(popupObject);
+                    popupObject = null;
+
+                    Assert.That(sharedMaterials.Values.All(material => material != null), Is.True,
+                        "Closing CHRIS must preserve materials shared with ordinary native tooltips.");
+                    Assert.That(nativeTooltip.GetComponentsInChildren<MeshRenderer>(true)
+                        .All(renderer => renderer.sharedMaterial != null), Is.True);
+                    Assert.That(generatedMaterials.All(material => material == null), Is.True,
+                        "Closing CHRIS must release its generated surface and icon materials: " +
+                        string.Join(", ", generatedMaterials.Where(material => material != null).Select(material => material.name)));
+                }
+            }
+            finally
+            {
+                if (popupObject != null) UnityEngine.Object.DestroyImmediate(popupObject);
+                UnityEngine.Object.DestroyImmediate(nativeTooltip);
+                foreach (var material in sharedMaterials.Values)
+                    if (material != null) UnityEngine.Object.DestroyImmediate(material);
+            }
+        }
+
+        static void UseSharedTooltipMaterials(GameObject tooltip, Dictionary<Material, Material> materials)
+        {
+            foreach (var renderer in tooltip.GetComponentsInChildren<MeshRenderer>(true))
+                if (renderer.GetComponent<TMPro.TextMeshPro>() == null)
+                    renderer.sharedMaterial = materials[renderer.sharedMaterial];
+        }
+
+        [Test]
         public void CancellationCallbackCannotBlockTheCallingThread()
         {
             var type = typeof(CHRISVoiceInput).GetNestedType("RecordingRun", BindingFlags.NonPublic);
