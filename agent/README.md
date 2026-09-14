@@ -2,7 +2,7 @@
 
 ## Working checkout and ownership
 
-Use the saved repository root `C:/Dev/open-brush-chris` on
+Use this repository root on
 `codex/chris-native-companion`. Source no longer needs to be edited through
 `Build/CHRISUI-worktree`; that detached checkout is retained temporarily for
 verified build evidence and safe retirement. Pixel owns native implementation
@@ -36,9 +36,9 @@ generated evidence in ignored `agent/logs`, and failure captures in ignored
   Stop stays on the CHRIS panel; the legacy More-menu Stop has been removed.
 - Python owns speech credentials and models. The spoken-only introduction is
   `Is your commands are:`; it is not part of the displayed approval or digest.
-- `user.move` values use fixed room/world XYZ and native units; execution calls
-  the existing Open Brush movement API. Do not reinterpret them in head or
-  sketch coordinates during cleanup.
+- The CHRIS `view.move` contract forwards to native `user.move` behavior through
+  `ApiMethods.MoveUserBy`, using fixed room/world XYZ and native units. Do not
+  reinterpret values in head or sketch coordinates during cleanup.
 
 ## Upstream integration points
 
