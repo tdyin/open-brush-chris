@@ -1,0 +1,113 @@
+[
+  {
+    "approval": null,
+    "cancelled": false,
+    "decision": null,
+    "native_cancel_acknowledged": false,
+    "reason": "Native context ready; preparing commands for review",
+    "request": {
+      "request": "Set brush size to 0.3",
+      "request_id": "native-ui-status-fixture"
+    },
+    "result": null,
+    "status": "proposing",
+    "task_id": "d69fa0cdff6f4ae891068be91f5e91b5",
+    "context": {
+      "host_session": "host1",
+      "revision": 1,
+      "captured_at": 1789364092.5837002,
+      "authority_epoch": 0,
+      "ready": true,
+      "stroke_active": false,
+      "brush_id": "ink",
+      "brush_size": 0.5,
+      "brush_color": "#FFFFFF",
+      "brushes": {
+        "ink": "Ink"
+      },
+      "panels": {
+        "Brush": false,
+        "Color": true
+      },
+      "scene_position": null,
+      "scene_rotation": null,
+      "scene_scale": null,
+      "active_task": null,
+      "unknown": []
+    }
+  },
+  {
+    "actions": [
+      {
+        "action_id": "a0cc3fbe1c754422850a4b855c3dc4e8",
+        "number": 0.3,
+        "text": null,
+        "tool": "brush.size",
+        "vector": null,
+        "version": 1,
+        "visible": null
+      }
+    ],
+    "approval": {
+      "action_digest": "ffaa6b595877b86ee9592646690b44609f0fa6185bed4901d512cafc9706eb32",
+      "actions": [
+        {
+          "action_id": "a0cc3fbe1c754422850a4b855c3dc4e8",
+          "number": 0.3,
+          "text": null,
+          "tool": "brush.size",
+          "vector": null,
+          "version": 1,
+          "visible": null
+        }
+      ],
+      "approval_id": "4516942a418f4553947ce109dfdb4f35",
+      "authority_epoch": 0,
+      "expires_at": 1789364392.5947156,
+      "host_session": "host1",
+      "revision": 1,
+      "scope": "control_segment",
+      "task_id": "d69fa0cdff6f4ae891068be91f5e91b5"
+    },
+    "cancelled": false,
+    "context": {
+      "active_task": null,
+      "authority_epoch": 0,
+      "brush_color": "#FFFFFF",
+      "brush_id": "ink",
+      "brush_size": 0.5,
+      "brushes": {
+        "ink": "Ink"
+      },
+      "captured_at": 1789364092.5837002,
+      "host_session": "host1",
+      "panels": {
+        "Brush": false,
+        "Color": true
+      },
+      "ready": true,
+      "revision": 1,
+      "scene_position": null,
+      "scene_rotation": null,
+      "scene_scale": null,
+      "stroke_active": false,
+      "unknown": []
+    },
+    "decision": {
+      "action_digest": "ffaa6b595877b86ee9592646690b44609f0fa6185bed4901d512cafc9706eb32",
+      "approval_id": "4516942a418f4553947ce109dfdb4f35",
+      "approve": true
+    },
+    "model_exchange": {},
+    "native_cancel_acknowledged": false,
+    "reason": "Command intent recorded",
+    "request": {
+      "request": "Set brush size to 0.3",
+      "request_id": "native-ui-status-fixture"
+    },
+    "result": null,
+    "status": "executing",
+    "summary": "1. Set brush size to 0.3.",
+    "task_id": "d69fa0cdff6f4ae891068be91f5e91b5"
+  }
+]

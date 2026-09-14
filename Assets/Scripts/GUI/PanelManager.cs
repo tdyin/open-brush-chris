@@ -490,7 +490,8 @@ namespace TiltBrush
                 type == BasePanel.PanelType.AppSettings || type == BasePanel.PanelType.AppSettingsMobile ||
                 type == BasePanel.PanelType.Sketchbook || type == BasePanel.PanelType.SketchbookMobile ||
                 type == BasePanel.PanelType.Camera || type == BasePanel.PanelType.MemoryWarning ||
-                type == BasePanel.PanelType.Multiplayer || type == BasePanel.PanelType.QuillLibrary;
+                type == BasePanel.PanelType.Multiplayer || type == BasePanel.PanelType.QuillLibrary ||
+                type == BasePanel.PanelType.CHRIS;
         }
 
         // Core panels are those that exist in the basic mode experience.  Practically, those that
@@ -622,6 +623,31 @@ namespace TiltBrush
             if (App.Config.IsMobileHardware)
             {
                 Shader.SetGlobalFloat("_PanelMipmapBias", m_PanelMipmapBias);
+            }
+        }
+
+        public CHRISFloatingPanel GetOrCreateCHRISPanel()
+        {
+            var existing = m_AllPanels.Select(p => p.m_Panel).OfType<CHRISFloatingPanel>().FirstOrDefault();
+            if (existing != null) return existing;
+
+            // CHRIS is optional. Never create or initialize it as part of native menu startup.
+            var panel = CHRISFloatingPanel.Create(transform);
+            try
+            {
+                panel.InitPanel();
+                m_AllPanels.Add(new PanelData {
+                    m_Panel = panel,
+                    m_MapKey = new PanelMapKey { m_Basic = true, m_Advanced = true },
+                });
+                SketchControlsScript.m_Instance.InitGazePanels();
+                return panel;
+            }
+            catch
+            {
+                m_AllPanels.RemoveAll(p => p.m_Panel == panel);
+                Destroy(panel.gameObject);
+                throw;
             }
         }
 

@@ -416,6 +416,16 @@ namespace TiltBrush
             TriggerOneShot(m_ItemDisabledSound, vPos, 1.0f);
         }
 
+        // Reuse the native selection cue and expose its duration so microphone capture can wait.
+        public float PlayRecordingCue(Vector3 position)
+        {
+            if (!Enabled || m_ItemSelectSounds == null || m_ItemSelectSounds.Length == 0) return 0;
+            var clip = m_ItemSelectSounds[UnityEngine.Random.Range(0, m_ItemSelectSounds.Length)];
+            if (clip == null) return 0;
+            TriggerOneShot(clip, position, 1.0f, fGain: m_ItemSelectGain);
+            return clip.length;
+        }
+
         public void ActivatePanel(bool bActivate, Vector3 vPos)
         {
             if (Time.realtimeSinceStartup - m_PanelActivateTimestamp > m_PanelActivateMinTriggerTime)

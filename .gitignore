@@ -5,6 +5,8 @@
 /Build/
 /Library/
 /Logs/
+/agent/logs/
+/agent/errs/
 
 # Automatically created by Support/ tools (builds, analyze_refgraph, etc)
 /Support/tmp_steam/
@@ -27,6 +29,7 @@
 /*.CSharp.*user
 *.suo
 /*.sln
+/*.slnx
 /*.userprefs
 .vsconfig
 .vs
@@ -103,3 +106,9 @@
 
 # Local planning / analysis notes, not repo content
 /LlmDocs/
+
+# Retired generated CHRIS speech resources from older checkouts; cloud builds reject them.
+/Assets/Plugins/CHRISVoice/
+/Assets/Plugins/CHRISVoice.meta
+/Assets/StreamingAssets/CHRISVoice/
+/Assets/StreamingAssets/CHRISVoice.meta
