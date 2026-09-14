@@ -52,7 +52,7 @@ namespace TiltBrush
                 task["native_cancel_acknowledged"] = true;
                 Reply(client, true, 200, task, false, true);
                 Assert.That(client.CancelWanted, Is.False); Assert.That(client.CanStart, Is.True);
-                foreach (string status in new[] { "paused", "unverified", "awaiting_approval", "running" })
+                foreach (string status in new[] { "paused", "unverified", "awaiting_approval", "proposing", "executing" })
                 { task["status"] = status; Assert.That(CHRISAssistanceClient.Terminal(task), Is.False, status); }
                 client.Decide(new JObject { ["approval_id"] = "different" }, true);
                 Assert.That(client.Error, Does.Contain("Review")); Assert.That(client.Busy, Is.False);
@@ -102,11 +102,127 @@ namespace TiltBrush
             Assert.That(resources, Is.Not.Null); Assert.That(resources.Font, Is.Not.Null); Assert.That(resources.SurfaceShader, Is.Not.Null);
             Assert.That(resources.PopupPrefab.GetComponent<CHRISNativePopup>(), Is.Not.Null);
             Assert.That(resources.PopupPrefab.GetComponent<UIComponentManager>(), Is.Not.Null);
-            Assert.That(resources.PopupPrefab.GetComponent<BoxCollider>().size, Is.EqualTo(new Vector3(3.8f, 4, 0.1f)));
+            Assert.That(resources.PopupPrefab.GetComponent<BoxCollider>().size,
+                Is.EqualTo(new Vector3(CHRISNativePopup.Width, CHRISNativePopup.Height, 0.1f)));
+            Assert.That(resources.BodyFont, Is.Not.Null);
+            Assert.That(resources.HeadingFont, Is.Not.Null);
+            Assert.That(resources.RoundedMesh, Is.Not.Null);
+            Assert.That(resources.BorderMesh, Is.Not.Null);
+            Assert.That(resources.IconShader, Is.Not.Null);
+            var lab = AssetDatabase.LoadAssetAtPath<GameObject>("Assets/Prefabs/Panels/LabsPanel.prefab");
+            Assert.That(lab.GetComponentsInChildren<CHRISLabButton>(true).Length, Is.EqualTo(1));
+            var launcher = lab.GetComponentInChildren<CHRISLabButton>(true);
+            var labButtons = launcher.transform.parent.GetComponentsInChildren<BaseButton>(true)
+                .Where(button => button.gameObject.activeSelf && button.transform.parent == launcher.transform.parent).ToArray();
+            foreach (var button in labButtons)
+            {
+                Assert.That(button.transform.localPosition.y, Is.GreaterThan(-0.4f), "Lab icons stay above the tint slider");
+                Assert.That(Math.Abs(button.transform.localPosition.x), Is.LessThan(0.7f));
+                foreach (var other in labButtons.Where(other => other != button))
+                    Assert.That(Vector3.Distance(button.transform.localPosition, other.transform.localPosition), Is.GreaterThan(0.34f));
+            }
+            Assert.That(resources.BodyMaterial.GetColor("_FaceColor").a, Is.EqualTo(1));
+            Assert.That(resources.HeadingMaterial.GetColor("_FaceColor").a, Is.EqualTo(1));
             var menu = AssetDatabase.LoadAssetAtPath<GameObject>("Assets/Prefabs/PopUps/PopUpWindow_Panels.prefab");
             Assert.That(menu.GetComponent<CHRISMenuEntry>(), Is.Not.Null);
             var menuCollider = menu.GetComponent<BoxCollider>();
             Assert.That(menuCollider.center.y - menuCollider.size.y / 2, Is.LessThan(-0.86f));
+        }
+
+        [Test]
+        public void BackendWorkflowStatesKeepProgressVisibleAfterPolling()
+        {
+            var scene = EditorSceneManager.NewPreviewScene();
+            CHRISPanel model = null;
+            try
+            {
+                var hostObject = new GameObject("CHRIS wire-state test");
+                UnityEngine.SceneManagement.SceneManager.MoveGameObjectToScene(hostObject, scene);
+                var host = hostObject.AddComponent<CHRISGatewayTestHost>();
+                host.Initialize();
+                model = hostObject.AddComponent<CHRISPanel>();
+                model.Gateway = host;
+                TestCHRISAssistance.Call(model, "Start");
+                var popupObject = UnityEngine.Object.Instantiate(CHRISUIResources.Load().PopupPrefab);
+                UnityEngine.SceneManagement.SceneManager.MoveGameObjectToScene(popupObject, scene);
+                var popup = popupObject.GetComponent<CHRISNativePopup>();
+                popup.BuildView();
+                Property(model, "Popup", popup);
+                Set(popup, "m_Model", model);
+                Property(model.Assistance, "PendingRequest", null);
+                Property(model.Assistance, "CancelWanted", false);
+                foreach (JObject task in WorkflowStates())
+                {
+                    string status = (string)task["status"];
+                    Assert.That(status, Is.EqualTo("proposing").Or.EqualTo("executing"));
+                    Property(model, "Prompt", (string)task["request"]["request"]);
+                    foreach (bool polling in new[] { true, false, true, false })
+                    {
+                        Property(model.Assistance, "Task", task);
+                        Property(model.Assistance, "TaskId", (string)task["task_id"]);
+                        Property(model.Assistance, "Busy", polling);
+                        model.Refresh();
+                        TestCHRISAssistance.Call(popup, "Draw");
+                        var text = popupObject.GetComponentsInChildren<TextMeshPro>();
+                        Assert.That(text.Single(t => t.name == "Status").text,
+                            Is.EqualTo(status == "proposing" ? "Preparing commands" : "Executing"));
+                        Assert.That(text.Single(t => t.name == "Review").text,
+                            Is.EqualTo(status == "proposing" ? model.Prompt : (string)task["summary"]));
+                        var buttons = popupObject.GetComponentsInChildren<CHRISNativeButton>();
+                        Assert.That(buttons.Any(b => b.name == "Record request"), Is.False,
+                            status + " must not fall back to the idle recording action after polling");
+                        Assert.That(buttons.Any(b => b.Label.text == "Confirm"), Is.False);
+                        Assert.That(buttons.Single(b => b.name == "Local Stop").IsAvailable(), Is.True);
+                    }
+                }
+            }
+            finally
+            {
+                if (model != null)
+                {
+                    Property(model.Assistance, "TaskId", null);
+                    Property(model.Assistance, "PendingRequest", null);
+                    Property(model.Assistance, "Busy", false);
+                }
+                EditorSceneManager.ClosePreviewScene(scene);
+            }
+        }
+
+        // Exported from Workflow.prepare/execute with tests.support's fake native host/proposer.
+        static JArray WorkflowStates() => JArray.Parse(File.ReadAllText(Path.Combine(Application.dataPath,
+            "Editor/Tests/Fixtures/CHRISWorkflowStates.json")));
+
+        [Test]
+        public void LongReviewsKeepEveryCharacterAtTheReadableFontSize()
+        {
+            var popupObject = UnityEngine.Object.Instantiate(CHRISUIResources.Load().PopupPrefab);
+            try
+            {
+                var popup = popupObject.GetComponent<CHRISNativePopup>();
+                popup.BuildView();
+                var detail = popupObject.GetComponentsInChildren<TextMeshPro>(true).Single(text => text.name == "Review");
+                float size = detail.fontSize;
+                string summary = string.Concat(Enumerable.Range(1, 5).Select(i =>
+                    i + ". Use the brush named " + new string('W', 600) + "; size 0.123456789; color #0000FF.\n"));
+                var pages = (string[])typeof(CHRISNativePopup).GetMethod("FitReviewPages", BindingFlags.NonPublic | BindingFlags.Instance)
+                    .Invoke(popup, new object[] { summary });
+                Assert.That(pages.Length, Is.GreaterThan(1));
+                Assert.That(string.Concat(pages), Is.EqualTo(summary));
+                foreach (string page in pages)
+                {
+                    detail.text = page;
+                    detail.ForceMeshUpdate();
+                    Assert.That(detail.GetPreferredValues(page, detail.rectTransform.sizeDelta.x, float.PositiveInfinity).y,
+                        Is.LessThanOrEqualTo(detail.rectTransform.sizeDelta.y));
+                    float rowHeight = (float)typeof(CHRISNativePopup).GetMethod("ReviewPageHeight", BindingFlags.NonPublic | BindingFlags.Instance)
+                        .Invoke(popup, new object[] { page });
+                    Assert.That(rowHeight, Is.LessThanOrEqualTo(detail.rectTransform.sizeDelta.y));
+                    Assert.That(detail.fontSize, Is.EqualTo(size));
+                    Assert.That(detail.enableAutoSizing, Is.False);
+                    Assert.That(detail.overflowMode, Is.EqualTo(TextOverflowModes.Overflow));
+                }
+            }
+            finally { UnityEngine.Object.DestroyImmediate(popupObject); }
         }
 
         [Test]
@@ -194,7 +310,7 @@ namespace TiltBrush
             {
             TestCHRISAssistance.Exported.Clear();
             int tests = 0;
-            foreach (var suite in new object[] { new TestCHRISNativeUI(), new TestCHRISAssistance(), new TestCHRISCloudVoice() })
+            foreach (var suite in new object[] { new TestCHRISNativeUI(), new TestCHRISAssistance(), new TestCHRISCloudVoice(), new TestCHRISCompanion() })
                 foreach (var method in suite.GetType().GetMethods().Where(m => m.GetCustomAttributes(typeof(TestAttribute), false).Length > 0))
                 {
                     method.Invoke(suite, null);
@@ -202,6 +318,7 @@ namespace TiltBrush
                 }
             Render(output);
             File.WriteAllText(output + "/protocol-fixtures.json", TestCHRISAssistance.Exported.ToString());
+            File.WriteAllText(output + "/companion-profiling.json", TestCHRISCompanion.Measurements.ToString());
             File.WriteAllText(output + "/checks.txt", "PASS: " + tests + " native regression methods; ordered segments, whole-list validation, replay, Stop/takeover/expiry, delayed panels, numeric/rotation tolerances, Python wire fixtures, cancelled/replaced speech callbacks, missing microphone/provider errors, correction/legacy-summary guards, floating native UI. No Play mode, HTTP, microphone recording, speech/model inference or sketch changes.");
             }
             finally
@@ -257,23 +374,43 @@ namespace TiltBrush
                 }
                 var cameraObject = new GameObject("CHRIS preview camera"); camera = cameraObject.AddComponent<Camera>();
                 UnityEngine.SceneManagement.SceneManager.MoveGameObjectToScene(cameraObject, scene); camera.scene = scene;
-                cameraObject.AddComponent<UniversalAdditionalCameraData>(); camera.orthographic = true; camera.orthographicSize = 2.25f;
+                cameraObject.AddComponent<UniversalAdditionalCameraData>(); camera.orthographic = true; camera.orthographicSize = 2.8f;
                 camera.transform.position = new Vector3(0, 0, -10); camera.clearFlags = CameraClearFlags.SolidColor;
                 camera.backgroundColor = new Color(0.08f, 0.08f, 0.08f); camera.nearClipPlane = 0.01f; camera.farClipPlane = 20;
                 texture = new RenderTexture(1100, 1200, 24); texture.Create(); camera.targetTexture = texture;
                 image = new Texture2D(texture.width, texture.height, TextureFormat.RGB24, false);
                 System.Action<string, GameObject> capture = (name, obj) =>
                 {
+                    Physics.SyncTransforms();
+                    var buttons = obj.GetComponentsInChildren<CHRISNativeButton>();
+                    for (int i = 0; i < buttons.Length; i++)
+                        for (int j = i + 1; j < buttons.Length; j++)
+                            Assert.That(buttons[i].GetComponent<BoxCollider>().bounds.Intersects(buttons[j].GetComponent<BoxCollider>().bounds),
+                                Is.False, name + ": overlapping hit targets " + buttons[i].name + " and " + buttons[j].name);
                     foreach (var text in obj.GetComponentsInChildren<TextMeshPro>()) text.ForceMeshUpdate();
                     camera.Render(); RenderTexture.active = texture;
                     image.ReadPixels(new Rect(0, 0, texture.width, texture.height), 0, 0); image.Apply();
                     File.WriteAllBytes(output + "/" + name + ".png", image.EncodeToPNG()); RenderTexture.active = null;
                 };
                 capture("assist-review", popupObject);
-                var detail = popupObject.GetComponentsInChildren<TextMeshPro>().Single(t => t.gameObject.name == "Review");
+                var detail = popupObject.GetComponentsInChildren<TextMeshPro>(true).Single(t => t.gameObject.name == "Review");
                 Assert.That(detail.isTextOverflowing, Is.False, "Exact commands must fit the review page");
                 Assert.That(model.ReviewText, Is.EqualTo((string)fixture["summary"]));
-                var confirm = popupObject.GetComponentsInChildren<CHRISNativeButton>().Single(b => b.Label.text == "Confirm commands");
+                var confirm = popupObject.GetComponentsInChildren<CHRISNativeButton>().Single(b => b.Label.text == "Confirm");
+                string displayedSummary = detail.text;
+                int page = 1;
+                while (true)
+                {
+                    var next = popupObject.GetComponentsInChildren<CHRISNativeButton>().SingleOrDefault(b => b.Label.text == "Next");
+                    if (next == null || !next.IsAvailable()) break;
+                    Assert.That(confirm.IsAvailable(), Is.False, "Every review page must be visited before approval");
+                    next.Click();
+                    TestCHRISAssistance.Call(popup, "Draw");
+                    capture("assist-review-" + ++page, popupObject);
+                    Assert.That(detail.isTextOverflowing, Is.False);
+                    displayedSummary += detail.text;
+                }
+                Assert.That(displayedSummary, Is.EqualTo(model.ReviewText), "Pagination preserves every command and value");
                 Assert.That(confirm.IsAvailable(), Is.True); confirm.Click();
                 Assert.That(model.WaitingForRelease, Is.True);
                 TestCHRISAssistance.Call(popup, "Draw");
@@ -294,16 +431,31 @@ namespace TiltBrush
                 Assert.That(host.StopCount, Is.EqualTo(stops + 1)); Assert.That(model.WaitingForRelease, Is.False);
                 Property(model.Assistance, "Task", null); model.BeginCorrection();
                 TestCHRISAssistance.Call(popup, "Draw"); capture("assist-ready", popupObject);
-                Assert.That(popupObject.GetComponentsInChildren<CHRISNativeButton>().Single(b => b.Label.text == "Retry").IsAvailable(), Is.True);
+                Assert.That(popupObject.GetComponentsInChildren<CHRISNativeButton>().Single(b => b.Label.text == "Record").IsAvailable(), Is.True);
                 long recording = model.Voice.Session.Begin(); model.Voice.Session.Ready(recording);
                 model.Voice.Receive(recording, "partial", "make my brush blue and smaller");
                 TestCHRISAssistance.Call(popup, "Draw"); capture("assist-listening", popupObject);
+                model.Voice.Session.RequestFinish();
+                TestCHRISAssistance.Call(popup, "Draw"); capture("assist-finalizing", popupObject);
                 stops = host.StopCount;
-                popupObject.GetComponentsInChildren<CHRISNativeButton>().Single(b => b.Label.text == "STOP").Click();
+                popupObject.GetComponentsInChildren<CHRISNativeButton>().Single(b => b.name == "Local Stop").Click();
                 Assert.That(host.StopCount, Is.EqualTo(stops + 1));
                 Assert.That(model.Voice.Session.IsActive, Is.False);
                 model.Voice.Receive(recording, "final", "late cancelled speech");
                 Assert.That(model.HasReplacement, Is.False);
+                foreach (JObject wireTask in WorkflowStates())
+                {
+                    Property(model.Assistance, "Task", wireTask);
+                    Property(model.Assistance, "TaskId", (string)wireTask["task_id"]);
+                    Property(model.Assistance, "Busy", false);
+                    Property(model.Assistance, "CancelWanted", false);
+                    Property(model, "Prompt", (string)wireTask["request"]["request"]);
+                    model.Refresh();
+                    TestCHRISAssistance.Call(popup, "Draw");
+                    capture("assist-" + (string)wireTask["status"], popupObject);
+                }
+                Property(model.Assistance, "TaskId", null);
+                Property(model.Assistance, "Task", null);
                 popupObject.SetActive(false);
                 var menu = UnityEngine.Object.Instantiate(AssetDatabase.LoadAssetAtPath<GameObject>("Assets/Prefabs/PopUps/PopUpWindow_Panels.prefab"));
                 menu.transform.position = Vector3.zero; menu.transform.rotation = Quaternion.identity;
@@ -313,6 +465,13 @@ namespace TiltBrush
                 var stop = menu.GetComponentsInChildren<CHRISNativeButton>().Single(b => b.name == "CHRIS local Stop");
                 Assert.That(stop.IsAvailable(), Is.True); stop.Click(); Assert.That(host.StopCount, Is.EqualTo(stops + 1));
                 camera.orthographicSize = 1.15f; capture("assist-menu", menu);
+                menu.SetActive(false);
+                var lab = UnityEngine.Object.Instantiate(AssetDatabase.LoadAssetAtPath<GameObject>("Assets/Prefabs/Panels/LabsPanel.prefab"));
+                lab.transform.position = Vector3.zero;
+                lab.transform.rotation = Quaternion.identity;
+                UnityEngine.SceneManagement.SceneManager.MoveGameObjectToScene(lab, scene);
+                lab.SetActive(true);
+                capture("assist-lab", lab);
             }
             finally
             {

@@ -11,7 +11,24 @@ namespace TiltBrush
     {
         public Action Click;
         public TextMeshPro Label;
+        public MeshRenderer Icon;
         public Color Tint = new Color(0.15f, 0.25f, 0.34f);
+        public void SetContent(string label, string icon = null)
+        {
+            Label.text = label;
+            if (Icon == null) return;
+            Icon.gameObject.SetActive(icon != null);
+            if (icon != null) CHRISUIResources.SetIcon(Icon, icon);
+            var position = Label.transform.localPosition;
+            position.x = icon == null ? 0 : 0.16f;
+            Label.transform.localPosition = position;
+        }
+
+        public void SetPrimary(bool primary)
+        {
+            Tint = primary ? new Color(0, 0.48f, 0.63f) : new Color(0.09f, 0.105f, 0.12f);
+            SetColor(Color.white);
+        }
         public void Configure()
         {
             m_AtlasTexture = false;
@@ -52,6 +69,7 @@ namespace TiltBrush
             base.SetColor(color * Tint);
             if (Label != null)
                 Label.color = IsAvailable() ? Color.white : Color.gray;
+            if (Icon != null) Icon.sharedMaterial.color = IsAvailable() ? Color.white : Color.gray;
         }
 
         protected override void OnDestroy()

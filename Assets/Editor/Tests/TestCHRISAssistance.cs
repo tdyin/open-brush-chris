@@ -277,11 +277,10 @@ namespace TiltBrush
             try
             {
                 var voice = obj.AddComponent<CHRISVoiceInput>();
-                voice.Devices = () => Array.Empty<string>();
+                voice.Devices = () => Array.Empty<CHRISMicrophoneDevice>();
                 int finalized = 0; voice.Finalized += _ => finalized++;
                 long id = voice.Session.Begin(); voice.Receive(id, "ready", "");
-                Set(voice, "m_CaptureNotBefore", 0f);
-                Call(voice, "Update");
+                voice.Receive(id, "error", "Microphone unavailable. Select an available Windows input device.");
                 Assert.That(voice.Session.State, Is.EqualTo(CHRISVoiceSession.Phase.Failed));
                 Assert.That(voice.Status, Does.Contain("Microphone unavailable"));
                 id = voice.Session.Begin(); voice.Session.Ready(id);

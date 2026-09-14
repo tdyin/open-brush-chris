@@ -47,6 +47,7 @@ namespace TiltBrush
         private Record m_Pending;
         private bool m_Closed, m_Registered;
         private HttpServer m_Server;
+        private CHRISBrushNames m_BrushNames;
         public string Status { get; private set; } = "Waiting for native host";
         public double LastStopMilliseconds { get; private set; }
         public long StopCount { get; private set; }
@@ -117,8 +118,7 @@ namespace TiltBrush
 
         public JObject Capture()
         {
-            Observe(true);
-            return ReadContext();
+            return Observe(true);
         }
 
         protected virtual JObject ReadContext()
@@ -143,9 +143,8 @@ namespace TiltBrush
             c["brush_id"] = pointer.CurrentBrush.m_Guid.ToString();
             c["brush_size"] = pointer.BrushSize01;
             c["brush_color"] = "#" + ColorUtility.ToHtmlStringRGB(pointer.GetCurrentColor());
-            foreach (var brush in BrushCatalog.m_Instance.AllBrushes.Where(b => !b.m_HiddenInGui)
-                         .OrderBy(b => b.m_Guid.ToString()))
-                ((JObject)c["brushes"])[brush.m_Guid.ToString()] = brush.Description;
+            if (m_BrushNames == null) m_BrushNames = new CHRISBrushNames();
+            c["brushes"] = m_BrushNames.Snapshot(BrushCatalog.m_Instance);
             foreach (var name in new[] { "Brush", "Color" })
             {
                 var panel = FindPanel(name);
@@ -226,18 +225,22 @@ namespace TiltBrush
             expected["panels"][(string)action["text"]] = action["visible"];
             return !MateriallyChanged(expected, current);
         }
-        void Observe(bool manual)
+        JObject Observe(bool manual)
         {
             var context = ReadContext();
-            if (m_ObservedContext == null) { m_ObservedContext = context; return; }
-            if (MateriallyChanged(m_ObservedContext, context))
+            if (m_ObservedContext == null) m_ObservedContext = (JObject)context.DeepClone();
+            else if (MateriallyChanged(m_ObservedContext, context))
             {
                 m_Revision++;
                 if (manual && !(m_Pending != null && ExpectedPendingChange(m_Pending, context)))
                     Stop("Manual state changed; pending work cancelled", announce: m_Pending != null);
-                m_ObservedContext = context;
+                m_ObservedContext = (JObject)context.DeepClone();
             }
-            else if (!manual) m_ObservedContext = context;
+            else if (!manual) m_ObservedContext = (JObject)context.DeepClone();
+            context["revision"] = m_Revision;
+            context["authority_epoch"] = m_Epoch;
+            context["active_task"] = m_ActiveTask == null ? JValue.CreateNull() : new JValue(m_ActiveTask);
+            return context;
         }
 
         void Update()
@@ -571,6 +574,7 @@ namespace TiltBrush
             if (m_Closed) return;
             lock (m_Requests) m_Closed = true;
             if (m_Registered && m_Server != null) m_Server.RemoveHttpHandler("/chris/");
+            m_BrushNames?.Dispose();
             Stop("Host closed");
             lock (m_Requests)
                 while (m_Requests.Count > 0)

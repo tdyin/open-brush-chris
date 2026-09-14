@@ -2,52 +2,67 @@
 // Licensed under the Apache License, Version 2.0.
 using System;
 using System.Collections.Concurrent;
-using System.Linq;
 using System.Threading;
 using System.Threading.Tasks;
 using UnityEngine;
 
 namespace TiltBrush
 {
-    // Unity microphone access is main-thread only. Transient PCM goes to the loopback relay.
+    // The frame loop only updates presentation and signals workers. Capture and device cleanup own no Unity objects.
     public sealed class CHRISVoiceInput : MonoBehaviour
     {
         public const int SampleRate = CHRISAudio.SampleRate;
         public const int MaxRecordingSeconds = 60;
-        const int ChunkFrames = 2400;
-        const float ProviderTimeoutSeconds = 20;
+        const float StartCueQuietSeconds = 0.25f;
+        const float ConnectingTimeoutSeconds = 10;
+        const float FinalizingTimeoutSeconds = 20;
+        const int MaxQueuedPartialMessages = 32;
 
-        sealed class Run
+        sealed class RecordingRun
         {
             public long Id;
-            public readonly CancellationTokenSource Cancel = new CancellationTokenSource();
+            public int Cancelled, Finishing;
+            public readonly CancellationTokenSource Cancellation = new CancellationTokenSource();
             public readonly BlockingCollection<short[]> Audio = new BlockingCollection<short[]>(20);
-            public Task Worker;
+            public Task Relay, Capture = Task.CompletedTask, CancellationWork = Task.CompletedTask;
+            public bool Completed => Relay.IsCompleted && Capture.IsCompleted && CancellationWork.IsCompleted;
+
+            public void Cancel()
+            {
+                if (Interlocked.Exchange(ref Cancelled, 1) == 0)
+                    CancellationWork = Task.Run(() => Cancellation.Cancel());
+            }
+
+            public void Dispose()
+            {
+                Audio.Dispose();
+                Cancellation.Dispose();
+            }
         }
 
-        struct Message
+        struct WorkerMessage
         {
             public long Id;
-            public string Kind, Text;
+            public string Kind;
+            public string Text;
         }
-
         public CHRISVoiceSession Session { get; } = new CHRISVoiceSession();
         public string SelectedMicrophone { get; private set; }
-        public string MicrophoneLabel => SelectedMicrophone ?? "Windows default";
+        public bool MicrophoneStopped { get; private set; } = true;
+        string m_SelectedMicrophoneLabel;
+        string m_DeviceQueryError;
+        public string MicrophoneLabel => m_DeviceQuery != null ? "Finding microphones..." :
+            m_DeviceQueryError ?? m_SelectedMicrophoneLabel ?? "Windows default";
         public event Action Changed;
         public event Action<string> Finalized;
-        internal Func<string[]> Devices { get; set; } = () => Microphone.devices;
+        public event Action CaptureStopped;
+        internal Func<CHRISMicrophoneDevice[]> Devices { get; set; } = CHRISMicrophoneCapture.Devices;
         internal Func<float> PlayStartCue { get; set; }
-        readonly ConcurrentQueue<Message> m_Messages = new ConcurrentQueue<Message>();
-        Run m_Run;
-        AudioClip m_Clip;
-        string m_RecordingDevice;
-        int m_ReadFrames;
-        float m_PhaseStarted;
-        bool m_StartRequested;
-        bool m_MicrophoneOwned;
-        bool m_ReadyPending;
-        float m_CaptureNotBefore;
+        readonly ConcurrentQueue<WorkerMessage> m_Messages = new ConcurrentQueue<WorkerMessage>();
+        RecordingRun m_Run;
+        Task<CHRISMicrophoneDevice[]> m_DeviceQuery;
+        float m_PhaseStarted, m_CaptureNotBefore;
+        bool m_StartRequested, m_ReadyPending;
 
         public string Status
         {
@@ -55,11 +70,11 @@ namespace TiltBrush
             {
                 switch (Session.State)
                 {
-                    case CHRISVoiceSession.Phase.Loading: return "Connecting speech recognition...";
-                    case CHRISVoiceSession.Phase.Recording: return "Listening. Text updates after pauses. Finish when done.";
-                    case CHRISVoiceSession.Phase.Finalizing: return "Finishing transcript...";
+                    case CHRISVoiceSession.Phase.Loading: return "Connecting microphone and speech...";
+                    case CHRISVoiceSession.Phase.Recording: return "Listening";
+                    case CHRISVoiceSession.Phase.Finalizing: return "Finalizing transcript";
                     case CHRISVoiceSession.Phase.Failed: return Session.Error;
-                    default: return "Tap Record or click the non-drawing joystick while CHRIS is open.";
+                    default: return "Ready to listen";
                 }
             }
         }
@@ -69,182 +84,145 @@ namespace TiltBrush
             CancelRecording();
             Session.Begin();
             m_PhaseStarted = Time.realtimeSinceStartup;
-            m_CaptureNotBefore = m_PhaseStarted + 0.25f;
+            m_CaptureNotBefore = m_PhaseStarted + StartCueQuietSeconds;
 #if UNITY_STANDALONE_WIN || UNITY_EDITOR_WIN
             m_StartRequested = true;
 #else
-            Session.Fail(Session.Id, "Speech input is available in the Windows PCVR build. Use the Windows PCVR player.");
+            Session.Fail(Session.Id, "Speech input requires the Windows PCVR player.");
 #endif
             Changed?.Invoke();
         }
 
         public void FinishRecording()
         {
-            if (Session.State != CHRISVoiceSession.Phase.Recording) return;
-            CaptureAudio(flush: true);
             if (!Session.RequestFinish()) return;
-            ReleaseMicrophone();
             m_PhaseStarted = Time.realtimeSinceStartup;
-            m_Run.Audio.CompleteAdding();
+            if (m_Run != null) Volatile.Write(ref m_Run.Finishing, 1);
             Changed?.Invoke();
         }
 
         public void CancelRecording()
         {
             Session.Cancel();
-            m_StartRequested = false;
-            m_ReadyPending = false;
-            ReleaseMicrophone();
-            m_Run?.Cancel.Cancel();
+            m_StartRequested = m_ReadyPending = false;
+            m_Run?.Cancel();
             Changed?.Invoke();
         }
 
         public void NextMicrophone()
         {
             CancelRecording();
-            string[] devices = Devices();
-            int next = SelectedMicrophone == null ? 0 : Array.IndexOf(devices, SelectedMicrophone) + 1;
-            SelectedMicrophone = next >= devices.Length ? null : devices[next];
+            m_DeviceQueryError = null;
+            if (m_DeviceQuery == null) m_DeviceQuery = Task.Run(Devices);
             Changed?.Invoke();
         }
 
         void StartWorker()
         {
             m_StartRequested = false;
-            var run = new Run { Id = Session.Id };
+            var run = new RecordingRun { Id = Session.Id };
             m_Run = run;
-            run.Worker = Task.Run(() => Recognize(run));
-        }
-
-        async Task Recognize(Run run)
-        {
-            try
+            run.Relay = Task.Run(async () =>
             {
-                await new CHRISCloudTranscription().Run(run.Audio, run.Cancel.Token, (kind, text) => Post(run, kind, text));
-            }
-            catch (OperationCanceledException) { }
-            catch (Exception)
-            {
-                Post(run, "error", "Cloud speech unavailable. Check the CHRIS service and connection, then re-record.");
-            }
-        }
-
-        void Post(Run run, string kind, string text)
-        {
-            if (run.Cancel.IsCancellationRequested) return;
-            // Partials can be coalesced under frame stalls; final/error messages are never dropped.
-            if (kind == "partial" && m_Messages.Count >= 32) return;
-            m_Messages.Enqueue(new Message { Id = run.Id, Kind = kind, Text = text });
+                try
+                {
+                    await new CHRISCloudTranscription().Run(run.Audio, run.Cancellation.Token,
+                        (kind, text) => Post(run, kind, text), () => Volatile.Read(ref run.Cancelled) != 0);
+                }
+                catch (OperationCanceledException) { }
+                catch (Exception) { Post(run, "error", "Speech unavailable. Check the CHRIS service and connection, then Retry."); }
+            });
         }
 
         void BeginMicrophone(long id)
         {
-            if (id != Session.Id || Session.State != CHRISVoiceSession.Phase.Loading) return;
-            string[] devices = Devices();
-            if (devices.Length == 0 || (SelectedMicrophone != null && !devices.Contains(SelectedMicrophone)))
+            if (id != Session.Id || Session.State != CHRISVoiceSession.Phase.Loading || m_Run == null) return;
+            var run = m_Run;
+            string selected = SelectedMicrophone;
+            var devices = Devices;
+            MicrophoneStopped = false;
+            run.Capture = Task.Run(() =>
             {
-                Fail("Microphone unavailable. Choose an available Windows input device.");
-                return;
-            }
-            try
-            {
-                m_RecordingDevice = SelectedMicrophone;
-                m_MicrophoneOwned = true;
-                m_Clip = Microphone.Start(m_RecordingDevice, false, MaxRecordingSeconds + 1, SampleRate);
-                if (m_Clip == null || m_Clip.frequency != SampleRate) throw new InvalidOperationException();
-                m_ReadFrames = 0;
-                m_PhaseStarted = Time.realtimeSinceStartup;
-                Session.Ready(id);
-            }
-            catch (Exception)
-            {
-                Fail("Cannot access the microphone. Check Windows microphone permission.");
-            }
+                try
+                {
+                    if (devices().Length == 0) { Post(run, "error", "Microphone unavailable. Select an available Windows input device."); return; }
+                    CHRISMicrophoneCapture.Record(selected, run.Audio,
+                        () => Volatile.Read(ref run.Finishing) != 0, () => Volatile.Read(ref run.Cancelled) != 0,
+                        (kind, text) => Post(run, kind, text));
+                }
+                catch (Exception) { Post(run, "error", "Microphone unavailable or recording limit reached. Check the input device, then Retry."); }
+            });
         }
 
-        void CaptureAudio(bool flush)
+        void Post(RecordingRun run, string kind, string text)
         {
-            if (m_Clip == null || m_Run == null) return;
-            try
-            {
-                int position = Microphone.GetPosition(m_RecordingDevice);
-                if (position < m_ReadFrames) throw new InvalidOperationException("Microphone stopped unexpectedly.");
-                while (position - m_ReadFrames >= ChunkFrames || (flush && position > m_ReadFrames))
-                {
-                    int frames = Math.Min(ChunkFrames, position - m_ReadFrames);
-                    var samples = new float[frames * m_Clip.channels];
-                    if (!m_Clip.GetData(samples, m_ReadFrames)) throw new InvalidOperationException();
-                    var mono = new short[frames];
-                    for (int frame = 0; frame < frames; frame++)
-                    {
-                        float sample = 0;
-                        for (int channel = 0; channel < m_Clip.channels; channel++)
-                            sample += samples[frame * m_Clip.channels + channel];
-                        mono[frame] = (short)Mathf.RoundToInt(Mathf.Clamp(sample / m_Clip.channels, -1, 1) * 32767);
-                    }
-                    if (!m_Run.Audio.TryAdd(mono)) throw new InvalidOperationException("Recognition fell behind.");
-                    m_ReadFrames += frames;
-                }
-                if (!Microphone.IsRecording(m_RecordingDevice) ||
-                    (position == 0 && Time.realtimeSinceStartup - m_PhaseStarted > 3))
-                    throw new InvalidOperationException("Microphone is not delivering audio.");
-            }
-            catch (Exception)
-            {
-                Fail("Microphone or recognition could not keep up. Re-record a shorter request.");
-            }
+            if (Volatile.Read(ref run.Cancelled) != 0) return;
+            if (kind == "partial" && m_Messages.Count >= MaxQueuedPartialMessages) return;
+            m_Messages.Enqueue(new WorkerMessage { Id = run.Id, Kind = kind, Text = text });
         }
 
         void Fail(string error)
         {
             Session.Fail(Session.Id, error);
-            m_StartRequested = false;
-            m_ReadyPending = false;
-            ReleaseMicrophone();
-            m_Run?.Cancel.Cancel();
+            m_StartRequested = m_ReadyPending = false;
+            m_Run?.Cancel();
             Changed?.Invoke();
-        }
-
-        void ReleaseMicrophone()
-        {
-            if (!m_MicrophoneOwned && m_Clip == null) return;
-            try { if (m_MicrophoneOwned) Microphone.End(m_RecordingDevice); }
-            catch (Exception) { /* Stop must still invalidate callbacks if the device disappeared. */ }
-            finally
-            {
-                if (m_Clip != null) Destroy(m_Clip);
-                m_Clip = null;
-                m_MicrophoneOwned = false;
-                m_RecordingDevice = null;
-            }
         }
 
         void Update()
         {
-            while (m_Messages.TryDequeue(out var message))
-                Receive(message.Id, message.Kind, message.Text);
-            if (m_Run != null && m_Run.Worker.IsCompleted)
+            while (m_Messages.TryDequeue(out var message)) Receive(message.Id, message.Kind, message.Text);
+            CompleteDeviceQuery();
+            UpdateRecordingRun();
+            CheckPhaseTimeout();
+        }
+
+        void UpdateRecordingRun()
+        {
+            if (m_Run != null && m_Run.Completed)
             {
-                m_Run.Audio.Dispose();
-                m_Run.Cancel.Dispose();
+                m_Run.Dispose();
                 m_Run = null;
             }
-            if (m_StartRequested && m_Run == null) StartWorker();
-            if (m_ReadyPending && Time.realtimeSinceStartup >= m_CaptureNotBefore)
+            if (m_StartRequested && m_Run == null && m_DeviceQuery == null) StartWorker();
+            if (m_ReadyPending && m_DeviceQuery == null && Time.realtimeSinceStartup >= m_CaptureNotBefore)
             {
                 m_ReadyPending = false;
                 BeginMicrophone(Session.Id);
+            }
+        }
+
+        void CheckPhaseTimeout()
+        {
+            if (Session.IsActive && Time.realtimeSinceStartup - m_PhaseStarted >
+                (Session.State == CHRISVoiceSession.Phase.Recording ? MaxRecordingSeconds :
+                 Session.State == CHRISVoiceSession.Phase.Loading ? ConnectingTimeoutSeconds : FinalizingTimeoutSeconds))
+                Fail("Speech timed out or reached 60 seconds. Check the connection and Retry.");
+        }
+
+        void CompleteDeviceQuery()
+        {
+            if (m_DeviceQuery != null && m_DeviceQuery.IsCompleted)
+            {
+                if (m_DeviceQuery.Status == TaskStatus.RanToCompletion)
+                {
+                    var devices = m_DeviceQuery.Result;
+                    int next = SelectedMicrophone == null ? 0 : Array.FindIndex(devices, device => device.Id == SelectedMicrophone) + 1;
+                    var selected = next >= devices.Length ? null : devices[next];
+                    SelectedMicrophone = selected?.Id;
+                    m_SelectedMicrophoneLabel = selected?.Label;
+                }
+                else
+                {
+                    // Only a start waiting on this selection depends on the failed query.
+                    // A late failure after Cancel must not resurrect a recording error.
+                    _ = m_DeviceQuery.Exception;
+                    m_DeviceQueryError = "Cannot list microphones. Check Windows microphone access.";
+                    if (m_StartRequested) Fail(m_DeviceQueryError);
+                }
+                m_DeviceQuery = null;
                 Changed?.Invoke();
             }
-            if (Session.State == CHRISVoiceSession.Phase.Recording)
-            {
-                if (Time.realtimeSinceStartup - m_PhaseStarted >= MaxRecordingSeconds)
-                    Fail("Recording reached 60 seconds. Re-record a shorter request, then tap Finish.");
-                else CaptureAudio(flush: false);
-            }
-            else if (Session.IsActive && Time.realtimeSinceStartup - m_PhaseStarted >
-                (Session.State == CHRISVoiceSession.Phase.Loading ? 10 : ProviderTimeoutSeconds))
-                Fail("Speech recognition timed out. Check the connection and re-record.");
         }
 
         internal void Receive(long id, string kind, string text)
@@ -252,11 +230,20 @@ namespace TiltBrush
             if (id != Session.Id || !Session.IsActive) return;
             if (kind == "ready")
             {
-                // The cue completes before capture begins; the haptic marks actual listening.
                 float cueDuration = PlayStartCue?.Invoke() ?? 0;
                 m_PhaseStarted = Time.realtimeSinceStartup;
-                m_CaptureNotBefore = m_PhaseStarted + cueDuration + 0.25f;
+                m_CaptureNotBefore = m_PhaseStarted + cueDuration + StartCueQuietSeconds;
                 m_ReadyPending = true;
+            }
+            else if (kind == "listening")
+            {
+                Session.Ready(id);
+                m_PhaseStarted = Time.realtimeSinceStartup;
+            }
+            else if (kind == "microphone-stopped")
+            {
+                MicrophoneStopped = true;
+                CaptureStopped?.Invoke();
             }
             else if (kind == "partial") Session.Partial(id, text);
             else if (kind == "error") Fail(text);
@@ -265,20 +252,24 @@ namespace TiltBrush
             Changed?.Invoke();
         }
 
-        void OnDisable() { CancelRecording(); RetireWorker(); }
-        void OnDestroy() { CancelRecording(); RetireWorker(); }
+        void OnDisable()
+        {
+            CancelRecording();
+            RetireWorker();
+        }
+
+        void OnDestroy()
+        {
+            CancelRecording();
+            RetireWorker();
+        }
 
         void RetireWorker()
         {
-            // No Unity calls and no blocking join. Cleanup still completes with Update disabled.
             var run = m_Run;
-            if (run == null) return;
             m_Run = null;
-            run.Worker.ContinueWith(_ =>
-            {
-                run.Audio.Dispose();
-                run.Cancel.Dispose();
-            }, TaskScheduler.Default);
+            if (run != null)
+                Task.WhenAll(run.Relay, run.Capture, run.CancellationWork).ContinueWith(_ => run.Dispose(), TaskScheduler.Default);
         }
     }
 }

@@ -18,6 +18,10 @@ namespace TiltBrush
         const int RequestTimeoutSeconds = 8;
         const int MaxSavedRequestLength = 16384;
         const string ServiceBaseUrl = "http://127.0.0.1:8765";
+        string m_SavedTask, m_SavedPending;
+        bool? m_SavedCancel;
+        public double LastRecoverySaveMilliseconds { get; private set; }
+        public int RecoverySaveCount { get; private set; }
 
         public JObject Task { get; private set; }
         public string TaskId { get; private set; }
@@ -79,6 +83,9 @@ namespace TiltBrush
             string id = PlayerPrefs.GetString("CHRIS.AssistanceTask", "");
             TaskId = ValidId(id) ? id : null;
             string pending = PlayerPrefs.GetString("CHRIS.AssistancePending", "");
+            m_SavedTask = id;
+            m_SavedPending = pending;
+            m_SavedCancel = PlayerPrefs.GetInt("CHRIS.AssistanceCancel", 0) != 0;
             try
             {
                 if (pending.Length > 0 && pending.Length <= MaxSavedRequestLength)
@@ -97,10 +104,18 @@ namespace TiltBrush
 
         void SaveRecoveryState()
         {
-            PlayerPrefs.SetString("CHRIS.AssistanceTask", TaskId ?? "");
-            PlayerPrefs.SetString("CHRIS.AssistancePending", PendingRequest?.ToString(Formatting.None) ?? "");
+            string task = TaskId ?? "", pending = PendingRequest?.ToString(Formatting.None) ?? "";
+            if (task == m_SavedTask && pending == m_SavedPending && CancelWanted == m_SavedCancel) return;
+            var timer = System.Diagnostics.Stopwatch.StartNew();
+            PlayerPrefs.SetString("CHRIS.AssistanceTask", task);
+            PlayerPrefs.SetString("CHRIS.AssistancePending", pending);
             PlayerPrefs.SetInt("CHRIS.AssistanceCancel", CancelWanted ? 1 : 0);
             PlayerPrefs.Save();
+            LastRecoverySaveMilliseconds = timer.Elapsed.TotalMilliseconds;
+            RecoverySaveCount++;
+            m_SavedTask = task;
+            m_SavedPending = pending;
+            m_SavedCancel = CancelWanted;
         }
 
         public void Submit(string prompt)

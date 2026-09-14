@@ -8,9 +8,17 @@ MonoBehaviour:
   m_PrefabAsset: {fileID: 0}
   m_GameObject: {fileID: 0}
   m_Enabled: 1
+  m_EditorHideFlags: 0
   m_Script: {fileID: 11500000, guid: 418175670e40c664d895147dc487ad44, type: 3}
   m_Name: UI
   m_EditorClassIdentifier:
   SurfaceShader: {fileID: 4800000, guid: d5fa22b5dc8af0341ac6b66fa7c71dec, type: 3}
   Font: {fileID: 11400000, guid: fce54057bad3d2d4cb3c36ee394be518, type: 2}
+  BodyFont: {fileID: 11400000, guid: cb60cf5a3dd8c84468b1d0a71b5d16bb, type: 2}
+  HeadingFont: {fileID: 11400000, guid: 9d334d590bdd8a44fa014076a7999d4f, type: 2}
+  BodyMaterial: {fileID: 2100000, guid: ee5cb62408b9c684ca42ecff809564d8, type: 2}
+  HeadingMaterial: {fileID: 2100000, guid: 1278150613d1c6e44a33aaf6ec8adf8b, type: 2}
+  RoundedMesh: {fileID: 4300000, guid: 5501f437160666942ae970f3648fbeb8, type: 3}
+  BorderMesh: {fileID: 4300000, guid: 16fad2a698203b44bb45a3844e1ad126, type: 3}
+  IconShader: {fileID: 4800000, guid: 7fb0893df567da94f892460d9f603269, type: 3}
   PopupPrefab: {fileID: 100000, guid: b2fefc944710408b813c486c1c47c930, type: 3}

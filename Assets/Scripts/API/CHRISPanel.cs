@@ -12,6 +12,9 @@ namespace TiltBrush
     [DefaultExecutionOrder(9000)]
     public class CHRISPanel : MonoBehaviour
     {
+        const float InputReleaseTimeoutSeconds = 8;
+        const float TaskPollIntervalSeconds = 1;
+
         public static CHRISPanel Instance { get; private set; }
         public CHRISCommandGateway Gateway;
         public CHRISAssistanceClient Assistance { get; private set; }
@@ -19,12 +22,17 @@ namespace TiltBrush
         public CHRISConfirmationSpeech Speech { get; private set; }
         public CHRISNativePopup Popup { get; private set; }
         public string Notice { get; private set; } = "Record a request. Confirm only after reviewing the commands.";
-        public string Prompt { get; private set; } = "Make my brush blue";
+        public string Prompt { get; private set; } = "";
         public JObject ReviewedApproval { get; private set; }
         public string ReviewText { get; private set; }
         public bool WaitingForRelease => m_AfterRelease != null;
         public bool Correcting { get; private set; }
         public bool HasReplacement => m_ReplacementPrompt != null;
+        public bool NonDrawingHandIsRight => InputManager.m_Instance != null && InputManager.Controllers != null &&
+            (InputManager.Wand is UnityXRControllerInfo xr ? xr.PhysicalRightHand : InputManager.m_Instance.WandOnRight);
+        public string RecordingShortcutHint => ShortcutHint(NonDrawingHandIsRight);
+        internal static string ShortcutHint(bool rightHand) => "While CHRIS is open:\nClick " +
+            (rightHand ? "right" : "left") + " joystick to toggle recording.";
         public event Action Changed;
         Action m_AfterRelease;
         float m_ReleaseDeadline, m_NextPoll;
@@ -45,6 +53,7 @@ namespace TiltBrush
             Voice.Changed += OnVoiceChanged;
             Voice.Finalized += AcceptVoice;
             Voice.PlayStartCue = PlayRecordingCue;
+            Voice.CaptureStopped += PlayFinishCue;
             Gateway.Stopped += OnGatewayStopped;
         }
 
@@ -116,6 +125,11 @@ namespace TiltBrush
                 return;
             }
             if (Voice.Session.IsActive) return;
+            RetryRecording();
+        }
+
+        public void RetryRecording()
+        {
             m_RecordingIntent = BeginCorrection();
             Voice.StartRecording();
         }
@@ -127,11 +141,11 @@ namespace TiltBrush
             return AudioManager.m_Instance != null ? AudioManager.m_Instance.PlayRecordingCue(transform.position) : 0;
         }
 
+        void PlayFinishCue() => PlayRecordingCue();
+
         void OnVoiceChanged()
         {
             var phase = Voice.Session.State;
-            if (phase != m_LastVoicePhase && phase == CHRISVoiceSession.Phase.Finalizing)
-                PlayRecordingCue(); // FinishRecording has already released the microphone.
             if (phase != m_LastVoicePhase && (phase == CHRISVoiceSession.Phase.Recording || phase == CHRISVoiceSession.Phase.Finalizing) &&
                 InputManager.m_Instance != null && InputManager.Controllers != null && InputManager.Wand.IsTrackedObjectValid)
                 InputManager.m_Instance.TriggerHaptics(InputManager.ControllerName.Wand, phase == CHRISVoiceSession.Phase.Recording ? 0.06f : 0.03f);
@@ -215,7 +229,7 @@ namespace TiltBrush
                 Assistance.Decide(reviewed, approve);
                 ClearReview();
             };
-            m_ReleaseDeadline = Time.unscaledTime + 8;
+            m_ReleaseDeadline = Time.unscaledTime + InputReleaseTimeoutSeconds;
             Notice = "Release the trigger or mouse button to continue.";
             Changed?.Invoke();
         }
@@ -238,10 +252,21 @@ namespace TiltBrush
 
         public void Refresh()
         {
+            ClearChangedApproval();
+            CaptureReviewableApproval();
+            Changed?.Invoke();
+        }
+
+        void ClearChangedApproval()
+        {
             if (ReviewedApproval != null && Assistance != null &&
                 (!Assistance.CanReview || !JToken.DeepEquals(ReviewedApproval, Assistance.Task["approval"]) ||
                  ReviewText != (string)Assistance.Task["summary"]))
                 ClearReview();
+        }
+
+        void CaptureReviewableApproval()
+        {
             if (!Correcting && !WaitingForRelease && Assistance != null && Assistance.CanReview && ReviewedApproval == null)
             {
                 try
@@ -258,7 +283,6 @@ namespace TiltBrush
                     Notice = "This proposal cannot be reviewed. Cancel it and request a new one.";
                 }
             }
-            Changed?.Invoke();
         }
 
         void Update()
@@ -269,7 +293,7 @@ namespace TiltBrush
             SubmitReplacementWhenReady();
             if (Popup != null && Time.unscaledTime >= m_NextPoll)
             {
-                m_NextPoll = Time.unscaledTime + 1;
+                m_NextPoll = Time.unscaledTime + TaskPollIntervalSeconds;
                 Assistance.Refresh();
                 Refresh();
             }
@@ -330,6 +354,7 @@ namespace TiltBrush
                 Voice.Changed -= OnVoiceChanged;
                 Voice.Finalized -= AcceptVoice;
                 Voice.PlayStartCue = null;
+                Voice.CaptureStopped -= PlayFinishCue;
             }
             if (Speech != null) Speech.Changed -= Refresh;
             if (Gateway != null) Gateway.Stopped -= OnGatewayStopped;

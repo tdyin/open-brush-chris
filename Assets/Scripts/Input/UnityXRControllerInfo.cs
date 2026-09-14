@@ -33,6 +33,7 @@ namespace TiltBrush
         int m_VoiceSampleFrame = -1;
 
         internal bool RawVrInput(VrInput input) => MapVrInput(input);
+        internal bool PhysicalRightHand => isBrush;
 
         void SampleVoiceShortcut()
         {
@@ -45,7 +46,10 @@ namespace TiltBrush
             bool scope = panel != null && panel.Popup != null && panel.Popup.IsOpen() &&
                 supported && InputManager.m_Instance != null && InputManager.Controllers != null && ReferenceEquals(InputManager.Wand, this);
             bool tracked = device.isValid && device.TryGetFeatureValue(UnityEngine.XR.CommonUsages.isTracked, out bool isTracked) && isTracked && !IsStylusActive();
-            if (m_VoiceShortcut.Sample(scope, tracked, isBrush, MapVrInput(VrInput.Thumbstick)))
+            // Read the physical OpenXR feature directly; the voice gesture must not depend on action-map masking.
+            bool pressed = device.TryGetFeatureValue(UnityEngine.XR.CommonUsages.primary2DAxisClick, out bool click)
+                ? click : MapVrInput(VrInput.Thumbstick);
+            if (m_VoiceShortcut.Sample(scope, tracked, isBrush, pressed))
                 panel.QueueVoiceShortcut(this);
         }
 

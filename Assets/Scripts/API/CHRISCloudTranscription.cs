@@ -19,18 +19,20 @@ namespace TiltBrush
         readonly TaskCompletionSource<bool> m_Ready = new TaskCompletionSource<bool>();
         volatile bool m_FinishSent;
 
-        public async Task Run(BlockingCollection<short[]> audio, CancellationToken cancellation, Action<string, string> post)
+        public async Task Run(BlockingCollection<short[]> audio, CancellationToken cancellation, Action<string, string> post,
+            Func<bool> cancelled = null)
         {
             using (var socket = new ClientWebSocket())
             using (var connect = CancellationTokenSource.CreateLinkedTokenSource(cancellation))
             {
                 connect.CancelAfter(TimeSpan.FromSeconds(10));
                 await socket.ConnectAsync(new Uri("ws://127.0.0.1:8765/voice/transcribe"), connect.Token);
-                await RunConnected(socket, audio, cancellation, post);
+                await RunConnected(socket, audio, cancellation, post, cancelled);
             }
         }
 
-        internal async Task RunConnected(WebSocket socket, BlockingCollection<short[]> audio, CancellationToken cancellation, Action<string, string> post)
+        internal async Task RunConnected(WebSocket socket, BlockingCollection<short[]> audio, CancellationToken cancellation, Action<string, string> post,
+            Func<bool> cancelled = null)
         {
             using (var stop = CancellationTokenSource.CreateLinkedTokenSource(cancellation))
             using (stop.Token.Register(socket.Abort))
@@ -45,7 +47,7 @@ namespace TiltBrush
                     if (!m_Ready.Task.IsCompleted) { await receive; throw new IOException("Speech startup ended."); }
                     await m_Ready.Task;
                     stop.CancelAfter(Timeout.Infinite);
-                    send = Task.Run(() => SendAudioUntilFinish(socket, audio, stop), stop.Token);
+                    send = Task.Run(() => SendAudioUntilFinish(socket, audio, stop, cancelled), stop.Token);
                     await Task.WhenAny(send, receive);
                     if (receive.IsCompleted) await receive;
                     await send;
@@ -61,13 +63,15 @@ namespace TiltBrush
             }
         }
 
-        async Task SendAudioUntilFinish(WebSocket socket, BlockingCollection<short[]> audio, CancellationTokenSource stop)
+        async Task SendAudioUntilFinish(WebSocket socket, BlockingCollection<short[]> audio, CancellationTokenSource stop, Func<bool> cancelled)
         {
             foreach (var chunk in audio.GetConsumingEnumerable(stop.Token))
             {
+                if (cancelled?.Invoke() == true) throw new OperationCanceledException();
                 byte[] bytes = CHRISAudio.Encode(chunk);
                 await socket.SendAsync(new ArraySegment<byte>(bytes), WebSocketMessageType.Binary, true, stop.Token);
             }
+            if (cancelled?.Invoke() == true) throw new OperationCanceledException();
             m_FinishSent = true;
             stop.CancelAfter(TimeSpan.FromSeconds(20));
             await SendControl(socket, "finish", stop.Token);

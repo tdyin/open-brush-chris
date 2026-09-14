@@ -4,6 +4,7 @@ using System;
 using System.Collections.Concurrent;
 using System.Collections.Generic;
 using System.IO;
+using System.Linq;
 using System.Net.WebSockets;
 using System.Reflection;
 using System.Text;
@@ -18,6 +19,94 @@ namespace TiltBrush
     public class TestCHRISCloudVoice
     {
         [Test]
+        public void FinishDrainsAcceptedTailAndRejectsAudioArrivingAfterFinish()
+        {
+#if UNITY_STANDALONE_WIN || UNITY_EDITOR_WIN
+            foreach (bool cancelled in new[] { false, true })
+            using (var output = new BlockingCollection<short[]>(20))
+            {
+                bool finishing = false, cancelledNow = false;
+                var format = new CSCore.WaveFormat(24000, 16, 1);
+                using (var audio = new CHRISCapturedAudio(format, output, () => finishing, () => cancelledNow))
+                {
+                    short[] accepted = Enumerable.Range(0, 2503).Select(i => (short)(i % 5000)).ToArray();
+                    byte[] bytes = new byte[accepted.Length * 2];
+                    Buffer.BlockCopy(accepted, 0, bytes, 0, bytes.Length);
+                    // Finish interleaves after capture buffers a packet but before the reader drains it.
+                    audio.AppendCaptured(bytes, 0, bytes.Length);
+                    finishing = true;
+                    cancelledNow = cancelled;
+                    audio.AppendCaptured(new byte[] { 0xff, 0x7f }, 0, 2);
+                    audio.Finish();
+                    var chunks = output.ToArray();
+                    if (cancelled) Assert.That(chunks, Is.Empty, "Cancel discards even the accepted tail");
+                    else
+                    {
+                        Assert.That(chunks.Select(chunk => chunk.Length), Is.EqualTo(new[] { 2400, 103 }));
+                        var actual = chunks.SelectMany(chunk => chunk).ToArray();
+                        Assert.That(actual.Length, Is.EqualTo(accepted.Length));
+                        for (int i = 0; i < accepted.Length; i++)
+                            Assert.That(actual[i], Is.EqualTo(accepted[i]).Within(1), "PCM conversion at sample " + i);
+                    }
+                }
+            }
+#endif
+        }
+
+        [Test]
+        public void DuplicateMicrophoneNamesRetainStableEndpointIdentity()
+        {
+            var devices = CHRISMicrophoneDevice.LabelDevices(new[] {
+                new CHRISMicrophoneDevice("endpoint-b", "Headset microphone"),
+                new CHRISMicrophoneDevice("endpoint-a", "Headset microphone") });
+            Assert.That(devices.Select(device => device.Id), Is.EqualTo(new[] { "endpoint-a", "endpoint-b" }));
+            Assert.That(devices.Select(device => device.Label).Distinct().Count(), Is.EqualTo(2));
+            Assert.That(CHRISMicrophoneDevice.LabelDevices(devices.Reverse()).Select(device => device.Label),
+                Is.EqualTo(devices.Select(device => device.Label)), "Enumeration order must not swap duplicate labels");
+        }
+
+        [Test]
+        public void RecordingWaitsForDeviceSelectionAndCancelledQueryCannotFailANewerSession()
+        {
+            var obj = new GameObject("CHRIS delayed device selection");
+            var result = new TaskCompletionSource<CHRISMicrophoneDevice[]>();
+            try
+            {
+                var voice = obj.AddComponent<CHRISVoiceInput>();
+                int mainThread = Thread.CurrentThread.ManagedThreadId, queryThread = mainThread;
+                voice.Devices = () => { queryThread = Thread.CurrentThread.ManagedThreadId; return result.Task.GetAwaiter().GetResult(); };
+                voice.NextMicrophone();
+                voice.StartRecording();
+                TestCHRISAssistance.Call(voice, "Update");
+                var runField = typeof(CHRISVoiceInput).GetField("m_Run", BindingFlags.NonPublic | BindingFlags.Instance);
+                Assert.That(runField.GetValue(voice), Is.Null, "No connection/capture starts with unresolved device selection");
+                Assert.That(voice.MicrophoneLabel, Is.EqualTo("Finding microphones..."));
+                result.SetResult(new[] { new CHRISMicrophoneDevice("chosen-endpoint", "Chosen microphone") });
+                var query = (Task)typeof(CHRISVoiceInput).GetField("m_DeviceQuery", BindingFlags.NonPublic | BindingFlags.Instance).GetValue(voice);
+                Assert.That(query.Wait(3000), Is.True);
+                TestCHRISAssistance.Call(voice, "CompleteDeviceQuery");
+                Assert.That(queryThread, Is.Not.EqualTo(mainThread));
+                Assert.That(voice.SelectedMicrophone, Is.EqualTo("chosen-endpoint"));
+                Assert.That(voice.MicrophoneLabel, Is.EqualTo("Chosen microphone"));
+                Assert.That(voice.Session.State, Is.EqualTo(CHRISVoiceSession.Phase.Loading));
+                voice.CancelRecording(); // No network or device is needed for this ordering check.
+
+                var failedQuery = new TaskCompletionSource<CHRISMicrophoneDevice[]>();
+                TestCHRISAssistance.Set(voice, "m_DeviceQuery", failedQuery.Task);
+                voice.CancelRecording();
+                failedQuery.SetException(new InvalidOperationException("simulated late enumeration failure"));
+                TestCHRISAssistance.Call(voice, "CompleteDeviceQuery");
+                Assert.That(voice.Session.State, Is.EqualTo(CHRISVoiceSession.Phase.Idle));
+                Assert.That(runField.GetValue(voice), Is.Null);
+            }
+            finally
+            {
+                result.TrySetResult(Array.Empty<CHRISMicrophoneDevice>());
+                UnityEngine.Object.DestroyImmediate(obj);
+            }
+        }
+
+        [Test]
         public void CaptureWaitsForTheCueAndQuietIntervalAndStopCancelsPendingCapture()
         {
             var obj = new GameObject("CHRIS cue timing");
@@ -25,7 +114,7 @@ namespace TiltBrush
             {
                 var voice = obj.AddComponent<CHRISVoiceInput>();
                 int deviceQueries = 0, cues = 0;
-                voice.Devices = () => { deviceQueries++; return Array.Empty<string>(); };
+                voice.Devices = () => { deviceQueries++; return Array.Empty<CHRISMicrophoneDevice>(); };
                 voice.PlayStartCue = () => { cues++; return 2; };
                 long id = voice.Session.Begin();
                 float before = Time.realtimeSinceStartup;

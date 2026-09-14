@@ -5,7 +5,7 @@ using UnityEngine;
 
 namespace TiltBrush
 {
-    // A separate native panel owns the CHRIS popup and keyboard. It never attaches to a hand.
+    // A separate native panel owns the CHRIS popup. It never attaches to a hand.
     // Moving uses the ordinary UI trigger, so it also works in basic mode.
     [DefaultExecutionOrder(-100)]
     public class CHRISFloatingPanel : BasePanel
@@ -33,8 +33,8 @@ namespace TiltBrush
             m_Decor = Array.Empty<GameObject>();
             m_PromoBorders = Array.Empty<MeshRenderer>();
             m_PanelPopUpMap = Array.Empty<PopupMapKey>();
-            m_ReticleBounds = new Vector3(3.8f, 4, 0);
-            m_Mesh = CHRISUIResources.Load().Surface(transform, "Floating panel backing", Vector3.zero, new Vector2(3.8f, 4),
+            m_ReticleBounds = new Vector3(CHRISNativePopup.Width, CHRISNativePopup.Height, 0);
+            m_Mesh = CHRISUIResources.Load().Surface(transform, "Floating panel backing", Vector3.zero, new Vector2(CHRISNativePopup.Width, CHRISNativePopup.Height),
                 new Color(0.025f, 0.045f, 0.06f));
             // Keep the mesh transform unscaled: BasePanel parents popups under this transform.
             m_Mesh.transform.localScale = Vector3.one;
@@ -164,8 +164,7 @@ namespace TiltBrush
         {
             base.OnDisablePanel();
             EndDrag();
-            // Native availability changes may hide the host with a keyboard on top of CHRIS.
-            // Dispose the whole popup stack, releasing direct ownership and queued confirmation.
+            // Dispose the popup stack when native availability hides the host.
             var popup = m_ActivePopUp;
             m_ActivePopUp = null;
             while (popup != null)
