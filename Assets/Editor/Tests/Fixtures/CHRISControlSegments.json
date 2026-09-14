@@ -23,7 +23,7 @@
       "active_task": null,
       "unknown": []
     },
-    "summary": "1. Set brush size to 0.123456789 (0 to 1 scale).\n2. Set brush color to blue (#0000FF).\n3. Use the \"Ink\" brush.\n4. Open the Color panel.\n5. Move your viewpoint by X 0.25, Y 0.0, Z -0.25 native units.",
+    "summary": "1. Set brush size to 0.123456789.\n2. Set brush color to blue.\n3. Use the \"Ink\" brush.\n4. Open the Color panel.\n5. Move your viewpoint right by 0.25 native units and backward by 0.25 native units in room space.",
     "envelope": {
       "command_id": "task-0-1",
       "task_id": "task-0",

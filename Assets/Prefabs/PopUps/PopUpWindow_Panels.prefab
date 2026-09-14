@@ -532,7 +532,6 @@ GameObject:
   - component: {fileID: 11477574}
   - component: {fileID: 114378360279916084}
   - component: {fileID: 4962853864555495890}
-  - component: {fileID: 900202609130001}
   m_Layer: 16
   m_Name: PopUpWindow_Panels
   m_TagString: Untagged
@@ -575,8 +574,8 @@ BoxCollider:
   m_ProvidesContacts: 0
   m_Enabled: 1
   serializedVersion: 3
-  m_Size: {x: 1.45, y: 1.78, z: 0.1}
-  m_Center: {x: 0, y: -0.15, z: -0.04}
+  m_Size: {x: 1.45, y: 1.26, z: 0.01}
+  m_Center: {x: 0, y: 0, z: -0.0125}
 --- !u!114 &11477574
 MonoBehaviour:
   m_ObjectHideFlags: 0
@@ -1755,14 +1754,3 @@ MonoBehaviour:
   m_hasFontAssetChanged: 0
   m_renderer: {fileID: 2821963887085875162}
   m_maskType: 0
---- !u!114 &900202609130001
-MonoBehaviour:
-  m_ObjectHideFlags: 0
-  m_CorrespondingSourceObject: {fileID: 0}
-  m_PrefabInstance: {fileID: 0}
-  m_PrefabAsset: {fileID: 0}
-  m_GameObject: {fileID: 197348}
-  m_Enabled: 1
-  m_Script: {fileID: 11500000, guid: 018bcb9871fd65841aefa9a9a0dcbd30, type: 3}
-  m_Name:
-  m_EditorClassIdentifier:

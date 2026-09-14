@@ -309,7 +309,7 @@ namespace TiltBrush
             finally { UnityEngine.Object.DestroyImmediate(obj); }
         }
 
-        internal static JObject TaskFor(CHRISGatewayTestHost host, string summary = "1. Set brush size to 0.3 (0 to 1 scale).")
+        internal static JObject TaskFor(CHRISGatewayTestHost host, string summary = "1. Set brush size to 0.3.")
         {
             var envelope = Envelope(host, new JArray(Action("brush.size", "number", 0.3)));
             return new JObject { ["task_id"] = envelope["task_id"], ["status"] = "awaiting_approval", ["reason"] = "Review the commands",

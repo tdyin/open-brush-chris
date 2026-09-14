@@ -123,10 +123,19 @@ namespace TiltBrush
             }
             Assert.That(resources.BodyMaterial.GetColor("_FaceColor").a, Is.EqualTo(1));
             Assert.That(resources.HeadingMaterial.GetColor("_FaceColor").a, Is.EqualTo(1));
+        }
+
+        [Test]
+        public void MoreMenuHasNoLegacyStopAndKeepsItsOriginalHitBounds()
+        {
             var menu = AssetDatabase.LoadAssetAtPath<GameObject>("Assets/Prefabs/PopUps/PopUpWindow_Panels.prefab");
-            Assert.That(menu.GetComponent<CHRISMenuEntry>(), Is.Not.Null);
+            var scripts = menu.GetComponentsInChildren<MonoBehaviour>(true);
+            Assert.That(scripts.All(script => script != null), Is.True, "More menu must not contain missing scripts.");
+            Assert.That(scripts.Select(script => script.GetType().Name), Does.Not.Contain("CHRISMenuEntry"));
+            Assert.That(menu.GetComponentsInChildren<CHRISNativeButton>(true), Is.Empty);
             var menuCollider = menu.GetComponent<BoxCollider>();
-            Assert.That(menuCollider.center.y - menuCollider.size.y / 2, Is.LessThan(-0.86f));
+            Assert.That(menuCollider.size, Is.EqualTo(new Vector3(1.45f, 1.26f, 0.01f)));
+            Assert.That(menuCollider.center, Is.EqualTo(new Vector3(0, 0, -0.0125f)));
         }
 
         [Test]
@@ -460,10 +469,7 @@ namespace TiltBrush
                 var menu = UnityEngine.Object.Instantiate(AssetDatabase.LoadAssetAtPath<GameObject>("Assets/Prefabs/PopUps/PopUpWindow_Panels.prefab"));
                 menu.transform.position = Vector3.zero; menu.transform.rotation = Quaternion.identity;
                 UnityEngine.SceneManagement.SceneManager.MoveGameObjectToScene(menu, scene);
-                TestCHRISAssistance.Call(menu.GetComponent<CHRISMenuEntry>(), "Start");
-                stops = host.StopCount;
-                var stop = menu.GetComponentsInChildren<CHRISNativeButton>().Single(b => b.name == "CHRIS local Stop");
-                Assert.That(stop.IsAvailable(), Is.True); stop.Click(); Assert.That(host.StopCount, Is.EqualTo(stops + 1));
+                Assert.That(menu.GetComponentsInChildren<CHRISNativeButton>(true), Is.Empty);
                 camera.orthographicSize = 1.15f; capture("assist-menu", menu);
                 menu.SetActive(false);
                 var lab = UnityEngine.Object.Instantiate(AssetDatabase.LoadAssetAtPath<GameObject>("Assets/Prefabs/Panels/LabsPanel.prefab"));
