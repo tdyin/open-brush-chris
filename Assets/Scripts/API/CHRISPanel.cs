@@ -16,8 +16,9 @@ namespace TiltBrush
         public CHRISCommandGateway Gateway;
         public CHRISAssistanceClient Assistance { get; private set; }
         public CHRISVoiceInput Voice { get; private set; }
+        public CHRISConfirmationSpeech Speech { get; private set; }
         public CHRISNativePopup Popup { get; private set; }
-        public string Notice { get; private set; } = "Record or type a request. Confirm only after reviewing the commands.";
+        public string Notice { get; private set; } = "Record a request. Confirm only after reviewing the commands.";
         public string Prompt { get; private set; } = "Make my brush blue";
         public JObject ReviewedApproval { get; private set; }
         public string ReviewText { get; private set; }
@@ -29,15 +30,21 @@ namespace TiltBrush
         float m_ReleaseDeadline, m_NextPoll;
         long m_IntentVersion, m_RecordingIntent;
         string m_ReplacementPrompt;
+        ControllerInfo m_PendingVoiceShortcut;
+        CHRISVoiceSession.Phase m_LastVoicePhase;
 
         void Start()
         {
             Instance = this;
             Assistance = GetComponent<CHRISAssistanceClient>() ?? gameObject.AddComponent<CHRISAssistanceClient>();
             Voice = GetComponent<CHRISVoiceInput>() ?? gameObject.AddComponent<CHRISVoiceInput>();
+            Speech = GetComponent<CHRISConfirmationSpeech>() ?? gameObject.AddComponent<CHRISConfirmationSpeech>();
+            Speech.Model = this;
+            Speech.Changed += Refresh;
             Assistance.Changed += Refresh;
-            Voice.Changed += Refresh;
+            Voice.Changed += OnVoiceChanged;
             Voice.Finalized += AcceptVoice;
+            Voice.PlayStartCue = PlayRecordingCue;
             Gateway.Stopped += OnGatewayStopped;
         }
 
@@ -60,6 +67,7 @@ namespace TiltBrush
 
         void ClearReview()
         {
+            Speech?.Cancel();
             ReviewedApproval = null;
             ReviewText = null;
             m_AfterRelease = null;
@@ -68,6 +76,8 @@ namespace TiltBrush
         void CancelInput()
         {
             m_IntentVersion++;
+            m_PendingVoiceShortcut = null;
+            Speech?.Cancel();
             Voice?.CancelRecording();
             m_ReplacementPrompt = null;
             Correcting = false;
@@ -93,7 +103,7 @@ namespace TiltBrush
             StopLocal();
             Correcting = true;
             ClearReview();
-            Notice = "Previous request cancelled. Record or edit a replacement.";
+            Notice = "Previous request cancelled. Record a replacement.";
             Refresh();
             return m_IntentVersion;
         }
@@ -105,8 +115,28 @@ namespace TiltBrush
                 Voice.FinishRecording();
                 return;
             }
+            if (Voice.Session.IsActive) return;
             m_RecordingIntent = BeginCorrection();
             Voice.StartRecording();
+        }
+
+        internal void QueueVoiceShortcut(ControllerInfo controller) => m_PendingVoiceShortcut = controller;
+
+        float PlayRecordingCue()
+        {
+            return AudioManager.m_Instance != null ? AudioManager.m_Instance.PlayRecordingCue(transform.position) : 0;
+        }
+
+        void OnVoiceChanged()
+        {
+            var phase = Voice.Session.State;
+            if (phase != m_LastVoicePhase && phase == CHRISVoiceSession.Phase.Finalizing)
+                PlayRecordingCue(); // FinishRecording has already released the microphone.
+            if (phase != m_LastVoicePhase && (phase == CHRISVoiceSession.Phase.Recording || phase == CHRISVoiceSession.Phase.Finalizing) &&
+                InputManager.m_Instance != null && InputManager.Controllers != null && InputManager.Wand.IsTrackedObjectValid)
+                InputManager.m_Instance.TriggerHaptics(InputManager.ControllerName.Wand, phase == CHRISVoiceSession.Phase.Recording ? 0.06f : 0.03f);
+            m_LastVoicePhase = phase;
+            Refresh();
         }
 
         public void ChangeMicrophone()
@@ -117,16 +147,16 @@ namespace TiltBrush
 
         void AcceptVoice(string transcript)
         {
-            CompleteTextEdit(m_RecordingIntent, transcript);
+            AcceptFinalTranscript(m_RecordingIntent, transcript);
         }
 
-        public void CompleteTextEdit(long intent, string text)
+        internal void AcceptFinalTranscript(long intent, string text)
         {
             if (intent != m_IntentVersion || !Correcting) return;
             text = text?.Trim();
             if (!CHRISVoiceSession.ValidText(text, allowEmpty: false))
             {
-                Notice = "Enter a request of 1-2000 characters, or re-record.";
+                Notice = "Please re-record a shorter, clear request.";
                 Refresh();
                 return;
             }
@@ -140,9 +170,12 @@ namespace TiltBrush
         {
             if (InputManager.m_Instance == null || InputManager.Controllers == null) return false;
             return !InputManager.m_Instance.GetCommand(InputManager.SketchCommands.Activate) &&
-                !InputManager.Controllers.Any(c => c != null && (c.GetVrInput(VrInput.Trigger) || c.GetVrInput(VrInput.Grip))) &&
+                !InputManager.Controllers.Any(c => c != null && (PhysicalInput(c, VrInput.Trigger) || PhysicalInput(c, VrInput.Grip))) &&
                 !(Mouse.current?.leftButton.isPressed ?? false);
         }
+
+        internal static bool PhysicalInput(ControllerInfo controller, VrInput input) =>
+            controller is UnityXRControllerInfo xr ? xr.RawVrInput(input) : controller.GetVrInput(input);
 
         public static bool PassiveNativeUIHover()
         {
@@ -171,7 +204,7 @@ namespace TiltBrush
             {
                 if (approve && !ApprovalCurrent(reviewed, Gateway.Capture(), CHRISCommandGateway.Now))
                 {
-                    Notice = "The sketch changed or the review expired. Re-record or edit your request.";
+                    Notice = "The sketch changed or the review expired. Re-record your request.";
                     return;
                 }
                 if ((string)Assistance.Task?["summary"] != summary)
@@ -231,22 +264,46 @@ namespace TiltBrush
         void Update()
         {
             if (Gateway == null || Assistance == null) return;
-            if (m_AfterRelease != null)
+            ProcessVoiceShortcut();
+            ProcessReleasedDecision();
+            SubmitReplacementWhenReady();
+            if (Popup != null && Time.unscaledTime >= m_NextPoll)
             {
-                if (Popup == null || Time.unscaledTime > m_ReleaseDeadline)
-                {
-                    m_AfterRelease = null;
-                    Notice = "Input was not released. Review and confirm again.";
-                    Refresh();
-                }
-                else if (InputReleased() && !CHRISCommandGateway.NativeInteractionBusy())
-                {
-                    var action = m_AfterRelease;
-                    m_AfterRelease = null;
-                    action();
-                    Refresh();
-                }
+                m_NextPoll = Time.unscaledTime + 1;
+                Assistance.Refresh();
+                Refresh();
             }
+        }
+
+        void ProcessVoiceShortcut()
+        {
+            var controller = m_PendingVoiceShortcut;
+            m_PendingVoiceShortcut = null;
+            if (controller != null && Popup != null && Popup.IsOpen() && InputManager.m_Instance != null &&
+                ReferenceEquals(controller, InputManager.Wand) && controller.IsTrackedObjectValid)
+                TapMicrophone();
+        }
+
+        void ProcessReleasedDecision()
+        {
+            if (m_AfterRelease == null) return;
+            if (Popup == null || Time.unscaledTime > m_ReleaseDeadline)
+            {
+                m_AfterRelease = null;
+                Notice = "Input was not released. Review and confirm again.";
+                Refresh();
+            }
+            else if (InputReleased() && !CHRISCommandGateway.NativeInteractionBusy())
+            {
+                var action = m_AfterRelease;
+                m_AfterRelease = null;
+                action();
+                Refresh();
+            }
+        }
+
+        void SubmitReplacementWhenReady()
+        {
             if (m_ReplacementPrompt != null && Assistance.CanStart && InputReleased() &&
                 !CHRISCommandGateway.NativeInteractionBusy())
             {
@@ -254,12 +311,6 @@ namespace TiltBrush
                 m_ReplacementPrompt = null;
                 Correcting = false;
                 Assistance.Submit(prompt);
-            }
-            if (Popup != null && Time.unscaledTime >= m_NextPoll)
-            {
-                m_NextPoll = Time.unscaledTime + 1;
-                Assistance.Refresh();
-                Refresh();
             }
         }
 
@@ -274,7 +325,13 @@ namespace TiltBrush
         {
             if (Instance == this) Instance = null;
             if (Assistance != null) Assistance.Changed -= Refresh;
-            if (Voice != null) { Voice.Changed -= Refresh; Voice.Finalized -= AcceptVoice; }
+            if (Voice != null)
+            {
+                Voice.Changed -= OnVoiceChanged;
+                Voice.Finalized -= AcceptVoice;
+                Voice.PlayStartCue = null;
+            }
+            if (Speech != null) Speech.Changed -= Refresh;
             if (Gateway != null) Gateway.Stopped -= OnGatewayStopped;
         }
     }

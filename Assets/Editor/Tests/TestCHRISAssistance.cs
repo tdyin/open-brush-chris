@@ -280,6 +280,8 @@ namespace TiltBrush
                 voice.Devices = () => Array.Empty<string>();
                 int finalized = 0; voice.Finalized += _ => finalized++;
                 long id = voice.Session.Begin(); voice.Receive(id, "ready", "");
+                Set(voice, "m_CaptureNotBefore", 0f);
+                Call(voice, "Update");
                 Assert.That(voice.Session.State, Is.EqualTo(CHRISVoiceSession.Phase.Failed));
                 Assert.That(voice.Status, Does.Contain("Microphone unavailable"));
                 id = voice.Session.Begin(); voice.Session.Ready(id);
@@ -331,11 +333,11 @@ namespace TiltBrush
                 model.Decide(true); Assert.That(model.WaitingForRelease, Is.True);
                 long first = model.BeginCorrection(); Assert.That(model.WaitingForRelease, Is.False);
                 Assert.That(model.ReviewedApproval, Is.Null);
-                long replacement = model.BeginCorrection(); model.CompleteTextEdit(first, "superseded request");
+                long replacement = model.BeginCorrection(); model.AcceptFinalTranscript(first, "superseded request");
                 Assert.That(model.HasReplacement, Is.False);
-                model.CompleteTextEdit(replacement, "make my brush blue"); Assert.That(model.HasReplacement, Is.True);
+                model.AcceptFinalTranscript(replacement, "make my brush blue"); Assert.That(model.HasReplacement, Is.True);
                 model.StopLocal(); Assert.That(model.HasReplacement, Is.False);
-                model.CompleteTextEdit(replacement, "late correction"); Assert.That(model.HasReplacement, Is.False);
+                model.AcceptFinalTranscript(replacement, "late correction"); Assert.That(model.HasReplacement, Is.False);
                 foreach (JToken bad in new JToken[] { JValue.CreateNull(), "", new string('x', 4001), new JObject() })
                 {
                     var malformed = TaskFor(host); malformed["summary"] = bad;

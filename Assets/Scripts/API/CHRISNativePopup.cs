@@ -10,13 +10,14 @@ namespace TiltBrush
 {
     public class CHRISNativePopup : PopUpWindow
     {
+        const string ShortcutHint = "While CHRIS is open on Quest:\nClick the non-drawing joystick to start / finish.";
         CHRISUIResources m_Resources;
         CHRISPanel m_Model;
         TextMeshPro m_Status;
         TextMeshPro m_Detail;
         readonly CHRISNativeButton[] m_Choices = new CHRISNativeButton[4];
         bool m_Dirty;
-        CHRISNativeButton m_Microphone, m_Edit;
+        CHRISNativeButton m_Microphone, m_Speech;
         string m_PagedSummary;
         string[] m_ReviewPages;
         int m_ReviewPage, m_LastViewedPage;
@@ -55,8 +56,6 @@ namespace TiltBrush
                 () => m_Model?.StopLocal(), true);
             m_Microphone = m_Resources.Button(transform, "Record request", new Vector3(-0.9f, 1.34f, -0.06f),
                 new Vector2(1.7f, 0.32f), "Record", () => m_Model?.TapMicrophone());
-            m_Edit = m_Resources.Button(transform, "Edit request", new Vector3(0.9f, 1.34f, -0.06f),
-                new Vector2(1.7f, 0.32f), "Edit request", EnterRequest);
             m_Status = m_Resources.Text(transform, "Status", new Vector3(0, 0.96f, -0.04f),
                 new Vector2(3.5f, 0.38f), "Assist", 1.15f);
             m_Detail = m_Resources.Text(transform, "Review", new Vector3(0, -0.02f, -0.04f),
@@ -70,6 +69,8 @@ namespace TiltBrush
                 m_Choices[i] = m_Resources.Button(transform, "Choice " + i,
                     new Vector3(i % 2 == 0 ? -0.9f : 0.9f, -0.95f - i / 2 * 0.4f, -0.06f),
                     new Vector2(1.7f, 0.32f), "", null);
+            m_Speech = m_Resources.Button(transform, "AI confirmation voice", new Vector3(-0.9f, -1.73f, -0.06f), new Vector2(1.7f, 0.32f),
+                "AI voice: On", () => m_Model?.Speech.Toggle());
             m_Resources.Button(transform, "Close CHRIS", new Vector3(0.9f, -1.73f, -0.06f), new Vector2(1.7f, 0.32f), "Close",
                 () => RequestClose(true));
         }
@@ -112,12 +113,14 @@ namespace TiltBrush
             bool voiceBusy = voice?.Session.IsActive == true;
             m_Microphone.Label.text = recording ? "Finish recording" : "Record / Re-record";
             m_Microphone.SetButtonAvailable(!voiceBusy || recording);
-            m_Edit.SetButtonAvailable(true);
+            m_Speech.Label.text = m_Model.Speech.SpeechEnabled ? "AI voice: On" : "AI voice: Off";
+            m_Speech.SetButtonAvailable(true);
             m_Status.text = m_Model.AssistanceStatus();
             if (voiceBusy)
             {
                 string transcript = voice.Session.Transcript;
                 m_Detail.text = transcript.Length <= 320 ? transcript : "..." + transcript.Substring(transcript.Length - 320);
+                m_Detail.text += "\n\n" + ShortcutHint;
                 return;
             }
             var client = m_Model.Assistance;
@@ -128,6 +131,7 @@ namespace TiltBrush
             }
             m_Detail.text = m_Model.HasReplacement ? "Replacement request: " + m_Model.Prompt :
                 client.CanReview ? m_Model.Notice : client.StartBlockedReason ?? "Request: " + m_Model.Prompt;
+            m_Detail.text += "\n\n" + ShortcutHint;
             ConfigureChoice(0, "Retry", () => RetryAssistance(client), !client.Busy);
             ConfigureChoice(1, "Mic: " + (voice?.MicrophoneLabel ?? "Windows default"), m_Model.ChangeMicrophone);
         }
@@ -149,9 +153,10 @@ namespace TiltBrush
             bool fresh = CHRISPanel.ApprovalCurrent(reviewedApproval, context, CHRISCommandGateway.Now);
             bool ready = (bool)context["ready"] && !(bool)context["stroke_active"];
             if (m_Model.WaitingForRelease) m_Status.text = m_Model.Notice;
-            else if (!proposalMatchesReview) m_Status.text = "This proposal changed or was cancelled. Re-record or edit your request.";
-            else if (!fresh) m_Status.text = "The sketch changed or this review expired. Re-record or edit your request.";
+            else if (!proposalMatchesReview) m_Status.text = "This proposal changed or was cancelled. Re-record your request.";
+            else if (!fresh) m_Status.text = "The sketch changed or this review expired. Re-record your request.";
             else if (!ready) m_Status.text = "Wait for the sketch to be ready before confirming.";
+            else if (m_Model.Speech.Error != null) m_Status.text = m_Model.Speech.Error;
             else m_Status.text = m_ReviewPages.Length == 1 ? "Review these exact commands. Confirm to apply them in order." :
                 "Review page " + (m_ReviewPage + 1) + " of " + m_ReviewPages.Length + ". Read every page before confirming.";
             ConfigureChoice(0, "Confirm commands", () => m_Model.Decide(true),
@@ -200,22 +205,6 @@ namespace TiltBrush
                 client.Resume();
             else
                 client.Refresh();
-        }
-
-        void EnterRequest()
-        {
-            if (m_Model == null) return;
-            long intent = m_Model.BeginCorrection();
-            KeyboardPopUpWindow.m_InitialText = m_Model.Prompt;
-            var obj = m_ParentPanel.CreatePopUp(m_Resources.KeyboardPrefab, transform.position - transform.forward * 0.3f, true, true);
-            var keyboard = obj.GetComponentInChildren<KeyboardUI>();
-            keyboard.KeyPressed += (sender, key) =>
-            {
-                if (key.IsPress && key.Key.KeyType == KeyboardKeyType.Enter)
-                {
-                    m_Model.CompleteTextEdit(intent, keyboard.ConsoleContent);
-                }
-            };
         }
 
         protected override void DestroyPopUpWindow()

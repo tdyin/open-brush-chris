@@ -96,11 +96,10 @@ namespace TiltBrush
         }
 
         [Test]
-        public void NativeAssetsProvideMenuPopupKeyboardAndClickableButtons()
+        public void NativeAssetsProvideMenuPopupAndClickableButtons()
         {
             var resources = CHRISUIResources.Load();
             Assert.That(resources, Is.Not.Null); Assert.That(resources.Font, Is.Not.Null); Assert.That(resources.SurfaceShader, Is.Not.Null);
-            Assert.That(resources.KeyboardPrefab.GetComponent<KeyboardPopUpWindow>(), Is.Not.Null);
             Assert.That(resources.PopupPrefab.GetComponent<CHRISNativePopup>(), Is.Not.Null);
             Assert.That(resources.PopupPrefab.GetComponent<UIComponentManager>(), Is.Not.Null);
             Assert.That(resources.PopupPrefab.GetComponent<BoxCollider>().size, Is.EqualTo(new Vector3(3.8f, 4, 0.1f)));
@@ -186,16 +185,16 @@ namespace TiltBrush
         {
             const string output = "Build/CHRISNativeUI";
             Directory.CreateDirectory(output);
-            CHRISVoiceBuild.VerifyResources();
-            string[] keys = { "CHRIS.AssistanceTask", "CHRIS.AssistancePending", "CHRIS.AssistanceCancel" };
+            CHRISCloudVoiceBuild.VerifyNoLegacyResources();
+            string[] keys = { "CHRIS.AssistanceTask", "CHRIS.AssistancePending", "CHRIS.AssistanceCancel", CHRISConfirmationSpeech.Preference };
             var hadKeys = keys.Select(PlayerPrefs.HasKey).ToArray();
             var savedStrings = keys.Take(2).Select(k => PlayerPrefs.GetString(k, "")).ToArray();
-            int savedCancel = PlayerPrefs.GetInt(keys[2], 0);
+            var savedInts = keys.Skip(2).Select(k => PlayerPrefs.GetInt(k, 0)).ToArray();
             try
             {
             TestCHRISAssistance.Exported.Clear();
             int tests = 0;
-            foreach (var suite in new object[] { new TestCHRISNativeUI(), new TestCHRISAssistance() })
+            foreach (var suite in new object[] { new TestCHRISNativeUI(), new TestCHRISAssistance(), new TestCHRISCloudVoice() })
                 foreach (var method in suite.GetType().GetMethods().Where(m => m.GetCustomAttributes(typeof(TestAttribute), false).Length > 0))
                 {
                     method.Invoke(suite, null);
@@ -210,7 +209,7 @@ namespace TiltBrush
                 for (int i = 0; i < keys.Length; i++)
                 {
                     if (!hadKeys[i]) PlayerPrefs.DeleteKey(keys[i]);
-                    else if (i == 2) PlayerPrefs.SetInt(keys[i], savedCancel);
+                    else if (i >= 2) PlayerPrefs.SetInt(keys[i], savedInts[i - 2]);
                     else PlayerPrefs.SetString(keys[i], savedStrings[i]);
                 }
                 PlayerPrefs.Save();
@@ -281,6 +280,14 @@ namespace TiltBrush
                 Assert.That(popupObject.GetComponentsInChildren<TextMeshPro>().Any(t =>
                     t.text == "Release the trigger or mouse button to continue."), Is.True);
                 capture("assist-release", popupObject);
+                var speechToggle = popupObject.GetComponentsInChildren<CHRISNativeButton>().Single(b => b.name == "AI confirmation voice");
+                Assert.That(speechToggle.IsAvailable(), Is.True, "Speech can be disabled while confirmation waits for release");
+                bool wasEnabled = model.Speech.SpeechEnabled;
+                speechToggle.Click();
+                Assert.That(model.Speech.SpeechEnabled, Is.EqualTo(!wasEnabled));
+                Assert.That(model.WaitingForRelease, Is.True, "Speech toggle is never approval");
+                TestCHRISAssistance.Call(popup, "Draw"); capture("assist-speech-toggle", popupObject);
+                speechToggle.Click();
                 Property(model.Assistance, "TaskId", null); Property(model.Assistance, "PendingRequest", null);
                 long stops = host.StopCount;
                 popupObject.GetComponentsInChildren<CHRISNativeButton>().Single(b => b.name == "Local Stop").Click();

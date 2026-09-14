@@ -1,92 +1,84 @@
-# CHRIS offline speech (Windows PCVR)
+# CHRIS cloud voice (Windows PCVR)
 
-This implementation uses a thin C# binding to the official Vosk C API. Recognition
-runs locally on a worker thread; only finalized text goes to the existing CHRIS
-planning service. Audio and partial transcripts are transient. No speech route,
-cloud speech provider, continuously listening mode, or spoken confirmation exists.
+Unity captures microphone audio and plays approval readouts. The CHRIS Python
+service owns credentials, exact model selection and structured logging. This
+replaces Vosk; there is no local-model fallback. Use Record/Finish; re-record to replace a request.
+Only finalized text starts planning; only explicit Confirm authorizes execution.
 
-## Choice and limits
+## Transcription
 
-- [Vosk's official Unity guidance](https://alphacephei.com/vosk/unity) provides a
-  C#/Mono sample with streaming partial and final recognition. The inspected sample
-  revision is `6cc1d5a2a2837e570e32eec4f0ada383a5e94d04`; the sample project is not
-  imported. The bundled native library is the official Windows x64 **0.3.45**
-  release. Newer inspected Vosk releases do not publish a Windows x64 artifact.
-- The [small US English 0.15 model](https://alphacephei.com/vosk/models) is the
-  development default: about 40 MB downloaded. Vosk documents roughly 300 MB
-  runtime memory for small models. Other languages require a separately selected,
-  tested, and pinned model. Accents, proper names, and brush names may need typing
-  correction. Published benchmark accuracy is not headset acceptance evidence.
-- [whisper.cpp's stream example](https://github.com/ggml-org/whisper.cpp/tree/master/examples/stream)
-  was considered as another local option. Its official example repeatedly
-  transcribes microphone windows and uses SDL2; Vosk's streaming API and official
-  Unity sample offer a smaller integration for this bounded first version. No
-  comparative accuracy/latency benchmark or claim is made.
-- Record explicitly, then tap Finish. Capture is 16 kHz, downmixed to mono, with
-  100 ms chunks and at most two seconds of queued audio. Recording is limited to
-  60 seconds; reaching the limit cancels without submitting. Loading/finalizing
-  has a 20-second timeout. A slow recognizer or missing device fails visibly and
-  leaves typing available. The model loads on demand for each recording.
-- Use the microphone selector to cycle Windows default and enumerated devices.
-  Quest microphone routing over Link/Air Link, Windows privacy settings, live
-  partial quality, model-load latency and finalization latency require user
-  testing on the actual headset. Native input/build checks do not prove these.
+Exact `gpt-4o-transcribe` runs through a Realtime transcription session. Phrase
+updates arrive during the manual recording, often after pauses. This does not
+promise word-by-word text during uninterrupted speech. VAD completion never ends
+the recording or starts planning. Finish flushes and waits for one ordered final.
+The [model page](https://developers.openai.com/api/docs/models/gpt-4o-transcribe)
+lists Realtime transcription support; the current
+[live guide](https://developers.openai.com/api/docs/guides/realtime-transcription)
+also describes newer models, which this integration does not substitute.
 
-## Reproducible preparation
+The fixed loopback WebSocket is `ws://127.0.0.1:8765/voice/transcribe`:
 
-From the Unity project root, with Python 3.12 or newer:
+- First text frame: `{"type":"start","session_id":"<fresh GUID>"}`.
+- Wait for matching `ready`, then binary PCM16 little-endian mono 24 kHz,
+  at most 4,800 bytes/frame (100 ms), at most two seconds of queued audio.
+- Finish: `{"type":"finish","session_id":"<same GUID>"}`. Cancel/disconnect
+  closes the stream. There is no reconnect or audio replay.
+- Server events carry `type`, `session_id`, and full-so-far `text` for `partial`
+  and `final`; errors carry a safe `code`. Only one final after Finish is accepted.
 
-```powershell
-python Support/Python/acquire-chris-voice.py
-```
+Recording is limited to 60 seconds and 2,000 transcript characters. Startup times
+out after 10 seconds; finalization after 20. Failures stop capture and show connection/microphone guidance for re-recording. Audio and partial text are transient. Provider availability, quality
+and latency need live acceptance with the configured account and headset.
 
-The script downloads the exact archives in `resources.json`, checks SHA-256 before
-extracting, creates Windows-only plugin import settings, and copies license
-notices. Resources go into ignored `Assets/Plugins/CHRISVoice` and
-`Assets/StreamingAssets/CHRISVoice`; archives are cached under ignored `Build`.
-Use `--cache-dir` to reuse verified archives. No acquisition occurs at runtime.
+## Spoken confirmation
 
-The Windows build preprocessor verifies the archive pins, every installed file
-hash, and plugin import settings. The output includes the offline model and
-licenses under `OpenBrush_Data/StreamingAssets/CHRISVoice`. Do not copy only the
-EXE: keep the complete build directory together.
+**AI voice: On/Off** defaults On and remembers the local choice. A fresh valid
+review requests one readout of its complete immutable summary, including every
+ordered action/value and review page. Polling/redraw and Off/On do not replay an
+already attempted approval. Confirm never waits for speech to end.
 
-Vosk and the English model are Apache-2.0. The official Windows archive also
-contains GCC runtime DLLs (GPL-3.0 with the GCC Runtime Library Exception) and
-MinGW winpthreads. License texts are included in `licenses/` and copied into the
-player; the existing DLLs are redistributed unchanged. Sources are available at
-[Vosk v0.3.45](https://github.com/alphacep/vosk-api/tree/v0.3.45),
-[GCC](https://gcc.gnu.org/git.html), and
-[MinGW-w64](https://github.com/mingw-w64/mingw-w64).
+`POST /voice/speech` sends `speech_id`, `task_id`, `approval_id`, `action_digest`
+and exact `summary`. Python checks identity, validity and summary before and
+after synthesis using exact `gpt-4o-mini-tts`. The response is `audio/pcm`, mono
+signed16 little-endian 24 kHz with matching `X-Speech-Id`. Unity bounds it to
+2,880,000 bytes (60 seconds) before decoding. Invalid, oversized or stale audio
+never plays. The full summary is sent; failures never silently truncate it.
+See the official [TTS guide](https://developers.openai.com/api/docs/guides/text-to-speech).
 
-The pinned Vosk Windows build recipe also links Kaldi, OpenFst, OpenBLAS 0.3.20
-and CLAPACK 3.2.1 (including f2c). Their upstream license notices are included.
-The recipe uses moving branches for Kaldi/OpenFst; the official binary archive
-hash pins what is distributed here, rather than claiming a reproducible source
-rebuild of those upstream dependencies.
+Off stops audio immediately. Stop, correction, new recording, panel close,
+approval change and expiry stop playback and discard late responses. Pending
+synthesis is aborted and cancelled with `POST /voice/speech/<speech_id>/cancel`
+and `{}`. The native selection sound plays before capture; capture waits for its
+duration plus a 250 ms quiet interval. Haptics mark actual listening and Finish;
+the Finish sound plays after capture stops. Device acoustic echo still needs testing.
 
-## Review and execution
+## Controller shortcut
 
-Finish automatically submits finalized text for planning, not execution. The
-service supplies one summary of its exact validated list of one to five actions.
-The native UI freezes that summary with its approval. Longer summaries have
-Previous/Next pages; Confirm becomes available after every page is viewed.
-Editing, re-recording, changing microphones or pressing STOP invalidates pending
-input and approval. Replacement planning waits for the old task's cancellation
-acknowledgment; late cancelled or superseded callbacks cannot submit a request.
+On **Quest/OpenXR**, while CHRIS is open, click the **non-drawing hand's joystick**
+(Wand role) to start. Release, then click again to finish. Holding never repeats.
+Record/Finish remains available on the panel, including other controller profiles.
 
-The gateway validates the whole segment before applying anything. It dispatches
-one action, verifies readback, then considers the next action on a later frame.
-Stop/manual takeover/expiry stops remaining actions. Completed counts report only
-verified actions; an uncertain mutation is `unverified`, never blindly replayed.
-The Direct palette and its ownership contract are removed. Normal Open Brush
-drawing and inputs, floating-panel interaction and local STOP buttons remain.
+The source audit found no command binding for this click: `ThumbButton` maps to
+`VrInput.Thumbstick` and `Directional`; context/reset/duplicate use primary buttons,
+menu/redo use secondary, and grabbing uses grip. Stick touch and axes still navigate
+the native panels. The shortcut leaves grip, trigger and face buttons unchanged.
+Steam Frame has an additional PadButton alias, so support is restricted to the
+audited Oculus Touch profile or detected Oculus Touch hardware.
 
-## Deterministic checks
+Opening, closing, hand-role changes and tracking recovery require a held joystick
+click to release before another action. This applies in Basic/Advanced and follows
+handedness rather than fixed left. Confirm still checks physical grip/trigger
+release. There is no grip reservation or global grab delay.
 
-Use Unity's **CHRIS / Verify native UI (Edit mode)** menu or batch entry point
-`TiltBrush.TestCHRISNativeUI.Run`. This exercises the real native segment ledger
-with in-memory action adapters, speech callback state without microphone/model
-inference, correction/review guards, floating-panel interactions and rendered UI.
-It exports native protocol fixtures under `Build/CHRISNativeUI`. User headset
-acceptance remains a separate step before M3.
+## Build and verification
+
+No speech binaries/model downloads are needed. Older checkouts must remove the
+generated `Assets/Plugins/CHRISVoice` and `Assets/StreamingAssets/CHRISVoice`
+directories; a preprocessor rejects these retired resources during builds.
+
+Run `TiltBrush.TestCHRISNativeUI.Run` or the CHRIS editor menu. Checks use in-memory
+command adapters, a mocked WebSocket, PCM samples and generation/shortcut state;
+they do not launch a player, access a microphone or call a model. Headset
+acceptance must cover account access, mic routing, phrase updates, exact readout,
+Off/Stop/late audio, both handedness settings, Basic/Advanced, and grab/menu
+conflicts. Physical comfort and recognition quality remain unverified before M3.

@@ -62,9 +62,9 @@ namespace TiltBrush
                     if (Task == null)
                         return "Saved task needs checking. Select Retry.";
                     if (CanReview)
-                        return "Review the commands, or re-record / edit to replace this request.";
+                        return "Review the commands, or re-record to replace this request.";
                     if ((string)Task["status"] == "awaiting_approval")
-                        return "This old or invalid proposal must be cancelled. Re-record or edit to request a new one.";
+                        return "This old or invalid proposal must be cancelled. Re-record to request a new one.";
                     if ((string)Task["status"] == "paused" || (string)Task["status"] == "unverified")
                         return "Task needs reconciliation. Select Retry or STOP.";
                     return "A task is in progress. Wait or select STOP.";

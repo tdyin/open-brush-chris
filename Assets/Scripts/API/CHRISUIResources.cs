@@ -10,7 +10,6 @@ namespace TiltBrush
     {
         public Shader SurfaceShader;
         public TMP_FontAsset Font;
-        public GameObject KeyboardPrefab;
         public GameObject PopupPrefab;
         public static CHRISUIResources Load() => Resources.Load<CHRISUIResources>("CHRIS/UI");
         public GameObject Surface(Transform parent, string name, Vector3 position, Vector2 size, Color color)

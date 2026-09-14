@@ -51,7 +51,7 @@ namespace TiltBrush
             text = text?.Trim();
             if (!ValidText(text, allowEmpty: false))
             {
-                Fail(id, "No valid speech recognized. Re-record or type your request.");
+                Fail(id, "No valid speech recognized. Please re-record your request.");
                 return false;
             }
             Transcript = text;

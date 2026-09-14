@@ -13,5 +13,4 @@ MonoBehaviour:
   m_EditorClassIdentifier:
   SurfaceShader: {fileID: 4800000, guid: d5fa22b5dc8af0341ac6b66fa7c71dec, type: 3}
   Font: {fileID: 11400000, guid: fce54057bad3d2d4cb3c36ee394be518, type: 2}
-  KeyboardPrefab: {fileID: 8644332587479430734, guid: bdb7d2ac05cca8346b210c2b576878cb, type: 3}
   PopupPrefab: {fileID: 100000, guid: b2fefc944710408b813c486c1c47c930, type: 3}

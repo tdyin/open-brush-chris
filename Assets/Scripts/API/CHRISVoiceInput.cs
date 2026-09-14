@@ -2,7 +2,6 @@
 // Licensed under the Apache License, Version 2.0.
 using System;
 using System.Collections.Concurrent;
-using System.IO;
 using System.Linq;
 using System.Threading;
 using System.Threading.Tasks;
@@ -10,12 +9,12 @@ using UnityEngine;
 
 namespace TiltBrush
 {
-    // Unity microphone access is main-thread only. Audio is transient and recognition is local.
+    // Unity microphone access is main-thread only. Transient PCM goes to the loopback relay.
     public sealed class CHRISVoiceInput : MonoBehaviour
     {
-        public const int SampleRate = 16000;
+        public const int SampleRate = CHRISAudio.SampleRate;
         public const int MaxRecordingSeconds = 60;
-        const int ChunkFrames = 1600;
+        const int ChunkFrames = 2400;
         const float ProviderTimeoutSeconds = 20;
 
         sealed class Run
@@ -38,6 +37,7 @@ namespace TiltBrush
         public event Action Changed;
         public event Action<string> Finalized;
         internal Func<string[]> Devices { get; set; } = () => Microphone.devices;
+        internal Func<float> PlayStartCue { get; set; }
         readonly ConcurrentQueue<Message> m_Messages = new ConcurrentQueue<Message>();
         Run m_Run;
         AudioClip m_Clip;
@@ -46,6 +46,8 @@ namespace TiltBrush
         float m_PhaseStarted;
         bool m_StartRequested;
         bool m_MicrophoneOwned;
+        bool m_ReadyPending;
+        float m_CaptureNotBefore;
 
         public string Status
         {
@@ -53,11 +55,11 @@ namespace TiltBrush
             {
                 switch (Session.State)
                 {
-                    case CHRISVoiceSession.Phase.Loading: return "Loading local speech recognition...";
-                    case CHRISVoiceSession.Phase.Recording: return "Listening. Tap Finish to plan your request.";
+                    case CHRISVoiceSession.Phase.Loading: return "Connecting speech recognition...";
+                    case CHRISVoiceSession.Phase.Recording: return "Listening. Text updates after pauses. Finish when done.";
                     case CHRISVoiceSession.Phase.Finalizing: return "Finishing transcript...";
                     case CHRISVoiceSession.Phase.Failed: return Session.Error;
-                    default: return "Tap Record to speak, or edit your request.";
+                    default: return "Tap Record or click the non-drawing joystick while CHRIS is open.";
                 }
             }
         }
@@ -67,10 +69,11 @@ namespace TiltBrush
             CancelRecording();
             Session.Begin();
             m_PhaseStarted = Time.realtimeSinceStartup;
+            m_CaptureNotBefore = m_PhaseStarted + 0.25f;
 #if UNITY_STANDALONE_WIN || UNITY_EDITOR_WIN
             m_StartRequested = true;
 #else
-            Session.Fail(Session.Id, "Local speech is available in the Windows PCVR build. Please type your request.");
+            Session.Fail(Session.Id, "Speech input is available in the Windows PCVR build. Use the Windows PCVR player.");
 #endif
             Changed?.Invoke();
         }
@@ -90,6 +93,7 @@ namespace TiltBrush
         {
             Session.Cancel();
             m_StartRequested = false;
+            m_ReadyPending = false;
             ReleaseMicrophone();
             m_Run?.Cancel.Cancel();
             Changed?.Invoke();
@@ -107,40 +111,21 @@ namespace TiltBrush
         void StartWorker()
         {
             m_StartRequested = false;
-            string modelPath = Path.Combine(Application.streamingAssetsPath, "CHRISVoice", "vosk-model-small-en-us-0.15");
-            if (!File.Exists(Path.Combine(modelPath, "am", "final.mdl")))
-            {
-                Fail("Local speech resources are missing. Please use a prepared build or type your request.");
-                return;
-            }
             var run = new Run { Id = Session.Id };
             m_Run = run;
-            run.Worker = Task.Run(() => Recognize(run, modelPath));
+            run.Worker = Task.Run(() => Recognize(run));
         }
 
-        void Recognize(Run run, string modelPath)
+        async Task Recognize(Run run)
         {
             try
             {
-                using (var recognizer = new CHRISVoskRecognizer(modelPath))
-                {
-                    run.Cancel.Token.ThrowIfCancellationRequested();
-                    Post(run, "ready", "");
-                    foreach (var samples in run.Audio.GetConsumingEnumerable(run.Cancel.Token))
-                    {
-                        string partial = recognizer.Accept(samples);
-                        if (!CHRISVoiceSession.ValidText(partial, allowEmpty: true))
-                            throw new InvalidOperationException("Transcript limit exceeded.");
-                        Post(run, "partial", partial);
-                    }
-                    run.Cancel.Token.ThrowIfCancellationRequested();
-                    Post(run, "final", recognizer.Finish());
-                }
+                await new CHRISCloudTranscription().Run(run.Audio, run.Cancel.Token, (kind, text) => Post(run, kind, text));
             }
             catch (OperationCanceledException) { }
             catch (Exception)
             {
-                Post(run, "error", "Local speech recognition failed. Re-record or type your request.");
+                Post(run, "error", "Cloud speech unavailable. Check the CHRIS service and connection, then re-record.");
             }
         }
 
@@ -158,7 +143,7 @@ namespace TiltBrush
             string[] devices = Devices();
             if (devices.Length == 0 || (SelectedMicrophone != null && !devices.Contains(SelectedMicrophone)))
             {
-                Fail("Microphone unavailable. Choose a Windows input device or type your request.");
+                Fail("Microphone unavailable. Choose an available Windows input device.");
                 return;
             }
             try
@@ -173,7 +158,7 @@ namespace TiltBrush
             }
             catch (Exception)
             {
-                Fail("Cannot access the microphone. Check Windows microphone permission or type your request.");
+                Fail("Cannot access the microphone. Check Windows microphone permission.");
             }
         }
 
@@ -206,7 +191,7 @@ namespace TiltBrush
             }
             catch (Exception)
             {
-                Fail("Microphone or recognition could not keep up. Re-record a shorter request or type it.");
+                Fail("Microphone or recognition could not keep up. Re-record a shorter request.");
             }
         }
 
@@ -214,6 +199,7 @@ namespace TiltBrush
         {
             Session.Fail(Session.Id, error);
             m_StartRequested = false;
+            m_ReadyPending = false;
             ReleaseMicrophone();
             m_Run?.Cancel.Cancel();
             Changed?.Invoke();
@@ -244,20 +230,34 @@ namespace TiltBrush
                 m_Run = null;
             }
             if (m_StartRequested && m_Run == null) StartWorker();
+            if (m_ReadyPending && Time.realtimeSinceStartup >= m_CaptureNotBefore)
+            {
+                m_ReadyPending = false;
+                BeginMicrophone(Session.Id);
+                Changed?.Invoke();
+            }
             if (Session.State == CHRISVoiceSession.Phase.Recording)
             {
                 if (Time.realtimeSinceStartup - m_PhaseStarted >= MaxRecordingSeconds)
                     Fail("Recording reached 60 seconds. Re-record a shorter request, then tap Finish.");
                 else CaptureAudio(flush: false);
             }
-            else if (Session.IsActive && Time.realtimeSinceStartup - m_PhaseStarted > ProviderTimeoutSeconds)
-                Fail("Speech recognition timed out. Please type your request or try again.");
+            else if (Session.IsActive && Time.realtimeSinceStartup - m_PhaseStarted >
+                (Session.State == CHRISVoiceSession.Phase.Loading ? 10 : ProviderTimeoutSeconds))
+                Fail("Speech recognition timed out. Check the connection and re-record.");
         }
 
         internal void Receive(long id, string kind, string text)
         {
             if (id != Session.Id || !Session.IsActive) return;
-            if (kind == "ready") BeginMicrophone(id);
+            if (kind == "ready")
+            {
+                // The cue completes before capture begins; the haptic marks actual listening.
+                float cueDuration = PlayStartCue?.Invoke() ?? 0;
+                m_PhaseStarted = Time.realtimeSinceStartup;
+                m_CaptureNotBefore = m_PhaseStarted + cueDuration + 0.25f;
+                m_ReadyPending = true;
+            }
             else if (kind == "partial") Session.Partial(id, text);
             else if (kind == "error") Fail(text);
             else if (kind == "final" && Session.Complete(id, text)) Finalized?.Invoke(Session.Transcript);

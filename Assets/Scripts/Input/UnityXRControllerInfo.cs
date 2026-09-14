@@ -29,6 +29,31 @@ namespace TiltBrush
         private const float kInputScrollScalar = 0.5f;
 
         private bool isBrush = false;
+        readonly CHRISVoiceShortcut m_VoiceShortcut = new CHRISVoiceShortcut();
+        int m_VoiceSampleFrame = -1;
+
+        internal bool RawVrInput(VrInput input) => MapVrInput(input);
+
+        void SampleVoiceShortcut()
+        {
+            if (m_VoiceSampleFrame == Time.frameCount) return;
+            m_VoiceSampleFrame = Time.frameCount;
+            var panel = CHRISPanel.Instance;
+            // Quest/OpenXR is audited. Other controller profiles retain their native click bindings.
+            bool supported = Behavior.ControllerGeometry.Style == ControllerStyle.OculusTouch ||
+                (device.name ?? "").Contains("Oculus Touch");
+            bool scope = panel != null && panel.Popup != null && panel.Popup.IsOpen() &&
+                supported && InputManager.m_Instance != null && InputManager.Controllers != null && ReferenceEquals(InputManager.Wand, this);
+            bool tracked = device.isValid && device.TryGetFeatureValue(UnityEngine.XR.CommonUsages.isTracked, out bool isTracked) && isTracked && !IsStylusActive();
+            if (m_VoiceShortcut.Sample(scope, tracked, isBrush, MapVrInput(VrInput.Thumbstick)))
+                panel.QueueVoiceShortcut(this);
+        }
+
+        bool VoiceConsumes(VrInput input)
+        {
+            SampleVoiceShortcut();
+            return m_VoiceShortcut.Suppresses(input);
+        }
 
         private StylusInputs stylusState => VrStylusHandler.m_Instance?.CurrentState;
 
@@ -338,8 +363,7 @@ namespace TiltBrush
         /// Returns the value of the specified button (level trigger).
         public override bool GetVrInput(VrInput input)
         {
-            //Debug.Log("Get Input");
-            return MapVrInput(input);
+            return !VoiceConsumes(input) && MapVrInput(input);
         }
 
         private bool MapVrInputPerFrame(VrInput input, bool down)
@@ -388,13 +412,13 @@ namespace TiltBrush
         /// Returns true if the specified button was just pressed (rising-edge trigger).
         public override bool GetVrInputDown(VrInput input)
         {
-            return MapVrInputPerFrame(input, true);
+            return !VoiceConsumes(input) && MapVrInputPerFrame(input, true);
         }
 
         /// Returns true if the specified input has just been deactivated (falling-edge trigger).
         public override bool GetVrInputUp(VrInput input)
         {
-            return MapVrInputPerFrame(input, false);
+            return !VoiceConsumes(input) && MapVrInputPerFrame(input, false);
         }
         public override void TriggerControllerHaptics(float seconds)
         {
