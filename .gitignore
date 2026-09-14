@@ -5,6 +5,8 @@
 /Build/
 /Library/
 /Logs/
+/agent/logs/
+/agent/errs/
 
 # Automatically created by Support/ tools (builds, analyze_refgraph, etc)
 /Support/tmp_steam/
@@ -27,6 +29,7 @@
 /*.CSharp.*user
 *.suo
 /*.sln
+/*.slnx
 /*.userprefs
 .vsconfig
 .vs
