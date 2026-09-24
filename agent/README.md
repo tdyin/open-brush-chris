@@ -41,6 +41,21 @@ generated evidence in ignored `agent/logs`, and failure captures in ignored
 - The CHRIS `view.move` contract forwards to native `user.move` behavior through
   `ApiMethods.MoveUserBy`, using fixed room/world XYZ and native units. Do not
   reinterpret values in head or sketch coordinates during cleanup.
+- Keyboard/mouse mapping (v0.1.1): `C:\Dev\chris` owns the schema (`schemas/`),
+  the shared cases and the rules in its `agent/README.md` ("v0.1.1 mapping
+  execution path"). `CHRISInputMapping` must give the same result code as its
+  generated, gitignored `schemas/v0.1.1/fixtures/cases.json`, which the editor
+  check reads in place (sibling `../chris` or `CHRIS_REPO`). If the folder is
+  missing, run `uv run python -m chris.core.mapping_cases` in that repository;
+  Unity never runs Python. The mapping loads
+  from `<persistentDataPath>/CHRIS/active-mapping.json` at startup and on the
+  `chris.mapping.reload` API command, with no file watcher and no Python.
+  With no active mapping, the brush trigger path is exactly the native one.
+  The committed Enter Play Mode Options skip the domain and scene reloads, so
+  CHRIS static state resets itself on `SubsystemRegistration`. Startup logs
+  `HttpListener listening on http://127.0.0.1:40074/`, `API commands
+  registered: N; chris.mapping.reload present` and a `CHRIS mapping` line
+  naming the full path it checked.
 
 ## Upstream integration points
 
@@ -53,7 +68,7 @@ Directory grouping does not require new generic interfaces or assembly splits.
 | `Assets/Scripts/App.cs` | Allow editor checks to exercise internal runtime contracts through the existing editor assembly. |
 | `Assets/Scripts/GUI/BasePanel.cs` | Reserve the CHRIS panel type. |
 | `Assets/Scripts/GUI/PanelManager.cs` | Check availability and lazily construct the optional floating panel. |
-| `Assets/Scripts/Input/UnityXRControllerInfo.cs` | Sample and scope the audited joystick recording shortcut. |
+| `Assets/Scripts/Input/UnityXRControllerInfo.cs` | Sample and scope the audited joystick recording shortcut; OR the active mapping's draw into the brush trigger (level, edges and value 1). |
 | `Assets/Prefabs/Panels/LabsPanel.prefab` | Provide the native CHRIS launcher. |
 
 Shared native meshes, fonts, icon atlas and UI base classes remain in their

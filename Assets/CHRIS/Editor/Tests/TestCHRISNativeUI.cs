@@ -319,7 +319,7 @@ namespace TiltBrush
             {
             TestCHRISAssistance.Exported.Clear();
             int tests = 0;
-            foreach (var suite in new object[] { new TestCHRISNativeUI(), new TestCHRISAssistance(), new TestCHRISCloudVoice(), new TestCHRISCompanion() })
+            foreach (var suite in new object[] { new TestCHRISNativeUI(), new TestCHRISAssistance(), new TestCHRISCloudVoice(), new TestCHRISCompanion(), new TestCHRISInputMapping(), new TestCHRISInputRemap() })
                 foreach (var method in suite.GetType().GetMethods().Where(m => m.GetCustomAttributes(typeof(TestAttribute), false).Length > 0))
                 {
                     method.Invoke(suite, null);
@@ -328,7 +328,8 @@ namespace TiltBrush
             Render(output);
             File.WriteAllText(output + "/protocol-fixtures.json", TestCHRISAssistance.Exported.ToString());
             File.WriteAllText(output + "/companion-profiling.json", TestCHRISCompanion.Measurements.ToString());
-            File.WriteAllText(output + "/checks.txt", "PASS: " + tests + " native regression methods; ordered segments, whole-list validation, replay, Stop/takeover/expiry, delayed panels, numeric/rotation tolerances, Python wire fixtures, cancelled/replaced speech callbacks, missing microphone/provider errors, correction/legacy-summary guards, floating native UI. No Play mode, HTTP, microphone recording, speech/model inference or sketch changes.");
+            File.WriteAllText(output + "/mapping-cases.txt", TestCHRISInputMapping.Verdicts.ToString());
+            File.WriteAllText(output + "/checks.txt", "PASS: " + tests + " native regression methods; ordered segments, whole-list validation, replay, Stop/takeover/expiry, delayed panels, numeric/rotation tolerances, Python wire fixtures, cancelled/replaced speech callbacks, missing microphone/provider errors, correction/legacy-summary guards, floating native UI, v0.1.1 input mapping cases and draw remap state. No Play mode, HTTP, microphone recording, speech/model inference or sketch changes.");
             }
             finally
             {

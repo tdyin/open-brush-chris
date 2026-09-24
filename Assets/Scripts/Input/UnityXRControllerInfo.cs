@@ -296,6 +296,15 @@ namespace TiltBrush
 
         public override float GetTriggerValue()
         {
+            // A CHRIS-mapped draw is a fully pressed trigger.
+            if (isBrush)
+            {
+                CHRISInputMappingHost.Tick();
+                if (CHRISInputMappingHost.Remap.DrawHeld)
+                {
+                    return 1f;
+                }
+            }
             if (IsStylusActive())
             {
                 return Math.Max(stylusState.tip_value, stylusState.cluster_middle_value);
@@ -364,9 +373,28 @@ namespace TiltBrush
             return false;
         }
 
+        // While a CHRIS mapping is active (and on the frame it releases), the brush trigger is the
+        // physical trigger OR the mapped draw input, with edges taken from that combined state.
+        readonly CHRISCombinedTrigger m_CombinedTrigger = new CHRISCombinedTrigger();
+
+        bool UsesCombinedTrigger(VrInput input)
+        {
+            if (!isBrush || input != VrInput.Trigger)
+            {
+                return false;
+            }
+            CHRISInputMappingHost.Tick();
+            m_CombinedTrigger.Sample(Time.frameCount, MapVrInput(VrInput.Trigger), CHRISInputMappingHost.Remap.DrawHeld);
+            return CHRISInputMappingHost.Remap.Active != null || CHRISInputMappingHost.Remap.DrawUp;
+        }
+
         /// Returns the value of the specified button (level trigger).
         public override bool GetVrInput(VrInput input)
         {
+            if (UsesCombinedTrigger(input))
+            {
+                return !VoiceConsumes(input) && m_CombinedTrigger.Held;
+            }
             return !VoiceConsumes(input) && MapVrInput(input);
         }
 
@@ -416,12 +444,20 @@ namespace TiltBrush
         /// Returns true if the specified button was just pressed (rising-edge trigger).
         public override bool GetVrInputDown(VrInput input)
         {
+            if (UsesCombinedTrigger(input))
+            {
+                return !VoiceConsumes(input) && m_CombinedTrigger.Down;
+            }
             return !VoiceConsumes(input) && MapVrInputPerFrame(input, true);
         }
 
         /// Returns true if the specified input has just been deactivated (falling-edge trigger).
         public override bool GetVrInputUp(VrInput input)
         {
+            if (UsesCombinedTrigger(input))
+            {
+                return !VoiceConsumes(input) && m_CombinedTrigger.Up;
+            }
             return !VoiceConsumes(input) && MapVrInputPerFrame(input, false);
         }
         public override void TriggerControllerHaptics(float seconds)
