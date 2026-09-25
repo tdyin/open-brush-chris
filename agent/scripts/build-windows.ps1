@@ -13,7 +13,7 @@ if (-not (Test-Path -LiteralPath $UnityPath -PathType Leaf)) {
 }
 
 function Get-DirtyPaths {
-    $raw = git -C $projectRoot status --porcelain=v1 -z --untracked-files=all
+    $raw = git -C $projectRoot -c core.safecrlf=false status --porcelain=v1 -z --untracked-files=all
     $entries = @{}
     if ($raw) {
         foreach ($item in ($raw -split "`0")) {
@@ -88,8 +88,8 @@ if ($sideEffects.Count -gt 0) {
     $tracked = @($sideEffects | Where-Object { $dirtyAfter[$_] -ne '??' })
     $untracked = @($sideEffects | Where-Object { $dirtyAfter[$_] -eq '??' })
     if ($tracked.Count -gt 0) {
-        git -C $projectRoot diff --binary -- $tracked | Set-Content -LiteralPath (Join-Path $logDir 'build-side-effects.patch') -Encoding utf8
-        git -C $projectRoot checkout -- $tracked
+        git -C $projectRoot -c core.safecrlf=false diff --binary -- $tracked | Set-Content -LiteralPath (Join-Path $logDir 'build-side-effects.patch') -Encoding utf8
+        git -C $projectRoot -c core.safecrlf=false checkout -- $tracked
     }
     foreach ($path in $untracked) {
         $saved = Join-Path $logDir (Join-Path 'untracked' $path)
@@ -117,16 +117,16 @@ if ($result -ne 'Success' -or -not (Test-Path -LiteralPath $exePath) -or $errors
 # Snapshot the exact source of this build so a later commit can be checked against it.
 $sourceDir = Join-Path $logDir 'source'
 New-Item -ItemType Directory -Force -Path $sourceDir | Out-Null
-git -C $projectRoot diff --binary HEAD | Set-Content -LiteralPath (Join-Path $sourceDir 'tracked.patch') -Encoding utf8 -NoNewline
-foreach ($path in (git -C $projectRoot ls-files --others --exclude-standard)) {
+git -C $projectRoot -c core.safecrlf=false diff --binary HEAD | Set-Content -LiteralPath (Join-Path $sourceDir 'tracked.patch') -Encoding utf8 -NoNewline
+foreach ($path in (git -C $projectRoot -c core.safecrlf=false ls-files --others --exclude-standard)) {
     $saved = Join-Path $sourceDir (Join-Path 'untracked' $path)
     New-Item -ItemType Directory -Force -Path (Split-Path $saved) | Out-Null
     Copy-Item -LiteralPath (Join-Path $projectRoot $path) -Destination $saved
 }
 
-$head = git -C $projectRoot rev-parse --short HEAD
-$branch = git -C $projectRoot branch --show-current
-$dirty = git -C $projectRoot status --short
+$head = git -C $projectRoot -c core.safecrlf=false rev-parse --short HEAD
+$branch = git -C $projectRoot -c core.safecrlf=false branch --show-current
+$dirty = git -C $projectRoot -c core.safecrlf=false status --short
 @(
     "Build: CHRIS-$Name-$stamp",
     "Branch: $branch at $head (uncommitted changes listed below are included)",

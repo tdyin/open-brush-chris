@@ -196,7 +196,9 @@ namespace TiltBrush
 
         public override bool IsTrackedObjectValid
         {
-            get => device.isValid;
+            // While a CHRIS move_brush mapping owns the brush pose, the brush counts as present even if
+            // the physical controller is resting or asleep, so it shows and paints at the mapped tip.
+            get => device.isValid || (isBrush && CHRISInputMappingHost.BrushPoseOwned);
             set
             {
 

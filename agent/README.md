@@ -70,7 +70,7 @@ Directory grouping does not require new generic interfaces or assembly splits.
 | `Assets/Scripts/GUI/PanelManager.cs` | Check availability and lazily construct the optional floating panel. |
 | `Assets/Scripts/InputManager.cs` | While a CHRIS mapping uses mouse movement, drop the mouse branch of `GetBrushScrollAmount` and `GetMouseMoveDelta`. |
 | `Assets/Scripts/SketchControlsScript.cs` | Make `CanUndo` internal so mapped undo uses the native gate. |
-| `Assets/Scripts/Input/UnityXRControllerInfo.cs` | Sample and scope the audited joystick recording shortcut; OR the active mapping's draw into the brush trigger (level, edges and value 1). |
+| `Assets/Scripts/Input/UnityXRControllerInfo.cs` | Sample and scope the audited joystick recording shortcut; OR the active mapping's draw into the brush trigger (level, edges and value 1); report the brush as present while CHRIS move_brush owns its pose. |
 | `Assets/Prefabs/Panels/LabsPanel.prefab` | Provide the native CHRIS launcher. |
 
 Shared native meshes, fonts, icon atlas and UI base classes remain in their

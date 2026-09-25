@@ -271,6 +271,91 @@ namespace TiltBrush
         }
 
         [Test]
+        public void BrushKeysMoveDuringStrokesAndStopOnFocusOrStop()
+        {
+            var mapping = CHRISInputMapping.Load(System.IO.Path.Combine(TestCHRISInputMapping.Fixtures, "valid_keys_brush_wasd_view.json"));
+            var brush = mapping.Find(CHRISMappedAction.MoveBrush);
+            Assert.That(brush.Source, Is.EqualTo(CHRISMappingSource.KeyVector2));
+            var (remap, input) = Activated(mapping);
+            Assert.That(remap.MouseDeltaMapped, Is.False, "Keyboard-only layout leaves mouse movement to Open Brush");
+            input.Held.UnionWith(new[] { "key." + brush.Up, "key." + brush.Right });
+            remap.Tick(input, true, true);
+            Assert.That(Vector2.Distance(remap.BrushKeys, new Vector2(1, 1).normalized), Is.LessThan(1e-5f),
+                "Brush keys move during a stroke, normalised");
+            Assert.That(remap.ViewKeys, Is.EqualTo(Vector2.zero), "View movement is still ignored during a stroke");
+            remap.Tick(input, false, true);
+            Assert.That(remap.BrushKeys, Is.EqualTo(Vector2.zero), "Focus loss halts the brush");
+            remap.Tick(input, true, false);
+            Assert.That(remap.BrushKeys, Is.EqualTo(Vector2.zero), "Keys held through focus loss need a fresh press");
+            input.Held.Clear();
+            remap.Tick(input, true, false);
+            input.Held.Add("key." + brush.Left);
+            remap.Tick(input, true, false);
+            Assert.That(remap.BrushKeys, Is.EqualTo(new Vector2(-1, 0)));
+            input.StopPressedThisFrame = true;
+            remap.Tick(input, true, false);
+            Assert.That(remap.BrushKeys, Is.EqualTo(Vector2.zero), "Stop halts the brush");
+        }
+
+        [Test]
+        public void BrushPlaneFacesTheHeadAndClampsTheTip()
+        {
+            var plane = new CHRISBrushPlane();
+            var head = new Vector3(1, 17, 2);
+            plane.Activate(head, new Vector3(0, 0, 1), Vector3.forward, 5, 6);
+            Assert.That(Vector3.Distance(plane.Tip, head + new Vector3(0, 0, 5)), Is.LessThan(1e-5f), "Starts at the origin, distance ahead");
+            Assert.That(Vector3.Distance(plane.Right, Vector3.right), Is.LessThan(1e-5f));
+            Assert.That(Vector3.Distance(plane.Up, Vector3.up), Is.LessThan(1e-5f));
+            Assert.That(Vector3.Distance(plane.Rotation * Vector3.forward, Vector3.forward), Is.LessThan(1e-5f), "Points away from the user");
+            plane.Move(new Vector2(2, -1));
+            Assert.That(Vector3.Distance(plane.Tip, head + new Vector3(2, -1, 5)), Is.LessThan(1e-5f));
+            plane.Move(new Vector2(100, -100));
+            Assert.That(plane.Offset, Is.EqualTo(new Vector2(6, -6)), "Clamped at the edge without wrapping");
+
+            // Pitch is kept for the normal; the axes stay level (roll dropped).
+            var pitchedDown = new Vector3(0, -1, 1).normalized;
+            plane.Activate(Vector3.zero, pitchedDown, Vector3.forward, 5, 6);
+            Assert.That(Vector3.Distance(plane.Origin, pitchedDown * 5), Is.LessThan(1e-5f));
+            Assert.That(plane.Right.y, Is.EqualTo(0).Within(1e-5f), "No roll");
+            Assert.That(Vector3.Dot(plane.Up, plane.Normal), Is.EqualTo(0).Within(1e-5f));
+            Assert.That(plane.Offset, Is.EqualTo(Vector2.zero), "Reactivation re-anchors at the origin");
+
+            // Looking straight down falls back to the last valid yaw for the axes.
+            plane.Activate(Vector3.zero, Vector3.down, Vector3.left, 5, 6);
+            Assert.That(Vector3.Distance(plane.Right, Vector3.Cross(Vector3.up, Vector3.left)), Is.LessThan(1e-5f));
+        }
+
+        [Test]
+        public void BrushOwnershipMakesBrushPresentAndHandBackRestoresTracking()
+        {
+            // The brush counts as present exactly while CHRIS owns its pose (IsTrackedObjectValid
+            // ORs BrushPoseOwned for the brush). Hand-back restores the driver's previous state.
+            var host = typeof(CHRISInputMappingHost);
+            const BindingFlags flags = BindingFlags.NonPublic | BindingFlags.Static;
+            var obj = new GameObject("CHRIS brush pose test");
+            try
+            {
+                var driver = obj.AddComponent<UnityEngine.SpatialTracking.TrackedPoseDriver>();
+                driver.enabled = true;
+                Assert.That(CHRISInputMappingHost.BrushPoseOwned, Is.False, "Nothing owned by default");
+
+                host.GetField("s_Driver", flags).SetValue(null, driver);
+                host.GetField("s_DriverWasEnabled", flags).SetValue(null, true);
+                driver.enabled = false;
+                Assert.That(CHRISInputMappingHost.BrushPoseOwned, Is.True, "Owned: the brush counts as present");
+
+                host.GetMethod("ReleaseBrush", flags).Invoke(null, null);
+                Assert.That(CHRISInputMappingHost.BrushPoseOwned, Is.False, "Hand-back: physical presence applies again");
+                Assert.That(driver.enabled, Is.True, "Hand-back restores the controller's tracking driver");
+            }
+            finally
+            {
+                host.GetMethod("ResetForPlay", flags).Invoke(null, null);
+                Object.DestroyImmediate(obj);
+            }
+        }
+
+        [Test]
         public void NewMappingWaitsForNeutral()
         {
             var (remap, input) = Activated(Space());
