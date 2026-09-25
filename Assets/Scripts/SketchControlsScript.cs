@@ -1706,7 +1706,7 @@ namespace TiltBrush
             UnityEngine.Profiling.Profiler.EndSample();
         }
 
-        bool CanUndo()
+        internal bool CanUndo()
         {
             return SketchMemoryScript.m_Instance.CanUndo() &&
                 !IsUIBlockingUndoRedo() &&

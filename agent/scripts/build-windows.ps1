@@ -114,6 +114,16 @@ if ($result -ne 'Success' -or -not (Test-Path -LiteralPath $exePath) -or $errors
     throw "Build failed (result: $result). See $logPath"
 }
 
+# Snapshot the exact source of this build so a later commit can be checked against it.
+$sourceDir = Join-Path $logDir 'source'
+New-Item -ItemType Directory -Force -Path $sourceDir | Out-Null
+git -C $projectRoot diff --binary HEAD | Set-Content -LiteralPath (Join-Path $sourceDir 'tracked.patch') -Encoding utf8 -NoNewline
+foreach ($path in (git -C $projectRoot ls-files --others --exclude-standard)) {
+    $saved = Join-Path $sourceDir (Join-Path 'untracked' $path)
+    New-Item -ItemType Directory -Force -Path (Split-Path $saved) | Out-Null
+    Copy-Item -LiteralPath (Join-Path $projectRoot $path) -Destination $saved
+}
+
 $head = git -C $projectRoot rev-parse --short HEAD
 $branch = git -C $projectRoot branch --show-current
 $dirty = git -C $projectRoot status --short

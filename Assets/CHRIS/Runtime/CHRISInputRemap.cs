@@ -1,6 +1,7 @@
 // Copyright 2026 The Open Brush Authors
 // Licensed under the Apache License, Version 2.0.
 using System.Collections.Generic;
+using System.Linq;
 using System.IO;
 using UnityEngine;
 using UnityEngine.InputSystem;
@@ -13,6 +14,10 @@ namespace TiltBrush
     {
         bool IsPressed(string input);
         bool StopPressedThisFrame { get; }
+        // Vertical wheel this frame, in notches (+ is away from the user). May be fractional.
+        float WheelNotches { get; }
+        // Mouse movement this frame in pixels (+x right, +y forward/away from the user).
+        Vector2 MouseDelta { get; }
     }
 
     // Applies an active v0.1.1 mapping once per frame. Plain class so editor checks can drive it.
@@ -20,18 +25,31 @@ namespace TiltBrush
     // - a new mapping takes effect only when neutral: none of its or the current mapping's inputs
     //   held and no stroke in progress;
     // - Stop (Escape) releases everything and deactivates the mapping;
-    // - focus loss releases everything; after it, a held input does nothing until pressed again.
+    // - focus loss releases everything; after it, a held input does nothing until pressed again;
+    // - wheel notches, undo presses and view movement while unfocused are discarded; brush_size and
+    //   move_view are ignored during a stroke (undo is gated by native CanUndo in the host).
     public sealed class CHRISInputRemap
     {
         CHRISInputMapping m_Active, m_Pending;
         readonly HashSet<string> m_Latched = new HashSet<string>();
-        bool m_Unfocused;
+        bool m_Unfocused, m_UndoHeld;
+        float m_Wheel;
 
         public CHRISInputMapping Active => m_Active;
         public bool HasPending => m_Pending != null;
         public bool DrawHeld { get; private set; }
         public bool DrawDown { get; private set; }
         public bool DrawUp { get; private set; }
+        // One per press of the mapped undo input; holding does not repeat.
+        public bool UndoPressed { get; private set; }
+        // Whole wheel notches to apply this frame; fractions carry to the next frame.
+        public int SizeNotches { get; private set; }
+        // Held move_view keys as a direction (+x right, +y forward), length 0 or 1.
+        public Vector2 ViewKeys { get; private set; }
+        // Mapped mouse movement for move_view this frame, in pixels.
+        public Vector2 ViewMouse { get; private set; }
+        public bool MouseDeltaMapped => Mapped(CHRISMappedAction.MoveView, CHRISMappingSource.MouseDelta) ||
+            Mapped(CHRISMappedAction.MoveBrush, CHRISMappingSource.MouseDelta);
 
         public void Offer(CHRISInputMapping mapping) => m_Pending = mapping;
 
@@ -41,6 +59,8 @@ namespace TiltBrush
             m_Pending = null;
             m_Latched.Clear();
             SetDraw(false);
+            ClearMotion();
+            m_UndoHeld = false;
         }
 
         public void Tick(ICHRISInputState input, bool focused, bool strokeInProgress)
@@ -54,6 +74,7 @@ namespace TiltBrush
             {
                 m_Unfocused = true;
                 SetDraw(false);
+                ClearMotion();
                 return;
             }
             if (m_Unfocused)
@@ -68,14 +89,60 @@ namespace TiltBrush
             {
                 m_Active = m_Pending;
                 m_Pending = null;
+                ClearMotion();
+                m_UndoHeld = false;
             }
 
             var draw = m_Active?.Find(CHRISMappedAction.Draw);
             bool held = false;
             if (draw != null)
                 foreach (var name in CHRISInputMapping.Inputs(draw))
-                    held |= input.IsPressed(name) && !m_Latched.Contains(name);
+                    held |= Held(input, name);
             SetDraw(held);
+
+            var undo = m_Active?.Find(CHRISMappedAction.Undo);
+            bool undoHeld = undo != null && Held(input, CHRISInputMapping.Inputs(undo).First());
+            UndoPressed = undoHeld && !m_UndoHeld;
+            m_UndoHeld = undoHeld;
+
+            SizeNotches = 0;
+            if (m_Active?.Find(CHRISMappedAction.BrushSize) == null || strokeInProgress)
+                m_Wheel = 0;
+            else
+            {
+                m_Wheel += input.WheelNotches;
+                SizeNotches = (int)m_Wheel; // truncates toward zero; the remainder carries
+                m_Wheel -= SizeNotches;
+            }
+
+            ViewKeys = Vector2.zero;
+            ViewMouse = Vector2.zero;
+            var view = m_Active?.Find(CHRISMappedAction.MoveView);
+            if (view != null && !strokeInProgress)
+            {
+                if (view.Source == CHRISMappingSource.MouseDelta)
+                    ViewMouse = input.MouseDelta;
+                else
+                {
+                    var keys = new Vector2(
+                        (Held(input, "key." + view.Right) ? 1 : 0) - (Held(input, "key." + view.Left) ? 1 : 0),
+                        (Held(input, "key." + view.Up) ? 1 : 0) - (Held(input, "key." + view.Down) ? 1 : 0));
+                    ViewKeys = keys == Vector2.zero ? keys : keys.normalized;
+                }
+            }
+        }
+
+        bool Held(ICHRISInputState input, string name) => input.IsPressed(name) && !m_Latched.Contains(name);
+
+        bool Mapped(CHRISMappedAction action, CHRISMappingSource source) => m_Active?.Find(action)?.Source == source;
+
+        void ClearMotion()
+        {
+            UndoPressed = false;
+            SizeNotches = 0;
+            m_Wheel = 0;
+            ViewKeys = Vector2.zero;
+            ViewMouse = Vector2.zero;
         }
 
         void SetDraw(bool held)
@@ -101,6 +168,24 @@ namespace TiltBrush
                     if (input.IsPressed(name)) return true;
             return false;
         }
+    }
+
+    // Horizontal heading for move_view: the head's forward projected onto the horizontal room plane,
+    // re-read every frame. Looking almost straight up or down keeps the last valid heading.
+    public sealed class CHRISViewHeading
+    {
+        public const float MinProjection = 0.2f;
+        public Vector3 Forward { get; private set; } = Vector3.forward;
+        public Vector3 Right => Vector3.Cross(Vector3.up, Forward);
+
+        public void Update(Vector3 headForward)
+        {
+            var flat = new Vector3(headForward.x, 0, headForward.z);
+            if (flat.magnitude >= MinProjection) Forward = flat.normalized;
+        }
+
+        // x = right, y = forward, in the same units as the result.
+        public Vector3 ToRoom(Vector2 local) => Right * local.x + Forward * local.y;
     }
 
     // Brush trigger as physical OR mapped draw, with edges from that combined state. Sampled once per
@@ -131,6 +216,9 @@ namespace TiltBrush
         readonly Dictionary<string, ButtonControl> m_Keys = new Dictionary<string, ButtonControl>();
 
         public bool StopPressedThisFrame => Keyboard.current != null && Keyboard.current.escapeKey.wasPressedThisFrame;
+        // InputSystem.inputsettings m_ScrollDeltaBehavior 0 (uniform): one wheel notch reads as 1.
+        public float WheelNotches => Mouse.current != null ? Mouse.current.scroll.y.ReadValue() : 0f;
+        public Vector2 MouseDelta => Mouse.current != null ? Mouse.current.delta.ReadValue() : Vector2.zero;
 
         public bool IsPressed(string input)
         {
@@ -163,7 +251,15 @@ namespace TiltBrush
     // The project enters Play mode without a domain reload, so all state is reset on entry.
     public static class CHRISInputMappingHost
     {
+        // Native constants (Open Brush units; 10 units per metre by App.METERS_TO_UNITS, not a
+        // physical measurement). Agreed with C:\Dev\chris agent/README.md step 3 rules.
+        public const float BrushSizeStep01 = 0.05f;
+        public const float ViewKeySpeed = 15f;       // units per second
+        public const float ViewMouseScale = 0.02f;   // units per pixel of mouse movement
+
         public static CHRISInputRemap Remap { get; private set; } = new CHRISInputRemap();
+        public static CHRISViewHeading Heading { get; private set; } = new CHRISViewHeading();
+        public static bool MouseDeltaMapped => Remap.MouseDeltaMapped;
         static CHRISInputMappingStore s_Store = new CHRISInputMappingStore();
         static bool s_Started, s_ShortcutsOwned, s_ShortcutsBefore;
         static int s_Frame = -1;
@@ -172,6 +268,7 @@ namespace TiltBrush
         static void ResetForPlay()
         {
             Remap = new CHRISInputRemap();
+            Heading = new CHRISViewHeading();
             s_Store = new CHRISInputMappingStore();
             s_Started = s_ShortcutsOwned = s_ShortcutsBefore = false;
             s_Frame = -1;
@@ -200,6 +297,29 @@ namespace TiltBrush
             if (!wasActive && Remap.Active != null) Debug.Log("CHRIS mapping active: Open Brush keyboard shortcuts off, Escape stops");
             if (wasActive && Remap.Active == null) Debug.Log("CHRIS mapping stopped: shortcuts restored; reload to use it again");
             SyncShortcuts();
+            Apply();
+        }
+
+        // Carries out this frame's undo, brush size and view movement through native operations.
+        static void Apply()
+        {
+            var sketch = SketchControlsScript.m_Instance;
+            if (Remap.UndoPressed && sketch != null && sketch.CanUndo())
+                sketch.IssueGlobalCommand(SketchControlsScript.GlobalCommands.Undo);
+
+            var pointers = PointerManager.m_Instance;
+            if (Remap.SizeNotches != 0 && pointers != null)
+            {
+                pointers.AdjustAllPointersBrushSize01(BrushSizeStep01 * Remap.SizeNotches);
+                pointers.MarkAllBrushSizeUsed();
+                App.Switchboard.TriggerBrushSizeChanged();
+            }
+
+            var head = ViewpointScript.Head;
+            if (head != null) Heading.Update(head.forward);
+            Vector2 local = Remap.ViewKeys * (ViewKeySpeed * Time.deltaTime) + Remap.ViewMouse * ViewMouseScale;
+            if (local != Vector2.zero && App.Scene != null)
+                ApiMethods.MoveUserBy(Heading.ToRoom(local));
         }
 
         [ApiEndpoint("chris.mapping.reload",

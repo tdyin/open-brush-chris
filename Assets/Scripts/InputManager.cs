@@ -807,7 +807,8 @@ namespace TiltBrush
 
         public Vector2 GetMouseMoveDelta()
         {
-            if (App.Config.IsMobileHardware)
+            // A CHRIS mapping that uses mouse movement owns it while active.
+            if (App.Config.IsMobileHardware || CHRISInputMappingHost.MouseDeltaMapped)
             {
                 return Vector2.zero;
             }
@@ -874,8 +875,8 @@ namespace TiltBrush
 
         public float GetBrushScrollAmount()
         {
-            // Check mouse first.
-            if (!App.Config.IsMobileHardware)
+            // Check mouse first, unless a CHRIS mapping owns mouse movement.
+            if (!App.Config.IsMobileHardware && !CHRISInputMappingHost.MouseDeltaMapped)
             {
                 float fMouse = Mouse.current.delta.x.ReadValue();
                 if (Mathf.Abs(fMouse) > m_InputThreshold)

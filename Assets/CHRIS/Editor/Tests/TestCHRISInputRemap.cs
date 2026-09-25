@@ -15,7 +15,15 @@ namespace TiltBrush
             public readonly HashSet<string> Held = new HashSet<string>();
             public bool StopPressedThisFrame { get; set; }
             public bool IsPressed(string input) => Held.Contains(input);
+            public float WheelNotches { get; set; }
+            public Vector2 MouseDelta { get; set; }
         }
+
+        // Every step 3 action: keys draw/undo/view, wheel size.
+        static CHRISInputMapping AllKeys() => Mapping("{\"type\":\"key\",\"key\":\"space\"}",
+            ",{\"id\":\"undo\",\"source\":{\"type\":\"key\",\"key\":\"z\"},\"action\":\"undo\"}" +
+            ",{\"id\":\"size\",\"source\":{\"type\":\"mouse_wheel\"},\"action\":\"brush_size\"}" +
+            ",{\"id\":\"view\",\"source\":{\"type\":\"key_vector2\",\"up\":\"w\",\"down\":\"s\",\"left\":\"a\",\"right\":\"d\"},\"action\":\"move_view\"}");
 
         static CHRISInputMapping Mapping(string drawSource, string extra = "") => CHRISInputMapping.Parse(Encoding.UTF8.GetBytes(
             "{\"version\":\"v0.1.1\",\"app\":\"openbrush\",\"profile\":\"keyboard_mouse\",\"mappings\":[" +
@@ -146,6 +154,120 @@ namespace TiltBrush
                 Assert.That((bool)shortcutsOwned.GetValue(null), Is.False);
             }
             finally { reset.Invoke(null, null); }
+        }
+
+        [Test]
+        public void UndoFiresOncePerPress()
+        {
+            var (remap, input) = Activated(AllKeys());
+            input.Held.Add("key.z");
+            remap.Tick(input, true, false);
+            Assert.That(remap.UndoPressed, Is.True);
+            for (int i = 0; i < 5; i++)
+            {
+                remap.Tick(input, true, false);
+                Assert.That(remap.UndoPressed, Is.False, "Holding does not repeat");
+            }
+            input.Held.Remove("key.z");
+            remap.Tick(input, true, false);
+            input.Held.Add("key.z");
+            remap.Tick(input, true, false);
+            Assert.That(remap.UndoPressed, Is.True, "A new press undoes again");
+            remap.Tick(input, false, false);
+            Assert.That(remap.UndoPressed, Is.False);
+            remap.Tick(input, true, false);
+            Assert.That(remap.UndoPressed, Is.False, "A press held through focus loss needs a fresh press");
+        }
+
+        [Test]
+        public void WheelStepsWholeNotchesOutsideStrokes()
+        {
+            var (remap, input) = Activated(AllKeys());
+            input.WheelNotches = 1;
+            remap.Tick(input, true, false);
+            Assert.That(remap.SizeNotches, Is.EqualTo(1));
+            input.WheelNotches = 0.5f;
+            remap.Tick(input, true, false);
+            Assert.That(remap.SizeNotches, Is.EqualTo(0), "A half notch waits");
+            remap.Tick(input, true, false);
+            Assert.That(remap.SizeNotches, Is.EqualTo(1), "Halves add up to one notch");
+            input.WheelNotches = -2;
+            remap.Tick(input, true, false);
+            Assert.That(remap.SizeNotches, Is.EqualTo(-2), "Towards the user is smaller");
+            input.WheelNotches = 0.75f;
+            remap.Tick(input, true, true);
+            Assert.That(remap.SizeNotches, Is.EqualTo(0), "Ignored during a stroke");
+            input.WheelNotches = 0.5f;
+            remap.Tick(input, true, false);
+            Assert.That(remap.SizeNotches, Is.EqualTo(0), "Nothing from the stroke carries over");
+            input.WheelNotches = 3;
+            remap.Tick(input, false, false);
+            Assert.That(remap.SizeNotches, Is.EqualTo(0), "Discarded while unfocused");
+
+            var (drawOnly, other) = Activated(Space());
+            other.WheelNotches = 3;
+            drawOnly.Tick(other, true, false);
+            Assert.That(drawOnly.SizeNotches, Is.EqualTo(0), "An unmapped wheel is left to Open Brush");
+        }
+
+        [Test]
+        public void ViewKeysNormaliseCancelAndStop()
+        {
+            var (remap, input) = Activated(AllKeys());
+            input.Held.UnionWith(new[] { "key.w", "key.d" });
+            remap.Tick(input, true, false);
+            Assert.That(Vector2.Distance(remap.ViewKeys, new Vector2(1, 1).normalized), Is.LessThan(1e-5f), "Diagonals are normalised");
+            input.Held.Add("key.s");
+            remap.Tick(input, true, false);
+            Assert.That(remap.ViewKeys, Is.EqualTo(new Vector2(1, 0)), "Opposite keys cancel");
+            remap.Tick(input, true, true);
+            Assert.That(remap.ViewKeys, Is.EqualTo(Vector2.zero), "Ignored during a stroke");
+            remap.Tick(input, false, false);
+            Assert.That(remap.ViewKeys, Is.EqualTo(Vector2.zero), "Focus loss halts movement");
+            remap.Tick(input, true, false);
+            Assert.That(remap.ViewKeys, Is.EqualTo(Vector2.zero), "Keys held through focus loss need a fresh press");
+            input.Held.Clear();
+            remap.Tick(input, true, false);
+            input.Held.Add("key.a");
+            remap.Tick(input, true, false);
+            Assert.That(remap.ViewKeys, Is.EqualTo(new Vector2(-1, 0)));
+            input.StopPressedThisFrame = true;
+            remap.Tick(input, true, false);
+            Assert.That(remap.ViewKeys, Is.EqualTo(Vector2.zero), "Stop halts movement");
+        }
+
+        [Test]
+        public void SharedMouseViewCaseOwnsMouseMovement()
+        {
+            var mapping = CHRISInputMapping.Load(System.IO.Path.Combine(TestCHRISInputMapping.Fixtures, "valid_mouse_view_middle_undo.json"));
+            var (remap, input) = Activated(mapping);
+            Assert.That(remap.MouseDeltaMapped, Is.True);
+            input.MouseDelta = new Vector2(30, -10);
+            remap.Tick(input, true, false);
+            Assert.That(remap.ViewMouse, Is.EqualTo(new Vector2(30, -10)));
+            remap.Tick(input, true, true);
+            Assert.That(remap.ViewMouse, Is.EqualTo(Vector2.zero), "Ignored during a stroke");
+            input.Held.Add("mouse.middle");
+            remap.Tick(input, true, false);
+            Assert.That(remap.UndoPressed, Is.True, "Undo on the middle button");
+            input.StopPressedThisFrame = true;
+            remap.Tick(input, true, false);
+            Assert.That(remap.MouseDeltaMapped, Is.False, "Stop gives mouse movement back to Open Brush");
+            Assert.That(Activated(AllKeys()).Item1.MouseDeltaMapped, Is.False);
+        }
+
+        [Test]
+        public void HeadingFollowsYawAndSurvivesLookingStraightDown()
+        {
+            var heading = new CHRISViewHeading();
+            heading.Update(new Vector3(1, -0.5f, 1));
+            Assert.That(Vector3.Distance(heading.Forward, new Vector3(1, 0, 1).normalized), Is.LessThan(1e-5f), "Pitch is ignored");
+            Assert.That(Vector3.Distance(heading.Right, new Vector3(1, 0, -1).normalized), Is.LessThan(1e-5f));
+            heading.Update(new Vector3(0.05f, -0.99f, 0.05f));
+            Assert.That(Vector3.Distance(heading.Forward, new Vector3(1, 0, 1).normalized), Is.LessThan(1e-5f), "Keeps the last valid heading");
+            heading.Update(new Vector3(0, 0, -1));
+            Assert.That(heading.ToRoom(new Vector2(0, 2)), Is.EqualTo(new Vector3(0, 0, -2)), "Forward follows a turn");
+            Assert.That(heading.ToRoom(new Vector2(1, 0)).y, Is.EqualTo(0), "No vertical movement");
         }
 
         [Test]
