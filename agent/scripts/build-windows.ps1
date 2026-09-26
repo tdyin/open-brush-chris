@@ -184,7 +184,7 @@ if ($result -ne 'Success' -or -not (Test-Path -LiteralPath $exePath) -or $errors
 # Snapshot the exact source of this build so a later commit can be checked against it.
 $sourceDir = Join-Path $logDir 'source'
 New-Item -ItemType Directory -Force -Path $sourceDir | Out-Null
-git -C $projectRoot -c core.safecrlf=false diff --binary HEAD | Set-Content -LiteralPath (Join-Path $sourceDir 'tracked.patch') -Encoding utf8 -NoNewline
+& (Join-Path $PSScriptRoot 'write-source-patch.ps1') -Repository $projectRoot -Output (Join-Path $sourceDir 'tracked.patch')
 foreach ($path in (git -C $projectRoot -c core.safecrlf=false ls-files --others --exclude-standard)) {
     $saved = Join-Path $sourceDir (Join-Path 'untracked' $path)
     New-Item -ItemType Directory -Force -Path (Split-Path $saved) | Out-Null

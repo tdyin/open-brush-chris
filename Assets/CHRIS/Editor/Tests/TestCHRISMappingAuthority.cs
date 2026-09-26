@@ -30,10 +30,11 @@ namespace TiltBrush
             return JObject.Parse(File.ReadAllText(path));
         }
 
-        static void Tick(CHRISMappingAuthority authority, CHRISInputRemap remap, FakeInput input)
+        static void Tick(CHRISMappingAuthority authority, CHRISInputRemap remap, FakeInput input,
+            bool focused = true, bool stroke = false)
         {
-            authority.TryActivate(input, true, false, remap);
-            remap.Tick(input, true, false);
+            authority.TryActivate(input, focused, stroke, remap);
+            remap.Tick(input, focused, stroke);
             if (input.StopPressedThisFrame) authority.Stop();
             else authority.CompleteActivation(remap);
         }
@@ -147,6 +148,60 @@ namespace TiltBrush
                 Assert.That((string)authority.Status()["active_mapping_json"], Is.EqualTo(before));
                 Assert.That((string)authority.Status()["last_request_result"], Is.EqualTo("cancelled"));
                 Assert.That(File.ReadAllText(path), Is.EqualTo(external), "An external edit is never overwritten");
+            }
+            finally { if (File.Exists(path)) File.Delete(path); }
+        }
+
+        [Test]
+        public void UnfocusedPendingMappingWaitsForFocusAndNeutralBeforePersistence()
+        {
+            var wire = Wire();
+            string before = (string)wire["before"]["active_mapping_json"];
+            string proposed = (string)wire["apply_request"]["mapping_json"];
+            string path = Path.Combine(Path.GetTempPath(), "chris-mapping-" + Guid.NewGuid().ToString("N") + ".json");
+            File.WriteAllText(path, before, new UTF8Encoding(false));
+            try
+            {
+                var authority = new CHRISMappingAuthority(path);
+                var remap = new CHRISInputRemap();
+                var input = new FakeInput();
+                authority.OfferLoaded(CHRISInputMapping.Parse(Encoding.UTF8.GetBytes(before)), Encoding.UTF8.GetBytes(before));
+                Tick(authority, remap, input);
+                var request = (JObject)wire["apply_request"].DeepClone();
+                request["expected_session_id"] = authority.Status()["session_id"];
+                request["expected_revision"] = authority.Status()["revision"];
+                var pending = authority.Apply(request);
+                Assert.That((string)pending["result"], Is.EqualTo("pending_neutral"));
+
+                Tick(authority, remap, input, focused: false);
+                Assert.That((string)authority.Status()["state"], Is.EqualTo("pending_neutral"),
+                    "A neutral frame without XR focus cannot activate the mapping");
+                Assert.That(File.ReadAllText(path), Is.EqualTo(before));
+
+                input.Held.Add("key.space");
+                Tick(authority, remap, input, focused: false);
+                Assert.That((string)authority.Status()["state"], Is.EqualTo("pending_neutral"));
+                Assert.That(File.ReadAllText(path), Is.EqualTo(before), "Focus loss cannot persist a candidate");
+
+                Tick(authority, remap, input);
+                Assert.That((string)authority.Status()["state"], Is.EqualTo("pending_neutral"),
+                    "The old input held through refocus still blocks activation");
+                input.Held.Clear();
+                Tick(authority, remap, input, stroke: true);
+                Assert.That((string)authority.Status()["state"], Is.EqualTo("pending_neutral"),
+                    "An existing stroke still blocks activation");
+                input.Held.Add("mouse.left");
+                Tick(authority, remap, input);
+                Assert.That((string)authority.Status()["state"], Is.EqualTo("pending_neutral"),
+                    "The candidate's held draw input still blocks activation");
+                Assert.That(File.ReadAllText(path), Is.EqualTo(before));
+
+                input.Held.Clear();
+                Tick(authority, remap, input);
+                Assert.That((string)authority.Status()["state"], Is.EqualTo("active"));
+                Assert.That((string)authority.Status()["active_request_id"], Is.EqualTo("r-7"));
+                Assert.That(File.ReadAllText(path), Is.EqualTo(proposed),
+                    "The exact approved bytes persist only on a focused neutral frame");
             }
             finally { if (File.Exists(path)) File.Delete(path); }
         }

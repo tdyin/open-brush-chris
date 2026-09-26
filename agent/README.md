@@ -2,8 +2,8 @@
 
 ## Working checkout and ownership
 
-Use this repository root on
-`codex/chris-native-companion`. The former `Build/CHRISUI-worktree` checkout
+Use this repository root, currently on `uni/v0.1.1-input-mapping` (the
+`codex/chris-native-companion` branch is its consolidated base). The former `Build/CHRISUI-worktree` checkout
 has been retired after root verification and local evidence preservation.
 Pixel owns native implementation
 and shared Git operations, Iris owns design content, and Logic owns the Python
@@ -51,6 +51,19 @@ generated evidence in ignored `agent/logs`, and failure captures in ignored
   from `<persistentDataPath>/CHRIS/active-mapping.json` at startup and on the
   `chris.mapping.reload` API command, with no file watcher and no Python.
   With no active mapping, the brush trigger path is exactly the native one.
+  A proposed mapping waits in memory until desktop and XR display focus are
+  present, no stroke is in progress, and neither the old nor proposed mapping's
+  inputs are held. Only then does native persist its exact approved bytes and
+  switch runtime mapping. Escape Stop cancels pending work and deactivates the
+  runtime mapping; after mapped drawing or focus loss, a physical trigger held
+  through the transition needs release and a fresh press. The logical Brush
+  role follows Open Brush's handedness swap. A failed reload preserves the
+  previous active mapping. `GET /chris/mapping/status` reports exact active and
+  pending JSON/digests plus session and mapping revision; the latest request
+  receipt (`last_request_id`/`last_request_result`) is separate from active and
+  pending ownership IDs, so a lost apply reply is checked by status rather than
+  blindly retried. A duplicate request is rejected without replacing that
+  receipt.
   If the default generated fixture directory is inaccessible, set the test-only
   `CHRIS_MAPPING_TEST_FIXTURES` environment variable to a readable directory
   containing `cases.json` and its case files. The current byte-matched local copy
@@ -98,6 +111,9 @@ override the editor executable. The helper resolves this checkout from its own
 location, rejects a second editor for the same project, and records its editor
 log and exit code in `agent/logs/native-ui-runs/<timestamp>/`. Current layout
 renders and protocol fixtures go to `agent/logs/native-ui/`.
+Run `./agent/scripts/test-build-source-patch.ps1` to verify that the build
+helper's Git patch replays text line endings and binary bytes in an isolated
+local fixture. It writes only ignored evidence under `agent/logs/`.
 
 The approved directory relocation passed all 30 native editor checks. All 11
 preview PNGs matched the pre-move root renders byte-for-byte, with no source
@@ -114,6 +130,10 @@ The user reported that the functional acceptance sequence passed for earlier
 source `0b7dae2e3e1e93ee3fdf73c3428bc559d54cc828`; keep its player at
 `Build/CHRIS-M2-hover-fix-20260914/` as the accepted backup. This does not establish
 headset acceptance of later polish or a quantitative usability study.
+On September 25, after the `55e042bb` native activation/status checkpoint and
+the corresponding backend `6e3cfb` checkpoint, the user reported that the
+supplied 12-item headset recheck sequence passed ("Tests are good"). No
+per-step logs, timings, or independent headset measurements were captured.
 
 Checkpoint `c42330f488ce83c68d1e88df7c304393741d5b8e` preserves the preexisting
 font state used by verified players. Do not revert that font as generated dirt.
