@@ -10,10 +10,16 @@ namespace TiltBrush
     [DefaultExecutionOrder(-100)]
     public class CHRISFloatingPanel : BasePanel
     {
+        const float InitialForwardDistanceMeters = 0.75f;
+        const float InitialRightDistanceMeters = 0.32f;
+        const float InitialDownDistanceMeters = 0.08f;
+        const float MinimumDragDistance = 0.1f;
+
         public bool IsDragging { get; private set; }
 
-        float m_DragDistance;
-        Vector3 m_DragOffset;
+        float m_DragRayDistance;
+        Vector3 m_DragPositionOffset;
+
         public static CHRISFloatingPanel Create(Transform parent)
         {
             var obj = new GameObject("CHRIS floating panel");
@@ -72,7 +78,8 @@ namespace TiltBrush
             if (forward.sqrMagnitude < 0.01f)
                 forward = Vector3.forward;
             var right = Vector3.Cross(Vector3.up, forward);
-            transform.position = head.position + App.METERS_TO_UNITS * (forward * 0.75f + right * 0.32f - Vector3.up * 0.08f);
+            transform.position = head.position + App.METERS_TO_UNITS *
+                (forward * InitialForwardDistanceMeters + right * InitialRightDistanceMeters - Vector3.up * InitialDownDistanceMeters);
             FaceUser(head.position);
         }
 
@@ -87,7 +94,7 @@ namespace TiltBrush
             m_Mesh.transform.rotation = transform.rotation;
         }
 
-        static bool PointerRay(out Ray ray)
+        static bool TryGetPointerRay(out Ray ray)
         {
             ray = default;
             if (InputManager.m_Instance == null)
@@ -106,7 +113,7 @@ namespace TiltBrush
 
         public void BeginDrag()
         {
-            if (!PointerRay(out var ray) || PanelPopUp == null || !PanelPopUp.IsOpen())
+            if (!TryGetPointerRay(out var ray) || PanelPopUp == null || !PanelPopUp.IsOpen())
                 return;
             CHRISPanel.Instance?.StopLocal(); // A pending confirmation must not survive a move gesture.
             BeginDrag(ray, SketchControlsScript.m_Instance.GetUIReticlePos());
@@ -114,8 +121,8 @@ namespace TiltBrush
 
         public void BeginDrag(Ray ray, Vector3 hit)
         {
-            m_DragDistance = Mathf.Max(0.1f, Vector3.Dot(hit - ray.origin, ray.direction));
-            m_DragOffset = transform.position - ray.GetPoint(m_DragDistance);
+            m_DragRayDistance = Mathf.Max(MinimumDragDistance, Vector3.Dot(hit - ray.origin, ray.direction));
+            m_DragPositionOffset = transform.position - ray.GetPoint(m_DragRayDistance);
             IsDragging = true;
         }
 
@@ -129,7 +136,7 @@ namespace TiltBrush
                 return;
             }
 
-            transform.position = ray.GetPoint(m_DragDistance) + m_DragOffset;
+            transform.position = ray.GetPoint(m_DragRayDistance) + m_DragPositionOffset;
         }
 
         public void EndDrag()
@@ -147,23 +154,33 @@ namespace TiltBrush
         void Update()
         {
             BaseUpdate();
-            if (IsDragging)
-            {
-                if (PanelPopUp == null || !PanelPopUp.IsOpen() || !PointerRay(out var ray))
-                    EndDrag();
-                else
-                    MoveDrag(ray, InputManager.m_Instance.GetCommand(InputManager.SketchCommands.Activate));
-            }
+            UpdateDrag();
 
             var head = ViewpointScript.Head;
             if (head != null)
                 FaceUser(head.position);
         }
 
+        void UpdateDrag()
+        {
+            if (IsDragging)
+            {
+                if (PanelPopUp == null || !PanelPopUp.IsOpen() || !TryGetPointerRay(out var ray))
+                    EndDrag();
+                else
+                    MoveDrag(ray, InputManager.m_Instance.GetCommand(InputManager.SketchCommands.Activate));
+            }
+        }
+
         protected override void OnDisablePanel()
         {
             base.OnDisablePanel();
             EndDrag();
+            DisposePopupStack();
+        }
+
+        void DisposePopupStack()
+        {
             // Dispose the popup stack when native availability hides the host.
             var popup = m_ActivePopUp;
             m_ActivePopUp = null;

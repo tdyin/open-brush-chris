@@ -213,45 +213,75 @@ namespace TiltBrush
             }
             if (voice.Session.State == CHRISVoiceSession.Phase.Failed)
             {
-                SetStateHeader("Microphone or speech unavailable", "Check the input device and connection.", "warning");
-                m_Detail.text = voice.Status;
-                ShowRecordingAction("Retry");
-                ShowDevice();
+                DrawVoiceFailure(voice);
                 return;
             }
             string status = (string)client.Task?["status"];
             if (client.Error != null || client.CancelWanted || status == "paused" || status == "unverified" ||
                 (client.Task == null && (client.TaskId != null || client.PendingRequest != null) && !client.Busy))
             {
-                SetStateHeader("Outcome needs checking", "Last verified status", "warning");
-                m_Detail.text = m_Model.AssistanceStatus();
-                ConfigureChoice(ChoiceSlot.ConfirmOrRecover, "Retry", () => RetryAssistance(client), !client.Busy, "refresh", true);
-                m_Hint.text = client.CancelWanted ? "Checks cancellation before more work." :
-                    client.PendingRequest != null ? "Recovers the same request." : "Checks status before continuing.";
+                DrawRecovery(client);
                 return;
             }
             if (m_Model.HasReplacement || (client.Busy && client.Task == null) || status == "proposing" || status == "pending")
             {
-                SetStateHeader("Preparing commands", "Transcript complete", "more_solid");
-                m_Detail.text = m_Model.Prompt;
-                m_Hint.text = "Checking the request and sketch...\nExact commands appear next.";
-                ShowCorrection();
+                DrawPreparing();
                 return;
             }
             if (status == "executing")
             {
-                SetStateHeader("Executing", VerifiedProgress(client.Task), "settings");
-                m_Detail.text = (string)client.Task["summary"] ?? m_Model.AssistanceStatus();
-                m_Hint.text = "You can stop and take over.";
+                DrawExecuting(client);
                 return;
             }
             if (client.Task != null && CHRISAssistanceClient.Terminal(client.Task))
             {
-                SetStateHeader(status == "succeeded" ? "Completed" : "Stopped", VerifiedProgress(client.Task), status == "succeeded" ? "ticktransparent" : "warning");
-                m_Detail.text = m_Model.AssistanceStatus();
-                ShowRecordingAction("Record");
+                DrawCompleted(client, status);
                 return;
             }
+            DrawReady();
+        }
+
+        void DrawVoiceFailure(CHRISVoiceInput voice)
+        {
+            SetStateHeader("Microphone or speech unavailable", "Check the input device and connection.", "warning");
+            m_Detail.text = voice.Status;
+            ShowRecordingAction("Retry");
+            ShowDevice();
+        }
+
+        void DrawRecovery(CHRISAssistanceClient client)
+        {
+            SetStateHeader("Outcome needs checking", "Last verified status", "warning");
+            m_Detail.text = m_Model.AssistanceStatus();
+            ConfigureChoice(ChoiceSlot.ConfirmOrRecover, "Retry", () => RetryAssistance(client), !client.Busy, "refresh", true);
+            m_Hint.text = client.CancelWanted ? "Checks cancellation before more work." :
+                client.PendingRequest != null ? "Recovers the same request." : "Checks status before continuing.";
+        }
+
+        void DrawPreparing()
+        {
+            SetStateHeader("Preparing commands", "Transcript complete", "more_solid");
+            m_Detail.text = m_Model.Prompt;
+            m_Hint.text = "Checking the request and sketch...\nExact commands appear next.";
+            ShowCorrection();
+        }
+
+        void DrawExecuting(CHRISAssistanceClient client)
+        {
+            SetStateHeader("Executing", VerifiedProgress(client.Task), "settings");
+            m_Detail.text = (string)client.Task["summary"] ?? m_Model.AssistanceStatus();
+            m_Hint.text = "You can stop and take over.";
+        }
+
+        void DrawCompleted(CHRISAssistanceClient client, string status)
+        {
+            SetStateHeader(status == "succeeded" ? "Completed" : "Stopped", VerifiedProgress(client.Task), status == "succeeded" ? "ticktransparent" : "warning");
+            m_Detail.text = m_Model.AssistanceStatus();
+            ShowRecordingAction("Record");
+        }
+
+        void DrawReady()
+        {
             SetStateHeader("Ready to listen", "Speak a request for your sketch.", "mic");
             m_Detail.text = string.IsNullOrEmpty(m_Model.Prompt) ? "What would you like to change?" : m_Model.Prompt;
             ShowRecordingAction("Record");
