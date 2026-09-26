@@ -319,7 +319,7 @@ namespace TiltBrush
             {
             TestCHRISAssistance.Exported.Clear();
             int tests = 0;
-            foreach (var suite in new object[] { new TestCHRISNativeUI(), new TestCHRISAssistance(), new TestCHRISCloudVoice(), new TestCHRISCompanion(), new TestCHRISInputMapping(), new TestCHRISInputRemap() })
+            foreach (var suite in new object[] { new TestCHRISNativeUI(), new TestCHRISAssistance(), new TestCHRISCloudVoice(), new TestCHRISCompanion(), new TestCHRISInputMapping(), new TestCHRISInputRemap(), new TestCHRISMappingAuthority() })
                 foreach (var method in suite.GetType().GetMethods().Where(m => m.GetCustomAttributes(typeof(TestAttribute), false).Length > 0))
                 {
                     method.Invoke(suite, null);

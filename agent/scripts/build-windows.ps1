@@ -23,10 +23,63 @@ function Get-DirtyPaths {
     return $entries
 }
 
-# The checks and the player build rewrite tracked settings (URP runtime settings, preloaded
-# assets, shader warmup, GLTF package version) and leave untracked Addressables/temp-scene files.
-# Only paths that become dirty during this run are restored; earlier local changes are kept.
+function Get-ProjectPath([string]$relative) {
+    $path = [System.IO.Path]::GetFullPath((Join-Path $projectRoot $relative))
+    $prefix = $projectRoot.TrimEnd('\', '/') + [System.IO.Path]::DirectorySeparatorChar
+    if (-not $path.StartsWith($prefix, [System.StringComparison]::OrdinalIgnoreCase)) {
+        throw "Path escaped project root: $relative"
+    }
+    return $path
+}
+
+function Get-SourceHash([string]$relative) {
+    $path = Get-ProjectPath $relative
+    if (-not (Test-Path -LiteralPath $path -PathType Leaf)) { return $null }
+    return (Get-FileHash -LiteralPath $path -Algorithm SHA256).Hash
+}
+
+# Snapshot only paths Unity is known to generate. A dirty file at entry is never restored,
+# because it may already hold another agent's work. Unknown changes stop the build for review.
+$knownGenerated = @(
+    'Assets/AddressableAssetsData/link.xml',
+    'Assets/AddressableAssetsData/link.xml.meta',
+    'Assets/AddressableAssetsData/Windows.meta',
+    'Assets/AddressableAssetsData/Windows/addressables_content_state.bin',
+    'Assets/AddressableAssetsData/Windows/addressables_content_state.bin.meta',
+    'Assets/Fonts/NotoSansCJK-Light SDF.asset',
+    'Assets/Generated/ShaderWarmup/OpenBrushBrushVariants.shadervariants',
+    'Assets/Generated/ShaderWarmup/open-brush-brush-variant-inventory.json',
+    'Assets/Resources/PerformanceTestRunInfo.json',
+    'Assets/Resources/PerformanceTestRunInfo.json.meta',
+    'Assets/Resources/PerformanceTestRunSettings.json',
+    'Assets/Resources/PerformanceTestRunSettings.json.meta',
+    'Assets/Resources/UnityGLTFSettings.asset',
+    'Assets/Settings/Open Brush Universal Render Pipeline Asset.asset',
+    'Assets/UniversalRenderPipelineGlobalSettings.asset',
+    'ProjectSettings/ProjectSettings.asset',
+    'Assets/Scenes/Main.unity',
+    'Assets/Scenes/Loading.unity',
+    'Assets/Scenes/Temp_Loading.unity.meta',
+    'Assets/Scenes/Temp_Main.unity.meta'
+)
+$knownSet = @{}
+foreach ($path in $knownGenerated) { $knownSet[$path] = $true }
+$stamp = Get-Date -Format 'yyyyMMdd-HHmmss'
+$buildDir = Join-Path $projectRoot "Build/CHRIS-$Name-$stamp"
+$logDir = Join-Path $projectRoot "agent/logs/builds/$Name-$stamp"
+$stateDir = Join-Path $logDir 'unity-state'
+New-Item -ItemType Directory -Path $stateDir -Force | Out-Null
 $dirtyBefore = Get-DirtyPaths
+$beforeHashes = @{}
+foreach ($path in (@($knownGenerated) + @($dirtyBefore.Keys) | Sort-Object -Unique)) {
+    $beforeHashes[$path] = Get-SourceHash $path
+}
+foreach ($path in $knownGenerated) {
+    if ($null -eq $beforeHashes[$path]) { continue }
+    $backup = Join-Path $stateDir (Join-Path 'before' $path)
+    New-Item -ItemType Directory -Path (Split-Path $backup) -Force | Out-Null
+    Copy-Item -LiteralPath (Get-ProjectPath $path) -Destination $backup
+}
 
 if (-not $SkipChecks) {
     & (Join-Path $PSScriptRoot 'verify-native-ui.ps1') -UnityPath $UnityPath
@@ -40,10 +93,6 @@ foreach ($editor in $editors) {
     }
 }
 
-$stamp = Get-Date -Format 'yyyyMMdd-HHmmss'
-$buildDir = Join-Path $projectRoot "Build/CHRIS-$Name-$stamp"
-$logDir = Join-Path $projectRoot "agent/logs/builds/$Name-$stamp"
-New-Item -ItemType Directory -Path $logDir | Out-Null
 $logPath = Join-Path $logDir 'Build.log'
 $exePath = Join-Path $buildDir 'OpenBrush.exe'
 $arguments = @(
@@ -83,30 +132,48 @@ if (-not $result) {
     if ($line) { $result = $line.Matches[0].Groups[1].Value }
 }
 $dirtyAfter = Get-DirtyPaths
-$sideEffects = @($dirtyAfter.Keys | Where-Object { -not $dirtyBefore.ContainsKey($_) } | Sort-Object)
-if ($sideEffects.Count -gt 0) {
-    $tracked = @($sideEffects | Where-Object { $dirtyAfter[$_] -ne '??' })
-    $untracked = @($sideEffects | Where-Object { $dirtyAfter[$_] -eq '??' })
-    if ($tracked.Count -gt 0) {
-        git -C $projectRoot -c core.safecrlf=false diff --binary -- $tracked | Set-Content -LiteralPath (Join-Path $logDir 'build-side-effects.patch') -Encoding utf8
-        git -C $projectRoot -c core.safecrlf=false checkout -- $tracked
-    }
-    foreach ($path in $untracked) {
-        $saved = Join-Path $logDir (Join-Path 'untracked' $path)
-        New-Item -ItemType Directory -Force -Path (Split-Path $saved) | Out-Null
-        Move-Item -LiteralPath (Join-Path $projectRoot $path) -Destination $saved
-    }
-    # Remove folders the build created that are now empty.
-    foreach ($path in $untracked) {
-        $dir = Split-Path (Join-Path $projectRoot $path)
-        while ($dir.Length -gt $projectRoot.Length -and (Test-Path -LiteralPath $dir) -and -not (Get-ChildItem -LiteralPath $dir -Force)) {
-            Remove-Item -LiteralPath $dir
-            $dir = Split-Path $dir
-        }
-    }
-    $sideEffects | Set-Content -LiteralPath (Join-Path $logDir 'build-side-effects.txt') -Encoding utf8
-    Write-Output "Restored $($sideEffects.Count) path(s) the checks/build changed; saved in $logDir"
+$unexpected = @($dirtyAfter.Keys | Where-Object { -not $dirtyBefore.ContainsKey($_) -and -not $knownSet.ContainsKey($_) } | Sort-Object)
+$changedAtEntry = @($dirtyBefore.Keys | Where-Object { (Get-SourceHash $_) -ne $beforeHashes[$_] } | Sort-Object)
+if ($unexpected.Count -gt 0 -or $changedAtEntry.Count -gt 0) {
+    @('Unexpected new paths:', $unexpected, 'Preexisting files changed:', $changedAtEntry) |
+        Set-Content -LiteralPath (Join-Path $stateDir 'needs-review.txt')
+    throw "Build changed unknown or preexisting source files; inspect $stateDir before any restoration"
 }
+
+$restored = @()
+foreach ($path in $knownGenerated) {
+    if ($dirtyBefore.ContainsKey($path) -or (Get-SourceHash $path) -eq $beforeHashes[$path]) { continue }
+    $target = Get-ProjectPath $path
+    # A write after Unity exited cannot be a build side effect; preserve it for review.
+    if ((Test-Path -LiteralPath $target -PathType Leaf) -and
+        (Get-Item -LiteralPath $target).LastWriteTimeUtc -gt $process.ExitTime.ToUniversalTime().AddSeconds(2)) {
+        throw "Known path changed after Unity exited; preserving $target for review"
+    }
+    if (Test-Path -LiteralPath $target -PathType Leaf) {
+        $after = Join-Path $stateDir (Join-Path 'after' $path)
+        New-Item -ItemType Directory -Path (Split-Path $after) -Force | Out-Null
+        Copy-Item -LiteralPath $target -Destination $after
+    }
+    if ($null -eq $beforeHashes[$path]) {
+        if (Test-Path -LiteralPath $target -PathType Leaf) { Remove-Item -LiteralPath $target }
+    }
+    else {
+        $backup = Join-Path $stateDir (Join-Path 'before' $path)
+        if ((Get-FileHash -LiteralPath $backup -Algorithm SHA256).Hash -ne $beforeHashes[$path]) {
+            throw "Snapshot backup changed; preserving $target for review"
+        }
+        Copy-Item -LiteralPath $backup -Destination $target -Force
+    }
+    $restored += $path
+}
+$restored | Set-Content -LiteralPath (Join-Path $stateDir 'restored.txt')
+$dirtyFinal = Get-DirtyPaths
+$statusDiff = @($dirtyFinal.Keys | Where-Object { -not $dirtyBefore.ContainsKey($_) -or $dirtyFinal[$_] -ne $dirtyBefore[$_] })
+$statusDiff += @($dirtyBefore.Keys | Where-Object { -not $dirtyFinal.ContainsKey($_) })
+if ($statusDiff.Count -gt 0 -or @($knownGenerated | Where-Object { (Get-SourceHash $_) -ne $beforeHashes[$_] }).Count -gt 0) {
+    throw "Source differs from the pre-build snapshot; inspect $stateDir"
+}
+Write-Output "Restored $($restored.Count) known Unity-generated path(s); archived changed bytes in $stateDir"
 
 $errors = @(Select-String -LiteralPath $logPath -Pattern 'error CS\d+|::error ::' | ForEach-Object { $_.Line })
 if ($result -ne 'Success' -or -not (Test-Path -LiteralPath $exePath) -or $errors.Count -gt 0) {
@@ -140,8 +207,14 @@ $dirty = git -C $projectRoot -c core.safecrlf=false status --short
 
 # Stable path for the newest build, so shortcuts do not change between builds.
 $current = Join-Path $projectRoot 'Build/CHRIS-current'
-if (Test-Path -LiteralPath $current) { cmd /c rmdir "$current" | Out-Null }
-cmd /c mklink /J "$current" "$buildDir" | Out-Null
+if (Test-Path -LiteralPath $current) {
+    $item = Get-Item -LiteralPath $current -Force
+    if ($item.LinkType -ne 'Junction') {
+        throw "Refusing to replace a non-junction build path: $current"
+    }
+    Remove-Item -LiteralPath $current -Force
+}
+New-Item -ItemType Junction -Path $current -Target $buildDir | Out-Null
 
 Write-Output "Build succeeded: $exePath"
 Write-Output "Newest build is always at: $current\OpenBrush.exe"

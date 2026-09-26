@@ -51,6 +51,13 @@ generated evidence in ignored `agent/logs`, and failure captures in ignored
   from `<persistentDataPath>/CHRIS/active-mapping.json` at startup and on the
   `chris.mapping.reload` API command, with no file watcher and no Python.
   With no active mapping, the brush trigger path is exactly the native one.
+  If the default generated fixture directory is inaccessible, set the test-only
+  `CHRIS_MAPPING_TEST_FIXTURES` environment variable to a readable directory
+  containing `cases.json` and its case files. The current byte-matched local copy
+  is `agent/logs/mapping-shared-cases-20260925/fixtures/`; native checks can use it
+  without touching the original ignored fixture directory. The mapping wire
+  regression reads `mapping_wire.json` there when present, otherwise from the
+  sibling CHRIS repository's checked-in `tests/core/fixtures/` directory.
   The committed Enter Play Mode Options skip the domain and scene reloads, so
   CHRIS static state resets itself on `SubsystemRegistration`. Startup logs
   `HttpListener listening on http://127.0.0.1:40074/`, `API commands

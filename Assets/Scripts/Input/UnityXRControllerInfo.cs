@@ -34,6 +34,8 @@ namespace TiltBrush
 
         internal bool RawVrInput(VrInput input) => MapVrInput(input);
         internal bool PhysicalRightHand => isBrush;
+        internal bool IsLogicalBrush => InputManager.m_Instance != null && InputManager.Controllers != null &&
+            ReferenceEquals(InputManager.Brush, this);
 
         void SampleVoiceShortcut()
         {
@@ -198,7 +200,7 @@ namespace TiltBrush
         {
             // While a CHRIS move_brush mapping owns the brush pose, the brush counts as present even if
             // the physical controller is resting or asleep, so it shows and paints at the mapped tip.
-            get => device.isValid || (isBrush && CHRISInputMappingHost.BrushPoseOwned);
+            get => device.isValid || (IsLogicalBrush && CHRISInputMappingHost.BrushPoseOwned);
             set
             {
 
@@ -299,7 +301,7 @@ namespace TiltBrush
         public override float GetTriggerValue()
         {
             // A CHRIS-mapped draw is a fully pressed trigger.
-            if (isBrush)
+            if (IsLogicalBrush)
             {
                 CHRISInputMappingHost.Tick();
                 if (CHRISInputMappingHost.Remap.DrawHeld)
@@ -307,12 +309,18 @@ namespace TiltBrush
                     return 1f;
                 }
             }
+            float physicalValue;
             if (IsStylusActive())
+                physicalValue = Math.Max(stylusState.tip_value, stylusState.cluster_middle_value);
+            else
             {
-                return Math.Max(stylusState.tip_value, stylusState.cluster_middle_value);
+                InputAction action = FindAction("TriggerAxis");
+                physicalValue = action != null ? action.ReadValue<float>() : 0f;
             }
-            InputAction action = FindAction("TriggerAxis");
-            return action != null ? action.ReadValue<float>() : 0f;
+            if (!IsLogicalBrush || !CHRISInputMappingHost.PhysicalTriggerControlled) return physicalValue;
+            CHRISInputMappingHost.FilterPhysicalTrigger(MapVrInput(VrInput.Trigger));
+            return CHRISInputMappingHost.InputFocusedNow && !CHRISInputMappingHost.PhysicalTriggerWaitingForRelease
+                ? physicalValue : 0f;
         }
 
         private bool MapVrTouch(VrInput input)
@@ -381,13 +389,16 @@ namespace TiltBrush
 
         bool UsesCombinedTrigger(VrInput input)
         {
-            if (!isBrush || input != VrInput.Trigger)
+            if (!IsLogicalBrush || input != VrInput.Trigger)
             {
                 return false;
             }
             CHRISInputMappingHost.Tick();
-            m_CombinedTrigger.Sample(Time.frameCount, MapVrInput(VrInput.Trigger), CHRISInputMappingHost.Remap.DrawHeld);
-            return CHRISInputMappingHost.Remap.Active != null || CHRISInputMappingHost.Remap.DrawUp;
+            bool controlled = CHRISInputMappingHost.PhysicalTriggerControlled;
+            bool physical = controlled ? CHRISInputMappingHost.FilterPhysicalTrigger(MapVrInput(VrInput.Trigger)) :
+                MapVrInput(VrInput.Trigger);
+            m_CombinedTrigger.Sample(Time.frameCount, physical, CHRISInputMappingHost.Remap.DrawHeld);
+            return controlled;
         }
 
         /// Returns the value of the specified button (level trigger).

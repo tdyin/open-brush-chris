@@ -118,6 +118,66 @@ namespace TiltBrush
         }
 
         [Test]
+        public void PhysicalTriggerHeldThroughStopRequiresReleaseBeforeDrawingAgain()
+        {
+            var gate = new CHRISPhysicalTriggerGate();
+            var trigger = new CHRISCombinedTrigger();
+            trigger.Sample(1, gate.Filter(true, true), false);
+            Assert.That(trigger.Down, Is.True);
+
+            gate.RequireRelease();
+            trigger.Sample(2, gate.Filter(true, true), false);
+            Assert.That(trigger.Up, Is.True, "Stop ends the physical stroke while the trigger is held");
+            trigger.Sample(3, gate.Filter(true, true), false);
+            Assert.That(trigger.Held, Is.False, "Holding through Stop cannot restart drawing");
+
+            trigger.Sample(4, gate.Filter(false, true), false);
+            Assert.That(gate.WaitingForRelease, Is.False);
+            trigger.Sample(5, gate.Filter(true, true), false);
+            Assert.That(trigger.Down, Is.True, "A fresh physical press works after release");
+        }
+
+        [Test]
+        public void XrFocusLossReleasesAndRequiresFreshMappedAndPhysicalPresses()
+        {
+            Assert.That(CHRISInputMappingHost.InputFocused(true, false), Is.False,
+                "The headset losing focus is enough even while the desktop stays focused");
+            Assert.That(CHRISInputMappingHost.InputFocused(false, true), Is.False);
+            Assert.That(CHRISInputMappingHost.InputFocused(true, true), Is.True);
+
+            var (remap, input) = Activated(Space());
+            var gate = new CHRISPhysicalTriggerGate();
+            input.Held.Add("key.space");
+            remap.Tick(input, true, false);
+            Assert.That(gate.Filter(true, true), Is.True);
+            remap.Tick(input, CHRISInputMappingHost.InputFocused(true, false), true);
+            Assert.That(gate.Filter(true, false), Is.False);
+            Assert.That(remap.DrawUp, Is.True);
+            remap.Tick(input, true, false);
+            Assert.That(gate.Filter(true, true), Is.False);
+            Assert.That(remap.DrawHeld, Is.False, "A key held through headset focus loss remains latched");
+            input.Held.Clear();
+            remap.Tick(input, true, false);
+            Assert.That(gate.Filter(false, true), Is.False);
+            input.Held.Add("key.space");
+            remap.Tick(input, true, false);
+            Assert.That(gate.Filter(true, true), Is.True);
+            Assert.That(remap.DrawDown, Is.True);
+        }
+
+        [Test]
+        public void NativeOnlyTriggerDoesNotUseChrisReleaseGate()
+        {
+            Assert.That(CHRISInputMappingHost.ShouldGatePhysicalTrigger(false, false, false), Is.False,
+                "With no active mapping, Escape and XR focus retain the native trigger path");
+            Assert.That(CHRISInputMappingHost.ShouldGatePhysicalTrigger(true, false, false), Is.True);
+            Assert.That(CHRISInputMappingHost.ShouldGatePhysicalTrigger(false, true, false), Is.True,
+                "The mapped release edge is still delivered");
+            Assert.That(CHRISInputMappingHost.ShouldGatePhysicalTrigger(false, false, true), Is.True,
+                "A held physical trigger remains gated after mapping Stop");
+        }
+
+        [Test]
         public void HostStateResetsOnEveryPlayModeEntry()
         {
             // The project enters Play mode without a domain reload (EditorSettings m_EnterPlayModeOptions),
@@ -323,6 +383,34 @@ namespace TiltBrush
             // Looking straight down falls back to the last valid yaw for the axes.
             plane.Activate(Vector3.zero, Vector3.down, Vector3.left, 5, 6);
             Assert.That(Vector3.Distance(plane.Right, Vector3.Cross(Vector3.up, Vector3.left)), Is.LessThan(1e-5f));
+        }
+
+        [Test]
+        public void UndoOnlyMappingEditKeepsTheMovingBrushTip()
+        {
+            var host = typeof(CHRISInputMappingHost);
+            const BindingFlags flags = BindingFlags.NonPublic | BindingFlags.Static;
+            string fixture = System.IO.File.ReadAllText(System.IO.Path.Combine(TestCHRISInputMapping.Fixtures,
+                "valid_keys_brush_wasd_view.json"));
+            var original = CHRISInputMapping.Parse(Encoding.UTF8.GetBytes(fixture));
+            var undoEdit = CHRISInputMapping.Parse(Encoding.UTF8.GetBytes(fixture.Replace("\"key\": \"z\"", "\"key\": \"x\"")));
+            var brushEdit = CHRISInputMapping.Parse(Encoding.UTF8.GetBytes(fixture.Replace("\"right\": \"rightArrow\"", "\"right\": \"j\"")));
+            host.GetMethod("ResetForPlay", flags).Invoke(null, null);
+            try
+            {
+                CHRISInputMappingHost.EnsureBrushPlane(original, Vector3.zero, Vector3.forward);
+                CHRISInputMappingHost.BrushPlane.Move(new Vector2(2, -1));
+                var tip = CHRISInputMappingHost.BrushPlane.Tip;
+                CHRISInputMappingHost.EnsureBrushPlane(undoEdit, new Vector3(10, 0, 0), Vector3.right);
+                Assert.That(CHRISInputMappingHost.SameBrushMovement(original, undoEdit), Is.True);
+                Assert.That(CHRISInputMappingHost.BrushPlane.Tip, Is.EqualTo(tip),
+                    "Changing undo must not jump the brush tip while move_brush stays the same");
+                CHRISInputMappingHost.EnsureBrushPlane(brushEdit, new Vector3(10, 0, 0), Vector3.right);
+                Assert.That(CHRISInputMappingHost.SameBrushMovement(undoEdit, brushEdit), Is.False);
+                Assert.That(CHRISInputMappingHost.BrushPlane.Offset, Is.EqualTo(Vector2.zero),
+                    "Changing move_brush establishes a new head-facing plane");
+            }
+            finally { host.GetMethod("ResetForPlay", flags).Invoke(null, null); }
         }
 
         [Test]

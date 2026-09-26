@@ -12,9 +12,12 @@ namespace TiltBrush
     public class TestCHRISInputMapping
     {
         // The shared cases are generated (gitignored) in the C:\Dev\chris repository and read in
-        // place, not copied. CHRIS_REPO overrides the default sibling checkout.
-        internal static string Fixtures => Path.Combine(System.Environment.GetEnvironmentVariable("CHRIS_REPO") is string repo
-            && repo.Length > 0 ? repo : Path.GetFullPath("../chris"), "schemas/v0.1.1/fixtures");
+        // place, not copied. A test-only override can select a fresh generated case set when the
+        // default ignored fixture directory is unavailable; CHRIS_REPO selects another checkout.
+        internal static string Fixtures => System.Environment.GetEnvironmentVariable("CHRIS_MAPPING_TEST_FIXTURES") is string fixtures
+            && fixtures.Length > 0 ? Path.GetFullPath(fixtures) :
+            Path.Combine(System.Environment.GetEnvironmentVariable("CHRIS_REPO") is string repo && repo.Length > 0
+                ? repo : Path.GetFullPath("../chris"), "schemas/v0.1.1/fixtures");
         internal static readonly StringBuilder Verdicts = new StringBuilder();
 
         static string Code(byte[] raw)

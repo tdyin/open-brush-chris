@@ -68,7 +68,7 @@ namespace TiltBrush
         public static CHRISInputMapping Load(string path) => Parse(ReadBounded(path));
 
         // Reads at most one byte past the limit so an oversized file is never loaded whole.
-        static byte[] ReadBounded(string path)
+        internal static byte[] ReadBounded(string path)
         {
             using (var stream = File.OpenRead(path))
             {
@@ -428,6 +428,7 @@ namespace TiltBrush
         public const string RelativePath = "CHRIS/active-mapping.json";
 
         public CHRISInputMapping Current { get; private set; }
+        public byte[] CurrentBytes { get; private set; }
         // "loaded", "missing", "unreadable" or one of the validator codes.
         public string LastResult { get; private set; } = "none";
         public string LastDetail { get; private set; } = "";
@@ -438,7 +439,9 @@ namespace TiltBrush
         {
             try
             {
-                Current = CHRISInputMapping.Load(path);
+                var raw = CHRISInputMapping.ReadBounded(path);
+                Current = CHRISInputMapping.Parse(raw);
+                CurrentBytes = raw;
                 LastResult = "loaded";
                 LastDetail = $"{Current.Mappings.Count} mapping(s)";
                 return true;

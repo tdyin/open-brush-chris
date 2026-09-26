@@ -4,6 +4,7 @@ using System;
 using System.Collections.Generic;
 using System.Linq;
 using System.IO;
+using Newtonsoft.Json.Linq;
 using UnityEngine;
 using UnityEngine.InputSystem;
 using UnityEngine.InputSystem.Controls;
@@ -41,6 +42,7 @@ namespace TiltBrush
         public bool DrawHeld { get; private set; }
         public bool DrawDown { get; private set; }
         public bool DrawUp { get; private set; }
+        public bool StoppedThisFrame { get; private set; }
         // One per press of the mapped undo input; holding does not repeat.
         public bool UndoPressed { get; private set; }
         // Whole wheel notches to apply this frame; fractions carry to the next frame.
@@ -59,6 +61,9 @@ namespace TiltBrush
 
         public void Offer(CHRISInputMapping mapping) => m_Pending = mapping;
 
+        public bool IsNeutralFor(CHRISInputMapping mapping, ICHRISInputState input, bool focused, bool strokeInProgress) =>
+            focused && !strokeInProgress && !AnyHeld(input, mapping) && !AnyHeld(input, m_Active);
+
         public void Stop()
         {
             m_Active = null;
@@ -71,6 +76,7 @@ namespace TiltBrush
 
         public void Tick(ICHRISInputState input, bool focused, bool strokeInProgress)
         {
+            StoppedThisFrame = input.StopPressedThisFrame;
             if (input.StopPressedThisFrame)
             {
                 Stop();
@@ -91,7 +97,7 @@ namespace TiltBrush
             }
             m_Latched.RemoveWhere(name => !input.IsPressed(name));
 
-            if (m_Pending != null && !strokeInProgress && !AnyHeld(input, m_Pending) && !AnyHeld(input, m_Active))
+            if (m_Pending != null && IsNeutralFor(m_Pending, input, focused, strokeInProgress))
             {
                 m_Active = m_Pending;
                 m_Pending = null;
@@ -263,6 +269,27 @@ namespace TiltBrush
         }
     }
 
+    // Stop and focus loss end the current stroke even if the physical trigger remains held.
+    // A new physical press is accepted only after focus returns and the trigger is released.
+    public sealed class CHRISPhysicalTriggerGate
+    {
+        public bool WaitingForRelease { get; private set; }
+
+        public void RequireRelease() => WaitingForRelease = true;
+
+        public bool Filter(bool physicalHeld, bool focused)
+        {
+            if (!focused)
+            {
+                RequireRelease();
+                return false;
+            }
+            if (!WaitingForRelease) return physicalHeld;
+            if (!physicalHeld) WaitingForRelease = false;
+            return false;
+        }
+    }
+
     // Reads keyboard and mouse through the Input System. Escape is always Stop.
     sealed class CHRISDeviceInput : ICHRISInputState
     {
@@ -319,8 +346,13 @@ namespace TiltBrush
         public static CHRISViewHeading Heading { get; private set; } = new CHRISViewHeading();
         public static bool MouseDeltaMapped => Remap.MouseDeltaMapped;
         static CHRISInputMappingStore s_Store = new CHRISInputMappingStore();
+        static CHRISMappingAuthority s_Authority = NewAuthority();
+        static CHRISPhysicalTriggerGate s_PhysicalTriggerGate = new CHRISPhysicalTriggerGate();
         static bool s_Started, s_ShortcutsOwned, s_ShortcutsBefore;
         static int s_Frame = -1;
+
+        static CHRISMappingAuthority NewAuthority() =>
+            new CHRISMappingAuthority(CHRISInputMappingStore.PathUnder(Application.persistentDataPath));
 
         [RuntimeInitializeOnLoadMethod(RuntimeInitializeLoadType.SubsystemRegistration)]
         static void ResetForPlay()
@@ -328,6 +360,8 @@ namespace TiltBrush
             Remap = new CHRISInputRemap();
             Heading = new CHRISViewHeading();
             s_Store = new CHRISInputMappingStore();
+            s_Authority = NewAuthority();
+            s_PhysicalTriggerGate = new CHRISPhysicalTriggerGate();
             s_Started = s_ShortcutsOwned = s_ShortcutsBefore = false;
             s_Frame = -1;
             s_Plane = new CHRISBrushPlane();
@@ -359,11 +393,39 @@ namespace TiltBrush
             var pointers = PointerManager.m_Instance;
             bool stroke = pointers != null && PointerManager.MainPointerIsPainting();
             bool wasActive = Remap.Active != null;
-            Remap.Tick(CHRISDeviceInput.Instance, Application.isFocused, stroke);
+            bool hadMappedControl = wasActive || s_PhysicalTriggerGate.WaitingForRelease;
+            bool focused = InputFocused(Application.isFocused, App.VrSdk == null || !App.VrSdk.IsAppFocusBlocked());
+            s_Authority.TryActivate(CHRISDeviceInput.Instance, focused, stroke, Remap);
+            Remap.Tick(CHRISDeviceInput.Instance, focused, stroke);
+            if (Remap.StoppedThisFrame) s_Authority.Stop();
+            else s_Authority.CompleteActivation(Remap);
+            if (hadMappedControl && (Remap.StoppedThisFrame || !focused)) s_PhysicalTriggerGate.RequireRelease();
             if (!wasActive && Remap.Active != null) Debug.Log("CHRIS mapping active: Open Brush keyboard shortcuts off, Escape stops");
             if (wasActive && Remap.Active == null) Debug.Log("CHRIS mapping stopped: shortcuts restored; reload to use it again");
             SyncShortcuts();
             Apply();
+        }
+
+        internal static bool InputFocused(bool desktopFocused, bool xrFocused) => desktopFocused && xrFocused;
+        internal static bool InputFocusedNow => InputFocused(Application.isFocused,
+            App.VrSdk == null || !App.VrSdk.IsAppFocusBlocked());
+        internal static bool PhysicalTriggerWaitingForRelease => s_PhysicalTriggerGate.WaitingForRelease;
+        internal static bool PhysicalTriggerControlled => ShouldGatePhysicalTrigger(Remap.Active != null,
+            Remap.DrawUp, s_PhysicalTriggerGate.WaitingForRelease);
+        internal static bool ShouldGatePhysicalTrigger(bool mappingActive, bool mappedDrawUp, bool waitingForRelease) =>
+            mappingActive || mappedDrawUp || waitingForRelease;
+        internal static bool FilterPhysicalTrigger(bool held) => s_PhysicalTriggerGate.Filter(held,
+            InputFocusedNow);
+        internal static JObject MappingStatus()
+        {
+            Start();
+            return s_Authority.Status();
+        }
+
+        internal static JObject ActivateMapping(JObject request)
+        {
+            Start();
+            return s_Authority.Apply(request);
         }
 
         // Carries out this frame's undo, brush size and view movement through native operations.
@@ -433,15 +495,15 @@ namespace TiltBrush
                 InputManager.m_Instance != null && InputManager.Brush != null;
             if (!mapped)
             {
-                ReleaseBrush();
+                ReleaseBrushAfterStroke();
                 s_PlaneMapping = null;
                 return;
             }
-            if (!Application.isFocused)
+            if (!InputFocused(Application.isFocused, sdk == null || !sdk.IsAppFocusBlocked()))
             {
                 // Focus loss hands the brush back to the physical controller; refocus retakes it at
                 // the last tip because the plane (and its offset) is kept for the same mapping.
-                ReleaseBrush();
+                ReleaseBrushAfterStroke();
                 return;
             }
             var driver = InputManager.Brush.Behavior.GetComponent<UnityEngine.SpatialTracking.TrackedPoseDriver>();
@@ -454,12 +516,35 @@ namespace TiltBrush
                 s_DriverWasEnabled = driver.enabled;
                 driver.enabled = false;
             }
-            if (!ReferenceEquals(mapping, s_PlaneMapping))
+            EnsureBrushPlane(mapping, head.position, head.forward);
+        }
+
+        internal static void EnsureBrushPlane(CHRISInputMapping mapping, Vector3 headPosition, Vector3 headForward)
+        {
+            bool movementChanged = !SameBrushMovement(mapping, s_PlaneMapping);
+            s_PlaneMapping = mapping;
+            if (movementChanged)
             {
-                s_PlaneMapping = mapping;
-                s_Plane.Activate(head.position, head.forward, Heading.Forward, BrushPlaneDistance, BrushPlaneExtent);
+                s_Plane.Activate(headPosition, headForward, Heading.Forward, BrushPlaneDistance, BrushPlaneExtent);
                 Debug.Log($"CHRIS move_brush owns the brush pose: plane {BrushPlaneDistance} units ahead, +-{BrushPlaneExtent} units");
             }
+        }
+
+        internal static bool SameBrushMovement(CHRISInputMapping first, CHRISInputMapping second)
+        {
+            var a = first?.Find(CHRISMappedAction.MoveBrush);
+            var b = second?.Find(CHRISMappedAction.MoveBrush);
+            return a != null && b != null && a.Source == b.Source && a.Key == b.Key &&
+                a.Button == b.Button && a.Up == b.Up && a.Down == b.Down &&
+                a.Left == b.Left && a.Right == b.Right;
+        }
+
+        static void ReleaseBrushAfterStroke()
+        {
+            // Keep the tip at its last mapped position until the forced trigger-up ends painting.
+            // Restoring controller tracking earlier can connect that tip to a held physical hand.
+            if (PointerManager.m_Instance != null && PointerManager.MainPointerIsPainting()) return;
+            ReleaseBrush();
         }
 
         static void ReleaseBrush()
@@ -508,7 +593,8 @@ namespace TiltBrush
         {
             string path = Path.GetFullPath(CHRISInputMappingStore.PathUnder(Application.persistentDataPath));
             bool loaded = s_Store.Reload(path);
-            if (loaded) Remap.Offer(s_Store.Current);
+            if (loaded) s_Authority.OfferLoaded(s_Store.Current, s_Store.CurrentBytes);
+            else if (s_Store.LastResult == "missing") s_Authority.NoteFileMissing();
             string kept = Remap.Active != null ? "the previous mapping stays active" : "no mapping is active";
             if (loaded)
                 Debug.Log($"CHRIS mapping loaded from {path}: {s_Store.LastDetail}; it takes effect when no mapped input is held and no stroke is in progress");
