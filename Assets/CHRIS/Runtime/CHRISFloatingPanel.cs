@@ -17,15 +17,15 @@ namespace TiltBrush
 
         public bool IsDragging { get; private set; }
 
-        float m_DragRayDistance;
-        Vector3 m_DragPositionOffset;
+        float m_DragDistanceAlongRay;
+        Vector3 m_PanelOffsetFromRay;
 
         public static CHRISFloatingPanel Create(Transform parent)
         {
-            var obj = new GameObject("CHRIS floating panel");
-            obj.transform.SetParent(parent, false);
-            obj.AddComponent<UIComponentManager>();
-            var panel = obj.AddComponent<CHRISFloatingPanel>();
+            var host = new GameObject("CHRIS floating panel");
+            host.transform.SetParent(parent, false);
+            host.AddComponent<UIComponentManager>();
+            var panel = host.AddComponent<CHRISFloatingPanel>();
             panel.BuildHost();
             return panel;
         }
@@ -121,8 +121,8 @@ namespace TiltBrush
 
         public void BeginDrag(Ray ray, Vector3 hit)
         {
-            m_DragRayDistance = Mathf.Max(MinimumDragDistance, Vector3.Dot(hit - ray.origin, ray.direction));
-            m_DragPositionOffset = transform.position - ray.GetPoint(m_DragRayDistance);
+            m_DragDistanceAlongRay = Mathf.Max(MinimumDragDistance, Vector3.Dot(hit - ray.origin, ray.direction));
+            m_PanelOffsetFromRay = transform.position - ray.GetPoint(m_DragDistanceAlongRay);
             IsDragging = true;
         }
 
@@ -136,7 +136,7 @@ namespace TiltBrush
                 return;
             }
 
-            transform.position = ray.GetPoint(m_DragRayDistance) + m_DragPositionOffset;
+            transform.position = ray.GetPoint(m_DragDistanceAlongRay) + m_PanelOffsetFromRay;
         }
 
         public void EndDrag()
@@ -163,13 +163,12 @@ namespace TiltBrush
 
         void UpdateDrag()
         {
-            if (IsDragging)
-            {
-                if (PanelPopUp == null || !PanelPopUp.IsOpen() || !TryGetPointerRay(out var ray))
-                    EndDrag();
-                else
-                    MoveDrag(ray, InputManager.m_Instance.GetCommand(InputManager.SketchCommands.Activate));
-            }
+            if (!IsDragging)
+                return;
+            if (PanelPopUp == null || !PanelPopUp.IsOpen() || !TryGetPointerRay(out var ray))
+                EndDrag();
+            else
+                MoveDrag(ray, InputManager.m_Instance.GetCommand(InputManager.SketchCommands.Activate));
         }
 
         protected override void OnDisablePanel()

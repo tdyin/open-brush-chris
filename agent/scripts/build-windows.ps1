@@ -8,6 +8,7 @@ param(
 # Build/CHRIS-<Name>-<timestamp>/OpenBrush.exe and points Build/CHRIS-current at it.
 $ErrorActionPreference = 'Stop'
 $projectRoot = (Resolve-Path -LiteralPath (Join-Path $PSScriptRoot '../..')).Path
+. (Join-Path $PSScriptRoot 'unity-generated-sidecars.ps1')
 if (-not (Test-Path -LiteralPath $UnityPath -PathType Leaf)) {
     throw "Unity executable not found: $UnityPath"
 }
@@ -70,6 +71,8 @@ $logDir = Join-Path $projectRoot "agent/logs/builds/$Name-$stamp"
 $stateDir = Join-Path $logDir 'unity-state'
 New-Item -ItemType Directory -Path $stateDir -Force | Out-Null
 $dirtyBefore = Get-DirtyPaths
+$snapshotUtc = [datetime]::UtcNow
+$eligibleSidecars = Get-EligibleUnitySidecars $projectRoot $dirtyBefore
 $beforeHashes = @{}
 foreach ($path in (@($knownGenerated) + @($dirtyBefore.Keys) | Sort-Object -Unique)) {
     $beforeHashes[$path] = Get-SourceHash $path
@@ -132,7 +135,21 @@ if (-not $result) {
     if ($line) { $result = $line.Matches[0].Groups[1].Value }
 }
 $dirtyAfter = Get-DirtyPaths
-$unexpected = @($dirtyAfter.Keys | Where-Object { -not $dirtyBefore.ContainsKey($_) -and -not $knownSet.ContainsKey($_) } | Sort-Object)
+$newPaths = @($dirtyAfter.Keys | Where-Object { -not $dirtyBefore.ContainsKey($_) -and -not $knownSet.ContainsKey($_) } | Sort-Object)
+$approvedSidecars = @{}
+$unexpected = @()
+foreach ($path in $newPaths) {
+    if (-not $eligibleSidecars.ContainsKey($path)) {
+        $unexpected += $path
+        continue
+    }
+    try {
+        $approvedSidecars[$path] = Confirm-NewUnitySidecar $projectRoot $path $eligibleSidecars $dirtyAfter $snapshotUtc $process.ExitTime.ToUniversalTime()
+    }
+    catch {
+        $unexpected += "$path ($($_.Exception.Message))"
+    }
+}
 $changedAtEntry = @($dirtyBefore.Keys | Where-Object { (Get-SourceHash $_) -ne $beforeHashes[$_] } | Sort-Object)
 if ($unexpected.Count -gt 0 -or $changedAtEntry.Count -gt 0) {
     @('Unexpected new paths:', $unexpected, 'Preexisting files changed:', $changedAtEntry) |
@@ -168,11 +185,19 @@ foreach ($path in $knownGenerated) {
 }
 $restored | Set-Content -LiteralPath (Join-Path $stateDir 'restored.txt')
 $dirtyFinal = Get-DirtyPaths
-$statusDiff = @($dirtyFinal.Keys | Where-Object { -not $dirtyBefore.ContainsKey($_) -or $dirtyFinal[$_] -ne $dirtyBefore[$_] })
+$statusDiff = @($dirtyFinal.Keys | Where-Object {
+    if ($dirtyBefore.ContainsKey($_)) { return $dirtyFinal[$_] -ne $dirtyBefore[$_] }
+    return -not $approvedSidecars.ContainsKey($_) -or $dirtyFinal[$_] -ne '??'
+})
 $statusDiff += @($dirtyBefore.Keys | Where-Object { -not $dirtyFinal.ContainsKey($_) })
-if ($statusDiff.Count -gt 0 -or @($knownGenerated | Where-Object { (Get-SourceHash $_) -ne $beforeHashes[$_] }).Count -gt 0) {
+$sidecarHashDiff = @($approvedSidecars.Keys | Where-Object { (Get-SourceHash $_) -ne $approvedSidecars[$_].Sha256 })
+if ($statusDiff.Count -gt 0 -or $sidecarHashDiff.Count -gt 0 -or
+    @($knownGenerated | Where-Object { (Get-SourceHash $_) -ne $beforeHashes[$_] }).Count -gt 0) {
     throw "Source differs from the pre-build snapshot; inspect $stateDir"
 }
+@($approvedSidecars.Keys | Sort-Object | ForEach-Object {
+    "$($_)`t$($approvedSidecars[$_].Owner)`t$($approvedSidecars[$_].Sha256)"
+}) | Set-Content -LiteralPath (Join-Path $stateDir 'generated-sidecars.tsv')
 Write-Output "Restored $($restored.Count) known Unity-generated path(s); archived changed bytes in $stateDir"
 
 $errors = @(Select-String -LiteralPath $logPath -Pattern 'error CS\d+|::error ::' | ForEach-Object { $_.Line })

@@ -194,10 +194,11 @@ namespace TiltBrush
         public static bool PassiveNativeUIHover()
         {
             var popup = Instance?.Popup;
+            if (popup == null || !popup.IsOpen()) return false;
+            var floating = popup.GetParentPanel() as CHRISFloatingPanel;
             var controls = SketchControlsScript.m_Instance;
-            return popup != null && popup.IsOpen() && popup.GetParentPanel() is CHRISFloatingPanel floating &&
-                !floating.IsDragging && popup.GetParentPanel()?.PanelPopUp == popup &&
-                controls != null && controls.IsUserLookingAtPanel(popup.GetParentPanel()) && InputReleased();
+            return floating != null && !floating.IsDragging && floating.PanelPopUp == popup && controls != null &&
+                controls.IsUserLookingAtPanel(floating) && InputReleased();
         }
 
         public static bool SameContext(JObject reviewed, JObject current) => reviewed != null && current != null &&

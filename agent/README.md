@@ -114,6 +114,10 @@ renders and protocol fixtures go to `agent/logs/native-ui/`.
 Run `./agent/scripts/test-build-source-patch.ps1` to verify that the build
 helper's Git patch replays text line endings and binary bytes in an isolated
 local fixture. It writes only ignored evidence under `agent/logs/`.
+Run `./agent/scripts/test-unity-generated-sidecars.ps1` to check that a build
+can retain a new Unity `.cs.meta` only for a source file already added before
+the build. The helper records each retained path, owner, and SHA256 in
+`unity-state/generated-sidecars.tsv`; other new paths still stop for review.
 
 The approved directory relocation passed all 30 native editor checks. All 11
 preview PNGs matched the pre-move root renders byte-for-byte, with no source

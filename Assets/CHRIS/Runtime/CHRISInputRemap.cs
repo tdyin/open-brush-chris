@@ -372,6 +372,7 @@ namespace TiltBrush
             s_Latency.Clear();
             s_LastInputTime = -1;
             s_LastSampledEvent = -1;
+            s_PrevViewKeys = s_PrevBrushKeys = Vector2.zero;
         }
 
         // Load once at startup so the log shows the result before any controller is read.
@@ -431,9 +432,13 @@ namespace TiltBrush
         // Carries out this frame's undo, brush size and view movement through native operations.
         static void Apply()
         {
+            if (Remap.DrawDown) MarkLatency("draw_activate_set", CHRISMappedAction.Draw);
             var sketch = SketchControlsScript.m_Instance;
             if (Remap.UndoPressed && sketch != null && sketch.CanUndo())
+            {
                 sketch.IssueGlobalCommand(SketchControlsScript.GlobalCommands.Undo);
+                MarkLatency("undo_issued", CHRISMappedAction.Undo);
+            }
 
             var pointers = PointerManager.m_Instance;
             if (Remap.SizeNotches != 0 && pointers != null)
@@ -441,13 +446,18 @@ namespace TiltBrush
                 pointers.AdjustAllPointersBrushSize01(BrushSizeStep01 * Remap.SizeNotches);
                 pointers.MarkAllBrushSizeUsed();
                 App.Switchboard.TriggerBrushSizeChanged();
+                MarkLatency("brush_size_applied", CHRISMappedAction.BrushSize);
             }
 
             var head = ViewpointScript.Head;
             if (head != null) Heading.Update(head.forward);
             Vector2 local = Remap.ViewKeys * (ViewKeySpeed * Time.deltaTime) + Remap.ViewMouse * ViewMouseScale;
             if (local != Vector2.zero && App.Scene != null)
+            {
                 ApiMethods.MoveUserBy(Heading.ToRoom(local));
+                MarkMovementLatency("move_view_applied", CHRISMappedAction.MoveView, Remap.ViewKeys, ref s_PrevViewKeys);
+            }
+            else s_PrevViewKeys = Vector2.zero;
 
             UpdateBrushOwnership(head);
             if (s_Driver != null)
@@ -456,6 +466,7 @@ namespace TiltBrush
                 if (move != Vector2.zero)
                 {
                     s_Plane.Move(move);
+                    MarkMovementLatency("move_brush_plane_updated", CHRISMappedAction.MoveBrush, Remap.BrushKeys, ref s_PrevBrushKeys);
                     // Sample only frames that bring a new input event; a held key's last event is its
                     // press, so later held frames would otherwise count the time since the press.
                     var device = Remap.BrushMouse != Vector2.zero ? (UnityEngine.InputSystem.InputDevice)Mouse.current : Keyboard.current;
@@ -465,8 +476,44 @@ namespace TiltBrush
                         s_LastInputTime = device.lastUpdateTime;
                     }
                 }
+                else s_PrevBrushKeys = Vector2.zero;
             }
+            else s_PrevBrushKeys = Vector2.zero;
         }
+
+        // Measurement only (CHRISPerfProbe, off by default). A device-update timing estimate: the mapped
+        // device's lastUpdateTime (its most recent state event, not the specific control; on Windows
+        // stamped when Unity processes Windows input) to this point in Apply. Endpoints, named in the labels:
+        // draw = mapped Activate set (before the stroke is created), undo = undo command issued,
+        // brush_size = size step applied, move_view = view moved, move_brush = plane tip updated
+        // (before the pose is written in onBeforeRender). Nothing here runs while sampling is off.
+        static Vector2 s_PrevViewKeys, s_PrevBrushKeys;
+
+        static void MarkLatency(string action, CHRISMappedAction mapped)
+        {
+            if (!CHRISPerfProbe.LatencyActive) return;
+            var entry = Remap.Active?.Find(mapped);
+            if (entry == null) return;
+            bool keyboard = entry.Source == CHRISMappingSource.Key || entry.Source == CHRISMappingSource.KeyVector2;
+            UnityEngine.InputSystem.InputDevice device = keyboard ? (UnityEngine.InputSystem.InputDevice)Keyboard.current : Mouse.current;
+            if (device != null) CHRISPerfProbe.MarkAction(action, device.lastUpdateTime);
+        }
+
+        // Keyboard movement is sampled at the start of a movement episode only: the frame the direction
+        // goes from zero to non-zero. A further direction key pressed while another is still held is NOT
+        // sampled, and unrelated keyboard events during a hold cannot add samples. Mouse movement samples
+        // each frame with a new mouse event (the probe drops repeats of the same event time).
+        static void MarkMovementLatency(string action, CHRISMappedAction mapped, Vector2 keys, ref Vector2 previous)
+        {
+            bool sample = ShouldSampleMovement(keys, previous);
+            previous = keys;
+            if (sample && CHRISPerfProbe.LatencyActive) MarkLatency(action, mapped);
+        }
+
+        // Keys: only the start of a movement episode (zero -> non-zero). Zero keys means mouse-driven
+        // movement, which is sampled every frame (the probe ignores repeated event times).
+        internal static bool ShouldSampleMovement(Vector2 keys, Vector2 previous) =>
+            keys == Vector2.zero || previous == Vector2.zero;
 
         // ---- move_brush: the single brush pose writer ----
         // While the active mapping maps move_brush, the brush controller's TrackedPoseDriver is off
