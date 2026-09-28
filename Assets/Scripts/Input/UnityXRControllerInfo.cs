@@ -31,6 +31,36 @@ namespace TiltBrush
         private bool isBrush = false;
         readonly CHRISVoiceShortcut m_VoiceShortcut = new CHRISVoiceShortcut();
         int m_VoiceSampleFrame = -1;
+        bool m_PhysicalAwaitNeutral;
+        int m_PhysicalReleasedFrame = -1;
+
+        internal void RequirePhysicalRelease() => m_PhysicalAwaitNeutral = true;
+
+        bool PhysicalInputReady()
+        {
+            if (m_PhysicalReleasedFrame == Time.frameCount) return false;
+            if (!m_PhysicalAwaitNeutral) return true;
+            bool held = MapVrInput(VrInput.Trigger) || MapVrInput(VrInput.Grip) ||
+                MapVrInput(VrInput.Button01) || MapVrInput(VrInput.Button02) ||
+                MapVrInput(VrInput.Thumbstick) ||
+                (FindAction("ThumbAxis")?.ReadValue<Vector2>().sqrMagnitude ?? 0f) > 0.01f ||
+                (FindAction("PadAxis")?.ReadValue<Vector2>().sqrMagnitude ?? 0f) > 0.01f;
+            if (!held)
+            {
+                m_PhysicalAwaitNeutral = false;
+                m_PhysicalReleasedFrame = Time.frameCount;
+            }
+            return false;
+        }
+
+        CHRISVirtualHand VirtualHand
+        {
+            get
+            {
+                CHRISInputMappingHost.Tick();
+                return CHRISBimanualHost.HandFor(this);
+            }
+        }
 
         internal bool RawVrInput(VrInput input) => MapVrInput(input);
         internal bool PhysicalRightHand => isBrush;
@@ -108,6 +138,19 @@ namespace TiltBrush
                 actionSet.Brush.Disable();
                 SetActionMask();
             }
+        }
+
+        // Re-acquire a controller whose cached device went invalid (asleep, or woke with a new handle),
+        // including after a CHRIS mapping stops, until it is valid again. Called from Update only.
+        // A valid device returns immediately, so with valid controllers this costs no lookups (stock
+        // behaviour). While invalid: every frame when a mapping is in use, otherwise every 30 frames.
+        int m_NextDeviceRefreshFrame;
+        void RefreshPhysicalDevice()
+        {
+            if (device.isValid) return;
+            if (Time.frameCount < m_NextDeviceRefreshFrame) return;
+            m_NextDeviceRefreshFrame = Time.frameCount + (CHRISInputMappingHost.MappingInUse ? 1 : 30);
+            device = InputDevices.GetDeviceAtXRNode(isBrush ? XRNode.RightHand : XRNode.LeftHand);
         }
 
         private void SetActionMask()
@@ -200,7 +243,12 @@ namespace TiltBrush
         {
             // While a CHRIS move_brush mapping owns the brush pose, the brush counts as present even if
             // the physical controller is resting or asleep, so it shows and paints at the mapped tip.
-            get => device.isValid || (IsLogicalBrush && CHRISInputMappingHost.BrushPoseOwned);
+            get
+            {
+                return device.isValid || (IsLogicalBrush && CHRISInputMappingHost.BrushPoseOwned) ||
+                    (IsLogicalBrush && CHRISBimanualHost.OwnsBrushPose) ||
+                    (!IsLogicalBrush && CHRISBimanualHost.OwnsWandPose);
+            }
             set
             {
 
@@ -209,18 +257,25 @@ namespace TiltBrush
 
         public override Vector2 GetPadValue()
         {
+            var virtualHand = VirtualHand;
+            if (virtualHand != null) return virtualHand.Stick;
+            if (!PhysicalInputReady()) return Vector2.zero;
             InputAction action = FindAction("PadAxis");
             return action != null ? action.ReadValue<Vector2>() : Vector2.zero;
         }
 
         public override Vector2 GetThumbStickValue()
         {
+            var virtualHand = VirtualHand;
+            if (virtualHand != null) return virtualHand.Stick;
+            if (!PhysicalInputReady()) return Vector2.zero;
             InputAction action = FindAction("ThumbAxis");
             return action != null ? action.ReadValue<Vector2>() : Vector2.zero;
         }
 
         public override void Update()
         {
+            RefreshPhysicalDevice();
             base.Update();
 
             InputAction padTouch = FindAction("PadTouch");
@@ -239,6 +294,9 @@ namespace TiltBrush
 
         public override Vector2 GetPadValueDelta()
         {
+            var virtualHand = VirtualHand;
+            if (virtualHand != null) return virtualHand.Stick;
+            if (!PhysicalInputReady()) return Vector2.zero;
             InputAction action = FindAction("ThumbAxis");
             if (action != null && action.inProgress)
             {
@@ -285,6 +343,9 @@ namespace TiltBrush
 
         public override float GetGripValue()
         {
+            var virtualHand = VirtualHand;
+            if (virtualHand != null) return virtualHand.GripValue;
+            if (!PhysicalInputReady()) return 0f;
             if (IsStylusActive())
             {
                 return stylusState.cluster_front_value ? 1.0f : 0;
@@ -300,6 +361,9 @@ namespace TiltBrush
 
         public override float GetTriggerValue()
         {
+            var virtualHand = VirtualHand;
+            if (virtualHand != null) return virtualHand.TriggerValue;
+            if (!PhysicalInputReady()) return 0f;
             // A CHRIS-mapped draw is a fully pressed trigger.
             if (IsLogicalBrush)
             {
@@ -348,6 +412,9 @@ namespace TiltBrush
 
         public override bool GetVrInputTouch(VrInput input)
         {
+            var virtualHand = VirtualHand;
+            if (virtualHand != null) return virtualHand.Touch(input);
+            if (!PhysicalInputReady()) return false;
             return MapVrTouch(input);
         }
 
@@ -404,6 +471,9 @@ namespace TiltBrush
         /// Returns the value of the specified button (level trigger).
         public override bool GetVrInput(VrInput input)
         {
+            var virtualHand = VirtualHand;
+            if (virtualHand != null) return virtualHand.Get(input);
+            if (!PhysicalInputReady()) return false;
             if (UsesCombinedTrigger(input))
             {
                 return !VoiceConsumes(input) && m_CombinedTrigger.Held;
@@ -457,6 +527,9 @@ namespace TiltBrush
         /// Returns true if the specified button was just pressed (rising-edge trigger).
         public override bool GetVrInputDown(VrInput input)
         {
+            var virtualHand = VirtualHand;
+            if (virtualHand != null) return virtualHand.Down(input);
+            if (!PhysicalInputReady()) return false;
             if (UsesCombinedTrigger(input))
             {
                 return !VoiceConsumes(input) && m_CombinedTrigger.Down;
@@ -467,6 +540,9 @@ namespace TiltBrush
         /// Returns true if the specified input has just been deactivated (falling-edge trigger).
         public override bool GetVrInputUp(VrInput input)
         {
+            var virtualHand = VirtualHand;
+            if (virtualHand != null) return virtualHand.Up(input);
+            if (!PhysicalInputReady()) return false;
             if (UsesCombinedTrigger(input))
             {
                 return !VoiceConsumes(input) && m_CombinedTrigger.Up;

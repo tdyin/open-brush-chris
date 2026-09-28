@@ -89,6 +89,200 @@ namespace TiltBrush
             finally { if (File.Exists(path)) File.Delete(path); }
         }
 
+        static string TempPath() => Path.Combine(Path.GetTempPath(), "chris-mapping-" + Guid.NewGuid().ToString("N") + ".json");
+
+        [Test]
+        public void InvalidSavedFileIsReplacedOnlyByAReviewedApply()
+        {
+            var wire = Wire();
+            string proposed = (string)wire["apply_request"]["mapping_json"];
+            var invalidFiles = new Dictionary<string, byte[]> {
+                ["schema-invalid JSON"] = Encoding.UTF8.GetBytes("{\"version\": \"v0.1.1\", \"mappings\": ["),
+                ["bad UTF-8"] = new byte[] { 0x7B, 0xFF, 0xFE, 0x7D },
+                ["too large"] = Encoding.UTF8.GetBytes(new string(' ', CHRISInputMapping.MaxBytes + 10) + "{}"),
+            };
+            foreach (var kv in invalidFiles)
+            {
+                string path = TempPath();
+                File.WriteAllBytes(path, kv.Value);
+                try
+                {
+                    var authority = new CHRISMappingAuthority(path);
+                    var remap = new CHRISInputRemap();
+                    var input = new FakeInput();
+                    authority.NoteFileRejected();
+                    var status = authority.Status();
+                    Assert.That(authority.SavedFileInvalid, Is.True, kv.Key);
+                    Assert.That((string)status["state"], Is.EqualTo("none"), kv.Key + ": wire state unchanged");
+                    Assert.That(status["active_digest"].Type, Is.EqualTo(JTokenType.Null), kv.Key);
+
+                    var reply = authority.Apply(CHRISNativePopup.BuildApplyRequest(status, proposed, "headset-invalid"));
+                    Assert.That((string)reply["result"], Is.EqualTo("pending_neutral"), kv.Key + ": " + (string)reply["reason"]);
+                    Assert.That(File.ReadAllBytes(path), Is.EqualTo(kv.Value), kv.Key + ": pending never writes");
+                    Tick(authority, remap, input);
+                    Assert.That((string)authority.Status()["state"], Is.EqualTo("active"), kv.Key);
+                    Assert.That(File.ReadAllBytes(path), Is.EqualTo(new UTF8Encoding(false).GetBytes(proposed)),
+                        kv.Key + ": exact approved bytes persisted");
+                    Assert.That(authority.SavedFileInvalid, Is.False, kv.Key);
+                }
+                finally { if (File.Exists(path)) File.Delete(path); }
+            }
+        }
+
+        [Test]
+        public void FileChangedAfterRejectedOrValidLoadStillRejectsApply()
+        {
+            var wire = Wire();
+            string before = (string)wire["before"]["active_mapping_json"];
+            string proposed = (string)wire["apply_request"]["mapping_json"];
+
+            string invalidPath = TempPath();
+            File.WriteAllText(invalidPath, "{ not json", new UTF8Encoding(false));
+            try
+            {
+                var authority = new CHRISMappingAuthority(invalidPath);
+                authority.NoteFileRejected();
+                File.WriteAllText(invalidPath, "{ still not json, but different", new UTF8Encoding(false));
+                var reply = authority.Apply(CHRISNativePopup.BuildApplyRequest(authority.Status(), proposed, "r-invalid"));
+                Assert.That((string)reply["reason"], Is.EqualTo("file_changed"), "The rejected file changed before apply");
+                Assert.That(File.ReadAllText(invalidPath), Is.EqualTo("{ still not json, but different"), "Never overwritten");
+            }
+            finally { if (File.Exists(invalidPath)) File.Delete(invalidPath); }
+
+            string validPath = TempPath();
+            File.WriteAllText(validPath, before, new UTF8Encoding(false));
+            try
+            {
+                var authority = new CHRISMappingAuthority(validPath);
+                var remap = new CHRISInputRemap();
+                var input = new FakeInput();
+                authority.OfferLoaded(CHRISInputMapping.Parse(Encoding.UTF8.GetBytes(before)), Encoding.UTF8.GetBytes(before));
+                Tick(authority, remap, input);
+                File.WriteAllText(validPath, before + " ", new UTF8Encoding(false));
+                var reply = authority.Apply(CHRISNativePopup.BuildApplyRequest(authority.Status(), proposed, "r-valid"));
+                Assert.That((string)reply["reason"], Is.EqualTo("file_changed"), "A valid file edited after load");
+                Assert.That((string)authority.Status()["state"], Is.EqualTo("active"), "The active mapping is kept");
+                Assert.That(authority.SavedFileInvalid, Is.False);
+            }
+            finally { if (File.Exists(validPath)) File.Delete(validPath); }
+        }
+
+        [Test]
+        public void PanelReviewConfirmReportsActiveCancelledSupersededAndStale()
+        {
+            var wire = Wire();
+            string before = (string)wire["before"]["active_mapping_json"];
+            string proposed = (string)wire["apply_request"]["mapping_json"];
+            string path = TempPath();
+            File.WriteAllText(path, before, new UTF8Encoding(false));
+            try
+            {
+                var authority = new CHRISMappingAuthority(path);
+                var remap = new CHRISInputRemap();
+                var input = new FakeInput();
+                authority.OfferLoaded(CHRISInputMapping.Parse(Encoding.UTF8.GetBytes(before)), Encoding.UTF8.GetBytes(before));
+                Tick(authority, remap, input);
+
+                // Confirm -> pending -> active.
+                var reviewBase = authority.Status();
+                Assert.That(CHRISNativePopup.SameMappingStatus(reviewBase, authority.Status()), Is.True);
+                Assert.That((string)authority.Apply(CHRISNativePopup.BuildApplyRequest(reviewBase, proposed, "headset-1"))["result"],
+                    Is.EqualTo("pending_neutral"));
+                Assert.That(CHRISNativePopup.CandidateOutcome(authority.Status(), proposed, "headset-1"), Is.Null, "Still pending");
+                Tick(authority, remap, input);
+                Assert.That(CHRISNativePopup.CandidateOutcome(authority.Status(), proposed, "headset-1"), Is.EqualTo("Mapping active."));
+
+                // Stale: the status moved after review, so Confirm is refused and the apply is rejected.
+                Assert.That(CHRISNativePopup.SameMappingStatus(reviewBase, authority.Status()), Is.False);
+                Assert.That((string)authority.Apply(CHRISNativePopup.BuildApplyRequest(reviewBase, before, "headset-stale"))["reason"],
+                    Is.EqualTo("stale_status"));
+
+                // Cancelled: a pending candidate stopped by Escape.
+                var reviewAgain = authority.Status();
+                Assert.That((string)authority.Apply(CHRISNativePopup.BuildApplyRequest(reviewAgain, before, "headset-2"))["result"],
+                    Is.EqualTo("pending_neutral"));
+                input.StopPressedThisFrame = true;
+                Tick(authority, remap, input);
+                input.StopPressedThisFrame = false;
+                Assert.That(CHRISNativePopup.CandidateOutcome(authority.Status(), before, "headset-2"),
+                    Is.EqualTo("Mapping cancelled. Review again before submitting."));
+
+                // Superseded: after that, another request (not ours) becomes the latest.
+                Assert.That((string)authority.Apply(CHRISNativePopup.BuildApplyRequest(authority.Status(), proposed, "backend-3"))["result"],
+                    Is.EqualTo("pending_neutral"));
+                Assert.That(CHRISNativePopup.CandidateOutcome(authority.Status(), before, "headset-2"),
+                    Is.EqualTo("Mapping superseded. Review again before submitting."));
+            }
+            finally { if (File.Exists(path)) File.Delete(path); }
+        }
+
+        [Test]
+        public void ApprovalReviewedBeforeTheInvalidFileChangedIsStale()
+        {
+            var wire = Wire();
+            string proposed = (string)wire["apply_request"]["mapping_json"];
+            string path = TempPath();
+            File.WriteAllText(path, "{ invalid A", new UTF8Encoding(false));
+            try
+            {
+                var authority = new CHRISMappingAuthority(path);
+                authority.NoteFileRejected();
+                var reviewed = authority.Status();
+
+                // The invalid file is replaced on disk by another invalid file, then reloaded.
+                File.WriteAllText(path, "{ invalid B", new UTF8Encoding(false));
+                authority.NoteFileRejected();
+                var now = authority.Status();
+                Assert.That((long)now["revision"], Is.GreaterThan((long)reviewed["revision"]), "The changed file advances the revision");
+                Assert.That((string)now["state"], Is.EqualTo("none"), "Wire state unchanged");
+
+                var reply = authority.Apply(CHRISNativePopup.BuildApplyRequest(reviewed, proposed, "headset-old"));
+                Assert.That((string)reply["reason"], Is.EqualTo("stale_status"), "The old approval is refused");
+                Assert.That(File.ReadAllText(path), Is.EqualTo("{ invalid B"), "The new file is untouched");
+
+                // Re-reviewed against the current file, the replacement is accepted.
+                Assert.That((string)authority.Apply(CHRISNativePopup.BuildApplyRequest(now, proposed, "headset-new"))["result"],
+                    Is.EqualTo("pending_neutral"));
+
+                // Reloading the same unchanged file does not move the revision.
+                authority.DiscardPending();
+                long revision = (long)authority.Status()["revision"];
+                authority.NoteFileRejected();
+                Assert.That((long)authority.Status()["revision"], Is.EqualTo(revision), "Same bytes, same revision");
+            }
+            finally { if (File.Exists(path)) File.Delete(path); }
+        }
+
+        [Test]
+        public void OnlyPersistedActivationsCountAsSavedFileWrites()
+        {
+            var wire = Wire();
+            string before = (string)wire["before"]["active_mapping_json"];
+            string proposed = (string)wire["apply_request"]["mapping_json"];
+            string path = TempPath();
+            File.WriteAllText(path, before, new UTF8Encoding(false));
+            try
+            {
+                var authority = new CHRISMappingAuthority(path);
+                var remap = new CHRISInputRemap();
+                var input = new FakeInput();
+                authority.OfferLoaded(CHRISInputMapping.Parse(Encoding.UTF8.GetBytes(before)), Encoding.UTF8.GetBytes(before));
+                Tick(authority, remap, input);
+                Assert.That(authority.PersistCount, Is.Zero, "Activating the loaded file writes nothing");
+                Assert.That((string)authority.Apply(CHRISNativePopup.BuildApplyRequest(authority.Status(), proposed, "headset-1"))["result"],
+                    Is.EqualTo("pending_neutral"));
+                Assert.That(authority.PersistCount, Is.Zero, "Pending writes nothing");
+                Tick(authority, remap, input);
+                Assert.That(authority.PersistCount, Is.EqualTo(1),
+                    "A persisted approval counts, so the popup's saved-file cache (SavedFileRevision) is invalidated");
+                input.StopPressedThisFrame = true;
+                Tick(authority, remap, input);
+                Assert.That(authority.PersistCount, Is.EqualTo(1), "Stop writes nothing");
+                Assert.That(File.ReadAllText(path), Is.EqualTo(proposed), "After Stop the saved file is the approved B");
+            }
+            finally { if (File.Exists(path)) File.Delete(path); }
+        }
+
         [Test]
         public void StopCancelsPendingWithoutWritingAndStaleRequestCannotReviveIt()
         {

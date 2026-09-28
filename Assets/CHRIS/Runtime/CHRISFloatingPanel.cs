@@ -58,16 +58,24 @@ namespace TiltBrush
             gameObject.SetActive(false);
         }
 
-        public static void Show()
+        public static bool Show(bool controls = false)
         {
             var manager = PanelManager.m_Instance;
             var panel = manager?.GetOrCreateCHRISPanel();
             if (panel == null || !manager.IsPanelAvailable(panel))
-                return;
+                return false;
             panel.PlaceInFront(ViewpointScript.Head);
             panel.gameObject.SetActive(true);
             if (panel.PanelPopUp == null)
                 panel.CreatePopUp(CHRISUIResources.Load().PopupPrefab, Vector3.zero, false, true);
+            if (controls && panel.PanelPopUp is CHRISNativePopup popup)
+            {
+                CHRISBimanualHost.ResetUIPointer();
+                popup.ShowControls(true);
+            }
+            // A new popup is Opening, not yet IsOpen(); F1 still requested a visible UI.
+            return panel.gameObject.activeInHierarchy && panel.PanelPopUp is CHRISNativePopup shown &&
+                !shown.IsClosingOrClosed();
         }
 
         // Called only when opening/retrieving the window, never every frame.
@@ -97,6 +105,7 @@ namespace TiltBrush
         static bool TryGetPointerRay(out Ray ray)
         {
             ray = default;
+            if (CHRISBimanualHost.TryGetUIPointerRay(out ray)) return true;
             if (InputManager.m_Instance == null)
                 return false;
             if (App.Config.m_SdkMode != SdkMode.Monoscopic)

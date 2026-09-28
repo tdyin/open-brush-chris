@@ -74,6 +74,23 @@ namespace TiltBrush
             m_UndoHeld = false;
         }
 
+        // A pose-mode entry requires fresh convenience presses; wheel fractions cannot cross UI
+        // or hand-back boundaries. This does not affect the v0.1.1 mapping path.
+        public void SuppressBimanualConvenience(ICHRISInputState input)
+        {
+            LatchHeld(input, m_Active);
+            ClearMotion();
+            m_UndoHeld = false;
+        }
+
+        public void SuppressForEditor(ICHRISInputState input)
+        {
+            LatchHeld(input, m_Active);
+            SetDraw(false);
+            ClearMotion();
+            m_UndoHeld = false;
+        }
+
         public void Tick(ICHRISInputState input, bool focused, bool strokeInProgress)
         {
             StoppedThisFrame = input.StopPressedThisFrame;
@@ -318,9 +335,11 @@ namespace TiltBrush
             var keyboard = Keyboard.current;
             if (keyboard == null || !input.StartsWith("key.")) return false;
             // Re-resolve if the keyboard was replaced (reconnect, or Play mode without a domain reload).
-            if (!m_Keys.TryGetValue(input, out var key) || (key != null && key.device != keyboard))
+            if (!m_Keys.TryGetValue(input, out var key) || key == null || key.device != keyboard)
             {
-                key = keyboard.TryGetChildControl<ButtonControl>(input.Substring(4));
+                string name = input.Substring(4);
+                // Input System's control names are "0".."9"; digit2Key is only a C# property name.
+                key = keyboard.TryGetChildControl<ButtonControl>(name);
                 m_Keys[input] = key;
             }
             return key != null && key.isPressed;
@@ -343,8 +362,18 @@ namespace TiltBrush
         public const float BrushMouseScale = 0.01f;  // units per pixel of mouse movement
 
         public static CHRISInputRemap Remap { get; private set; } = new CHRISInputRemap();
+        // Cheap (no status object): called per frame by controller infos.
+        internal static bool MappingInUse => Remap.Active != null || Remap.HasPending || s_Authority.HasPending;
         public static CHRISViewHeading Heading { get; private set; } = new CHRISViewHeading();
-        public static bool MouseDeltaMapped => Remap.MouseDeltaMapped;
+        public static bool DesktopControlsOwned => CHRISBimanualHost.OwnsDesktopControl ||
+            CHRISBimanualHost.RecoveryUI || CHRISPanel.Instance?.Popup?.BindingCaptureActive == true;
+        internal static bool AllowsMappedConvenience(CHRISInputMapping mapping, bool ownsMappedPose) =>
+            mapping?.SchemaVersion != CHRISInputMapping.BimanualVersion || ownsMappedPose;
+        internal static bool MappingOwnsKeyboardShortcuts(CHRISInputMapping mapping, bool desktopOwned) =>
+            mapping != null && (mapping.SchemaVersion != CHRISInputMapping.BimanualVersion || desktopOwned);
+        internal static bool MappingUsesCombinedTrigger(CHRISInputMapping mapping) =>
+            mapping?.SchemaVersion == CHRISInputMapping.Version;
+        public static bool MouseDeltaMapped => Remap.MouseDeltaMapped || DesktopControlsOwned;
         static CHRISInputMappingStore s_Store = new CHRISInputMappingStore();
         static CHRISMappingAuthority s_Authority = NewAuthority();
         static CHRISPhysicalTriggerGate s_PhysicalTriggerGate = new CHRISPhysicalTriggerGate();
@@ -361,6 +390,7 @@ namespace TiltBrush
             Heading = new CHRISViewHeading();
             s_Store = new CHRISInputMappingStore();
             s_Authority = NewAuthority();
+            s_SavedFileRevision = 0;
             s_PhysicalTriggerGate = new CHRISPhysicalTriggerGate();
             s_Started = s_ShortcutsOwned = s_ShortcutsBefore = false;
             s_Frame = -1;
@@ -393,16 +423,41 @@ namespace TiltBrush
             Start();
             var pointers = PointerManager.m_Instance;
             bool stroke = pointers != null && PointerManager.MainPointerIsPainting();
+            var controls = SketchControlsScript.m_Instance;
+            bool bimanualGrab = CHRISBimanualHost.MappingActive &&
+                (CHRISBimanualHost.Input.Brush.GripHeld || CHRISBimanualHost.Input.Wand.GripHeld ||
+                 (controls != null && (controls.IsUserGrabbingWorld() || controls.IsUserInteractingWithAnyWidget())));
+            bool interactionBusy = stroke || bimanualGrab;
+            bool activationBusy = interactionBusy || (CHRISBimanualHost.MappingActive &&
+                (CHRISDeviceInput.Instance.MouseDelta != Vector2.zero || CHRISDeviceInput.Instance.WheelNotches != 0));
             bool wasActive = Remap.Active != null;
             bool hadMappedControl = wasActive || s_PhysicalTriggerGate.WaitingForRelease;
             bool focused = InputFocused(Application.isFocused, App.VrSdk == null || !App.VrSdk.IsAppFocusBlocked());
-            s_Authority.TryActivate(CHRISDeviceInput.Instance, focused, stroke, Remap);
-            Remap.Tick(CHRISDeviceInput.Instance, focused, stroke);
-            if (Remap.StoppedThisFrame) s_Authority.Stop();
+            s_Authority.TryActivate(CHRISDeviceInput.Instance, focused, activationBusy, Remap);
+            Remap.Tick(CHRISDeviceInput.Instance, focused, interactionBusy);
+            if (Remap.StoppedThisFrame)
+            {
+                s_Authority.Stop();
+                CHRISBimanualHost.ReleaseKeyboardUI();
+            }
             else s_Authority.CompleteActivation(Remap);
             if (hadMappedControl && (Remap.StoppedThisFrame || !focused)) s_PhysicalTriggerGate.RequireRelease();
             if (!wasActive && Remap.Active != null) Debug.Log("CHRIS mapping active: Open Brush keyboard shortcuts off, Escape stops");
             if (wasActive && Remap.Active == null) Debug.Log("CHRIS mapping stopped: shortcuts restored; reload to use it again");
+            if (!Remap.StoppedThisFrame && focused && Keyboard.current != null &&
+                Keyboard.current.f1Key.wasPressedThisFrame)
+            {
+                if (CHRISFloatingPanel.Show(true))
+                    CHRISBimanualHost.RequestKeyboardUI();
+            }
+            // Legacy move_brush relinquishes its driver before two-hand control can take it.
+            UpdateBrushOwnership(ViewpointScript.Head);
+            CHRISBimanualHost.Tick(Remap.Active, CHRISDeviceInput.Instance, focused, stroke);
+            if (CHRISPanel.Instance?.Popup?.BindingCaptureActive == true || CHRISBimanualHost.RecoveryUI)
+                Remap.SuppressForEditor(CHRISDeviceInput.Instance);
+            else if (CHRISBimanualHost.MappingActive && (!CHRISBimanualHost.OwnsMappedPose ||
+                CHRISBimanualHost.Input.NeedsConvenienceRelease))
+                Remap.SuppressBimanualConvenience(CHRISDeviceInput.Instance);
             SyncShortcuts();
             Apply();
         }
@@ -411,7 +466,8 @@ namespace TiltBrush
         internal static bool InputFocusedNow => InputFocused(Application.isFocused,
             App.VrSdk == null || !App.VrSdk.IsAppFocusBlocked());
         internal static bool PhysicalTriggerWaitingForRelease => s_PhysicalTriggerGate.WaitingForRelease;
-        internal static bool PhysicalTriggerControlled => ShouldGatePhysicalTrigger(Remap.Active != null,
+        internal static bool PhysicalTriggerControlled => ShouldGatePhysicalTrigger(
+            MappingUsesCombinedTrigger(Remap.Active),
             Remap.DrawUp, s_PhysicalTriggerGate.WaitingForRelease);
         internal static bool ShouldGatePhysicalTrigger(bool mappingActive, bool mappedDrawUp, bool waitingForRelease) =>
             mappingActive || mappedDrawUp || waitingForRelease;
@@ -423,25 +479,53 @@ namespace TiltBrush
             return s_Authority.Status();
         }
 
+        // Headset UI only (not in the wire status): the saved file failed validation, so a reviewed
+        // apply would replace it. SavedFileRevision changes on every reload so the popup can re-read
+        // the saved file only when it may have changed.
+        internal static bool SavedMappingInvalid => s_Authority.SavedFileInvalid;
+        // Changes on every reload and on every successful write of an approved mapping.
+        internal static int SavedFileRevision => s_SavedFileRevision + s_Authority.PersistCount;
+        internal static long MappingRevision => s_Authority.Revision;
+        static int s_SavedFileRevision;
+
         internal static JObject ActivateMapping(JObject request)
         {
             Start();
             return s_Authority.Apply(request);
         }
 
+        internal static JObject DiscardPendingMapping()
+        {
+            Start();
+            return s_Authority.DiscardPending();
+        }
+
+        internal static void StopMapping()
+        {
+            Start();
+            Remap.Stop();
+            s_Authority.Stop();
+            CHRISBimanualHost.ReleaseKeyboardUI();
+            s_PhysicalTriggerGate.RequireRelease();
+            bool stroke = PointerManager.m_Instance != null && PointerManager.MainPointerIsPainting();
+            CHRISBimanualHost.Tick(null, CHRISDeviceInput.Instance, true, stroke);
+            SyncShortcuts();
+        }
+
         // Carries out this frame's undo, brush size and view movement through native operations.
         static void Apply()
         {
+            bool convenienceAllowed = AllowsMappedConvenience(Remap.Active, CHRISBimanualHost.OwnsMappedPose);
             if (Remap.DrawDown) MarkLatency("draw_activate_set", CHRISMappedAction.Draw);
             var sketch = SketchControlsScript.m_Instance;
-            if (Remap.UndoPressed && sketch != null && sketch.CanUndo())
+            if (convenienceAllowed && Remap.UndoPressed && sketch != null && sketch.CanUndo())
             {
                 sketch.IssueGlobalCommand(SketchControlsScript.GlobalCommands.Undo);
                 MarkLatency("undo_issued", CHRISMappedAction.Undo);
             }
 
             var pointers = PointerManager.m_Instance;
-            if (Remap.SizeNotches != 0 && pointers != null)
+            if (convenienceAllowed && Remap.SizeNotches != 0 && pointers != null)
             {
                 pointers.AdjustAllPointersBrushSize01(BrushSizeStep01 * Remap.SizeNotches);
                 pointers.MarkAllBrushSizeUsed();
@@ -452,14 +536,13 @@ namespace TiltBrush
             var head = ViewpointScript.Head;
             if (head != null) Heading.Update(head.forward);
             Vector2 local = Remap.ViewKeys * (ViewKeySpeed * Time.deltaTime) + Remap.ViewMouse * ViewMouseScale;
-            if (local != Vector2.zero && App.Scene != null)
+            if (convenienceAllowed && local != Vector2.zero && App.Scene != null)
             {
                 ApiMethods.MoveUserBy(Heading.ToRoom(local));
                 MarkMovementLatency("move_view_applied", CHRISMappedAction.MoveView, Remap.ViewKeys, ref s_PrevViewKeys);
             }
             else s_PrevViewKeys = Vector2.zero;
 
-            UpdateBrushOwnership(head);
             if (s_Driver != null)
             {
                 Vector2 move = Remap.BrushKeys * (BrushKeySpeed * Time.deltaTime) + Remap.BrushMouse * BrushMouseScale;
@@ -642,6 +725,8 @@ namespace TiltBrush
             bool loaded = s_Store.Reload(path);
             if (loaded) s_Authority.OfferLoaded(s_Store.Current, s_Store.CurrentBytes);
             else if (s_Store.LastResult == "missing") s_Authority.NoteFileMissing();
+            else if (s_Store.LastResult != "unreadable") s_Authority.NoteFileRejected();
+            s_SavedFileRevision++;
             string kept = Remap.Active != null ? "the previous mapping stays active" : "no mapping is active";
             if (loaded)
                 Debug.Log($"CHRIS mapping loaded from {path}: {s_Store.LastDetail}; it takes effect when no mapped input is held and no stroke is in progress");
@@ -655,7 +740,10 @@ namespace TiltBrush
         {
             var input = InputManager.m_Instance;
             if (input == null) return;
-            bool active = Remap.Active != null;
+            bool mappingOwnsShortcuts = MappingOwnsKeyboardShortcuts(Remap.Active,
+                CHRISBimanualHost.OwnsDesktopControl);
+            bool active = ShouldOwnKeyboardShortcuts(mappingOwnsShortcuts, CHRISBimanualHost.RecoveryUI,
+                CHRISPanel.Instance?.Popup?.BindingCaptureActive == true);
             if (active && !s_ShortcutsOwned)
             {
                 s_ShortcutsBefore = input.DisableKeyboardShortcuts;
@@ -668,5 +756,8 @@ namespace TiltBrush
                 s_ShortcutsOwned = false;
             }
         }
+
+        internal static bool ShouldOwnKeyboardShortcuts(bool mappingActive, bool recoveryUI, bool capturing) =>
+            mappingActive || recoveryUI || capturing;
     }
 }

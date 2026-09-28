@@ -17,6 +17,13 @@ namespace TiltBrush
 {
     public class TestCHRISNativeUI
     {
+        sealed class NeutralMappingInput : ICHRISInputState
+        {
+            public bool IsPressed(string input) => false;
+            public bool StopPressedThisFrame => false;
+            public float WheelNotches => 0;
+            public Vector2 MouseDelta => Vector2.zero;
+        }
         static void Set(object obj, string field, object value) => obj.GetType().GetField(field,
             BindingFlags.NonPublic | BindingFlags.Instance).SetValue(obj, value);
         static void Property(object obj, string name, object value) => Set(obj, "<" + name + ">k__BackingField", value);
@@ -319,7 +326,7 @@ namespace TiltBrush
             {
             TestCHRISAssistance.Exported.Clear();
             int tests = 0;
-            foreach (var suite in new object[] { new TestCHRISNativeUI(), new TestCHRISAssistance(), new TestCHRISCloudVoice(), new TestCHRISCompanion(), new TestCHRISInputMapping(), new TestCHRISInputRemap(), new TestCHRISMappingAuthority(), new TestCHRISPerfProbe() })
+            foreach (var suite in new object[] { new TestCHRISNativeUI(), new TestCHRISAssistance(), new TestCHRISCloudVoice(), new TestCHRISCompanion(), new TestCHRISInputMapping(), new TestCHRISInputRemap(), new TestCHRISBimanualInput(), new TestCHRISMappingAuthority(), new TestCHRISPerfProbe() })
                 foreach (var method in suite.GetType().GetMethods().Where(m => m.GetCustomAttributes(typeof(TestAttribute), false).Length > 0))
                 {
                     method.Invoke(suite, null);
@@ -329,7 +336,7 @@ namespace TiltBrush
             File.WriteAllText(output + "/protocol-fixtures.json", TestCHRISAssistance.Exported.ToString());
             File.WriteAllText(output + "/companion-profiling.json", TestCHRISCompanion.Measurements.ToString());
             File.WriteAllText(output + "/mapping-cases.txt", TestCHRISInputMapping.Verdicts.ToString());
-            File.WriteAllText(output + "/checks.txt", "PASS: " + tests + " native regression methods; ordered segments, whole-list validation, replay, Stop/takeover/expiry, delayed panels, numeric/rotation tolerances, Python wire fixtures, cancelled/replaced speech callbacks, missing microphone/provider errors, correction/legacy-summary guards, floating native UI, v0.1.1 input mapping cases and draw remap state. No Play mode, HTTP, microphone recording, speech/model inference or sketch changes.");
+            File.WriteAllText(output + "/checks.txt", "PASS: " + tests + " native regression methods; voice and companion contracts, floating native UI, v0.1.1 and v0.1.2 mapping cases, byte-matched bundled preset, and two-hand state transitions. No Play mode, HTTP, microphone recording, speech/model inference or sketch changes.");
             }
             finally
             {
@@ -466,6 +473,19 @@ namespace TiltBrush
                 }
                 Property(model.Assistance, "TaskId", null);
                 Property(model.Assistance, "Task", null);
+                popup.ShowControls(true);
+                TestCHRISAssistance.Call(popup, "Draw"); capture("controls-browse", popupObject);
+                TestCHRISAssistance.Call(popup, "BeginBindingEdit");
+                TestCHRISAssistance.Call(popup, "Draw"); capture("controls-edit", popupObject);
+                TestCHRISAssistance.Call(popup, "ReviewEditedBindings");
+                TestCHRISAssistance.Call(popup, "Draw"); capture("controls-review", popupObject);
+                TestCHRISAssistance.Call(popup, "DiscardMappingReview");
+                CHRISInputMappingHost.Remap.Offer(CHRISInputMapping.Parse(Resources.Load<TextAsset>("CHRIS/TwoHandDefault").bytes));
+                CHRISInputMappingHost.Remap.Tick(new NeutralMappingInput(), true, false);
+                Assert.That(CHRISInputMappingHost.MappingInUse, Is.True);
+                popupObject.GetComponentsInChildren<CHRISNativeButton>().Single(b => b.name == "Local Stop").Click();
+                Assert.That((string)CHRISInputMappingHost.MappingStatus()["state"], Is.EqualTo("stopped"));
+                TestCHRISAssistance.Call(popup, "Draw"); capture("controls-recovery", popupObject);
                 popupObject.SetActive(false);
                 var menu = UnityEngine.Object.Instantiate(AssetDatabase.LoadAssetAtPath<GameObject>("Assets/Prefabs/PopUps/PopUpWindow_Panels.prefab"));
                 menu.transform.position = Vector3.zero; menu.transform.rotation = Quaternion.identity;

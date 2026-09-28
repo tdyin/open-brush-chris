@@ -26,7 +26,12 @@ namespace TiltBrush
         readonly string m_Session = Guid.NewGuid().ToString("N");
         long m_Revision;
         string m_State = "none";
+        // Fingerprint (SHA-256 of the raw file bytes) of the saved file as last observed by a load,
+        // a missing-file check, a rejected reload or a persisted activation. A reviewed apply may only
+        // replace the file while it still matches. Not part of Status(): the Python wire contract has
+        // no field for it, and it is a file fingerprint, not a mapping digest.
         string m_ObservedFileDigest;
+        bool m_SavedFileInvalid;
         CHRISInputMapping m_ActiveMapping, m_PendingMapping;
         string m_ActiveJson, m_ActiveDigest, m_ActiveRequestId;
         string m_PendingJson, m_PendingDigest, m_PendingRequestId, m_PendingFileDigest;
@@ -35,6 +40,21 @@ namespace TiltBrush
 
         internal CHRISMappingAuthority(string path) { m_Path = System.IO.Path.GetFullPath(path); }
         internal string FilePath => m_Path;
+        // Headset-only: the saved file exists but failed validation, so a reviewed apply replaces it.
+        internal bool SavedFileInvalid => m_SavedFileInvalid;
+        internal long Revision => m_Revision;
+        internal bool HasPending => m_PendingMapping != null;
+        // Successful writes of an approved mapping; readers of the saved file invalidate caches on it.
+        internal int PersistCount { get; private set; }
+
+        // Any change to the observed saved file moves the revision, so an approval reviewed against
+        // the earlier file (including a rejected one) is stale. Status fields are unchanged.
+        void ObserveFile(string fileDigest)
+        {
+            if (fileDigest == m_ObservedFileDigest) return;
+            m_ObservedFileDigest = fileDigest;
+            m_Revision++;
+        }
         static JToken Nullable(string value) => value == null ? JValue.CreateNull() : new JValue(value);
 
         internal JObject Status() => new JObject {
@@ -50,6 +70,12 @@ namespace TiltBrush
             ["last_request_id"] = Nullable(m_LastRequestId),
             ["last_request_result"] = Nullable(m_LastRequestResult)
         };
+
+        internal JObject DiscardPending()
+        {
+            if (m_PendingMapping != null) CancelPending("user_discarded");
+            return Status();
+        }
 
         static JObject Reply(JObject status, string result, string reason)
         {
@@ -106,8 +132,7 @@ namespace TiltBrush
 
             string fileDigest;
             try { fileDigest = CurrentFileDigest(); }
-            catch (Exception error) when (error is IOException || error is UnauthorizedAccessException ||
-                error is CHRISMappingException || error is DecoderFallbackException)
+            catch (Exception error) when (error is IOException || error is UnauthorizedAccessException)
             { return Reject(requestId, "file_unavailable"); }
             if (fileDigest != m_ObservedFileDigest) return Reject(requestId, "file_changed");
 
@@ -121,17 +146,35 @@ namespace TiltBrush
         {
             string json = StrictUtf8.GetString(raw);
             string digest = CHRISCommandGateway.Hash(json);
-            m_ObservedFileDigest = digest;
+            string fileDigest = RawDigest(raw);
+            ObserveFile(fileDigest);
+            m_SavedFileInvalid = false;
             if (m_PendingRequestId != null)
             {
                 m_LastRequestId = m_PendingRequestId;
                 m_LastRequestResult = "cancelled";
             }
             if (m_ActiveJson == json && m_PendingMapping == null) return;
-            Offer(mapping, json, digest, null, digest, false);
+            Offer(mapping, json, digest, null, fileDigest, false);
         }
 
-        internal void NoteFileMissing() => m_ObservedFileDigest = null;
+        internal void NoteFileMissing()
+        {
+            ObserveFile(null);
+            m_SavedFileInvalid = false;
+        }
+
+        // A readable saved file failed validation (bad JSON or UTF-8, schema, too large). Record its
+        // exact bytes so an explicitly reviewed apply can replace it; if the file changes again before
+        // that, the apply is rejected as file_changed. The file itself is never touched here.
+        internal void NoteFileRejected()
+        {
+            string fileDigest;
+            try { fileDigest = CurrentFileDigest(); }
+            catch (Exception error) when (error is IOException || error is UnauthorizedAccessException) { return; }
+            ObserveFile(fileDigest);
+            m_SavedFileInvalid = fileDigest != null;
+        }
 
         void Offer(CHRISInputMapping mapping, string json, string digest, string requestId,
             string fileDigest, bool persist)
@@ -159,8 +202,12 @@ namespace TiltBrush
                 }
                 if (m_PendingNeedsPersist)
                 {
-                    AtomicWrite(StrictUtf8.GetBytes(m_PendingJson));
-                    m_ObservedFileDigest = m_PendingDigest;
+                    byte[] bytes = StrictUtf8.GetBytes(m_PendingJson);
+                    AtomicWrite(bytes);
+                    // CompleteActivation advances the revision for this activation.
+                    m_ObservedFileDigest = RawDigest(bytes);
+                    m_SavedFileInvalid = false;
+                    PersistCount++;
                 }
                 remap.Offer(m_PendingMapping);
             }
@@ -222,12 +269,25 @@ namespace TiltBrush
             m_PendingNeedsPersist = false;
         }
 
+        // Streams the whole file, so oversized or undecodable files still get a fingerprint.
         string CurrentFileDigest()
         {
-            try { return CHRISCommandGateway.Hash(StrictUtf8.GetString(CHRISInputMapping.ReadBounded(m_Path))); }
+            try
+            {
+                using (var stream = new FileStream(m_Path, FileMode.Open, FileAccess.Read, FileShare.ReadWrite))
+                using (var sha = System.Security.Cryptography.SHA256.Create())
+                    return Hex(sha.ComputeHash(stream));
+            }
             catch (FileNotFoundException) { return null; }
             catch (DirectoryNotFoundException) { return null; }
         }
+
+        static string RawDigest(byte[] bytes)
+        {
+            using (var sha = System.Security.Cryptography.SHA256.Create()) return Hex(sha.ComputeHash(bytes));
+        }
+
+        static string Hex(byte[] hash) => string.Concat(hash.Select(b => b.ToString("x2")));
 
         void AtomicWrite(byte[] bytes)
         {

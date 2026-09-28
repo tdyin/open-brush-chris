@@ -4,6 +4,7 @@ using System;
 using System.Collections.Generic;
 using System.Globalization;
 using System.IO;
+using System.Linq;
 using System.Text;
 
 namespace TiltBrush
@@ -23,8 +24,13 @@ namespace TiltBrush
         }
     }
 
-    public enum CHRISMappedAction { Draw, Undo, MoveBrush, MoveView, BrushSize }
-    public enum CHRISMappingSource { Key, MouseButton, KeyVector2, MouseDelta, MouseWheel }
+    public enum CHRISMappedAction {
+        Draw, Undo, MoveBrush, MoveView, BrushSize,
+        Trigger, GripToggle, PrimaryButton, SecondaryButton, StickClick, StickAxis,
+        PoseXY, PoseDepth, RotateXY, RotateRoll, SelectHand, ModeUI, ModePosition,
+        ModeRotation, Recenter, HandBack
+    }
+    public enum CHRISMappingSource { Key, MouseButton, KeyVector2, MouseDelta, MouseWheel, KeyAxis1 }
 
     public sealed class CHRISInputMappingEntry
     {
@@ -38,20 +44,36 @@ namespace TiltBrush
         public string Down { get; internal set; }
         public string Left { get; internal set; }
         public string Right { get; internal set; }
+        public string Negative { get; internal set; }
+        public string Positive { get; internal set; }
+        public string Target { get; internal set; }
     }
 
     public sealed class CHRISInputMapping
     {
         public const int MaxBytes = 16384;
         public const string Version = "v0.1.1";
+        public const string BimanualVersion = "v0.1.2";
 
         public IReadOnlyList<CHRISInputMappingEntry> Mappings { get; }
-        CHRISInputMapping(List<CHRISInputMappingEntry> mappings) { Mappings = mappings.AsReadOnly(); }
+        public string SchemaVersion { get; }
+        CHRISInputMapping(List<CHRISInputMappingEntry> mappings, string version = Version)
+        {
+            Mappings = mappings.AsReadOnly();
+            SchemaVersion = version;
+        }
 
         public CHRISInputMappingEntry Find(CHRISMappedAction action)
         {
             foreach (var mapping in Mappings)
                 if (mapping.Action == action) return mapping;
+            return null;
+        }
+
+        public CHRISInputMappingEntry Find(CHRISMappedAction action, string target)
+        {
+            foreach (var mapping in Mappings)
+                if (mapping.Action == action && mapping.Target == target) return mapping;
             return null;
         }
 
@@ -62,6 +84,9 @@ namespace TiltBrush
             "0", "1", "2", "3", "4", "5", "6", "7", "8", "9",
             "space", "enter", "tab", "backspace",
             "upArrow", "downArrow", "leftArrow", "rightArrow",
+        };
+        static readonly HashSet<string> BimanualKeys = new HashSet<string>(Keys, StringComparer.Ordinal) {
+            "f2", "f3", "f4", "f5", "f6", "f7", "f8", "f9", "f10", "f11", "f12"
         };
         static readonly string[] VectorSides = { "up", "down", "left", "right" };
 
@@ -91,7 +116,11 @@ namespace TiltBrush
             string text;
             try { text = new UTF8Encoding(false, true).GetString(raw, start, raw.Length - start); }
             catch (DecoderFallbackException error) { throw new CHRISMappingException("invalid_json", error.Message); }
-            return Check(new StrictJson(text).ParseDocument());
+            var document = new StrictJson(text).ParseDocument();
+            if (document is Dictionary<string, object> root &&
+                root.TryGetValue("version", out var version) && version is string named &&
+                named == BimanualVersion) return CheckBimanual(root);
+            return Check(document);
         }
 
         static CHRISMappingException Schema(string where, string detail) =>
@@ -129,6 +158,181 @@ namespace TiltBrush
             return new CHRISInputMapping(entries);
         }
 
+        static CHRISInputMapping CheckBimanual(Dictionary<string, object> root)
+        {
+            OnlyFields(root, "", "version", "app", "profile", "frame", "mappings");
+            Const(root, "version", BimanualVersion, "");
+            Const(root, "app", "openbrush", "");
+            Const(root, "profile", "keyboard_mouse", "");
+            if (!(root["frame"] is Dictionary<string, object> frame)) throw Schema("frame", "must be an object");
+            OnlyFields(frame, "frame", "kind");
+            Const(frame, "kind", "fixed_recenterable", "frame");
+            if (!(root["mappings"] is List<object> list) || list.Count == 0 || list.Count > 64)
+                throw Schema("mappings", "must have 1 to 64 entries");
+
+            // Validate every row's shape before checking cross-row claims, as the shared schema does.
+            var entries = new List<CHRISInputMappingEntry>();
+            for (int i = 0; i < list.Count; i++) entries.Add(BimanualEntry(list[i], "mappings/" + i));
+            var ids = new Dictionary<string, string>(StringComparer.Ordinal);
+            var actions = new Dictionary<string, string>(StringComparer.Ordinal);
+            var claims = new Dictionary<string, List<KeyValuePair<int, string>>>(StringComparer.Ordinal);
+            for (int i = 0; i < entries.Count; i++)
+            {
+                var entry = entries[i];
+                Unique("duplicate_id", ids, entry.Id, entry.Id);
+                int scope = InputScope(entry.Action);
+                foreach (string input in Inputs(entry))
+                {
+                    if (!claims.TryGetValue(input, out var previous)) claims[input] = previous = new List<KeyValuePair<int, string>>();
+                    foreach (var claim in previous)
+                        if ((claim.Key & scope) != 0)
+                            throw new CHRISMappingException("duplicate_input", $"'{input}' in '{entry.Id}' and '{claim.Value}'");
+                    previous.Add(new KeyValuePair<int, string>(scope, entry.Id));
+                }
+                Unique("duplicate_action", actions, ActionName(entry.Action) + ":" + entry.Target, entry.Id);
+            }
+            foreach (var required in BimanualRequired)
+                if (!actions.ContainsKey(required))
+                    throw Schema("mappings", "required " + required + " is missing");
+            return new CHRISInputMapping(entries, BimanualVersion);
+        }
+
+        static readonly string[] BimanualRequired = {
+            "mode_ui:", "mode_position:", "mode_rotation:", "select_hand:brush", "select_hand:wand",
+            "recenter:", "hand_back:", "pose_xy:selected", "pose_depth:selected",
+            "rotate_xy:selected", "rotate_roll:selected", "trigger:brush", "trigger:wand",
+            "grip_toggle:brush", "grip_toggle:wand"
+        };
+
+        // UI, position and rotation are disjoint scopes; global commands overlap all of them.
+        static int InputScope(CHRISMappedAction action)
+        {
+            switch (action)
+            {
+                case CHRISMappedAction.PoseXY:
+                case CHRISMappedAction.PoseDepth: return 2;
+                case CHRISMappedAction.RotateXY:
+                case CHRISMappedAction.RotateRoll: return 4;
+                case CHRISMappedAction.Trigger:
+                case CHRISMappedAction.GripToggle:
+                case CHRISMappedAction.PrimaryButton:
+                case CHRISMappedAction.SecondaryButton:
+                case CHRISMappedAction.StickClick:
+                case CHRISMappedAction.StickAxis:
+                case CHRISMappedAction.Undo:
+                case CHRISMappedAction.BrushSize:
+                case CHRISMappedAction.MoveView: return 6;
+                default: return 7;
+            }
+        }
+
+        static string BimanualKeyName(Dictionary<string, object> source, string name, string at)
+        {
+            if (!(source[name] is string key) || !BimanualKeys.Contains(key))
+                throw Schema(at + "/" + name, "not an allowed key name");
+            return key;
+        }
+
+        static CHRISInputMappingEntry BimanualEntry(object value, string where)
+        {
+            if (!(value is Dictionary<string, object> obj)) throw Schema(where, "must be an object");
+            bool hasTarget = obj.ContainsKey("target");
+            OnlyFields(obj, where, hasTarget ? new[] { "id", "source", "action", "target" } :
+                new[] { "id", "source", "action" });
+            if (!(obj["id"] is string id) || !ValidId(id)) throw Schema(where + "/id", "must match ^[a-z][a-z0-9_]*$");
+            if (!(obj["action"] is string actionName) || !BimanualActions.TryGetValue(actionName, out var action))
+                throw Schema(where + "/action", "unknown action");
+            var entry = new CHRISInputMappingEntry { Id = id, Action = action };
+            string target = hasTarget ? obj["target"] as string : null;
+            bool hand = action == CHRISMappedAction.Trigger || action == CHRISMappedAction.GripToggle ||
+                action == CHRISMappedAction.PrimaryButton || action == CHRISMappedAction.SecondaryButton ||
+                action == CHRISMappedAction.StickClick || action == CHRISMappedAction.StickAxis ||
+                action == CHRISMappedAction.SelectHand;
+            bool pose = action == CHRISMappedAction.PoseXY || action == CHRISMappedAction.PoseDepth ||
+                action == CHRISMappedAction.RotateXY || action == CHRISMappedAction.RotateRoll;
+            if (hand && target != "brush" && target != "wand") throw Schema(where + "/target", "must be brush or wand");
+            if (pose && target != "selected") throw Schema(where + "/target", "must be selected");
+            if (!hand && !pose && hasTarget) throw Schema(where + "/target", "not allowed for this action");
+            entry.Target = target;
+
+            string at = where + "/source";
+            if (!(obj["source"] is Dictionary<string, object> source)) throw Schema(at, "must be an object");
+            string type = source.TryGetValue("type", out var t) ? t as string : null;
+            bool button = hand && action != CHRISMappedAction.StickAxis && action != CHRISMappedAction.SelectHand ||
+                action == CHRISMappedAction.Undo;
+            bool global = action == CHRISMappedAction.ModeUI || action == CHRISMappedAction.ModePosition ||
+                action == CHRISMappedAction.ModeRotation || action == CHRISMappedAction.Recenter ||
+                action == CHRISMappedAction.HandBack || action == CHRISMappedAction.SelectHand;
+            bool vector = action == CHRISMappedAction.StickAxis || action == CHRISMappedAction.PoseXY ||
+                action == CHRISMappedAction.RotateXY || action == CHRISMappedAction.MoveView;
+            bool scalar = action == CHRISMappedAction.PoseDepth || action == CHRISMappedAction.RotateRoll;
+            if ((button || global) && type == "key")
+            {
+                OnlyFields(source, at, "type", "key");
+                entry.Source = CHRISMappingSource.Key;
+                if (action == CHRISMappedAction.ModeUI)
+                {
+                    if (!(source["key"] is string recovery) || recovery != "f1")
+                        throw Schema(at + "/key", "mode_ui must use F1 for recovery");
+                    entry.Key = recovery;
+                }
+                else entry.Key = BimanualKeyName(source, "key", at);
+                if (global && (entry.Key == "enter" || entry.Key == "upArrow" ||
+                    entry.Key == "downArrow" || entry.Key == "leftArrow" || entry.Key == "rightArrow"))
+                    throw Schema(at + "/key", "reserved for headset UI navigation");
+            }
+            else if (button && type == "mouse_button")
+            {
+                OnlyFields(source, at, "type", "button");
+                string name = source["button"] as string;
+                if (name != "left" && name != "right" && name != "middle") throw Schema(at + "/button", "must be left, right or middle");
+                entry.Source = CHRISMappingSource.MouseButton;
+                entry.Button = name;
+            }
+            else if (vector && type == "key_vector2")
+            {
+                OnlyFields(source, at, "type", "up", "down", "left", "right");
+                entry.Source = CHRISMappingSource.KeyVector2;
+                entry.Up = BimanualKeyName(source, "up", at);
+                entry.Down = BimanualKeyName(source, "down", at);
+                entry.Left = BimanualKeyName(source, "left", at);
+                entry.Right = BimanualKeyName(source, "right", at);
+            }
+            else if (vector && action != CHRISMappedAction.StickAxis && type == "mouse_delta")
+            {
+                OnlyFields(source, at, "type");
+                entry.Source = CHRISMappingSource.MouseDelta;
+            }
+            else if (scalar && type == "key_axis1")
+            {
+                OnlyFields(source, at, "type", "negative", "positive");
+                entry.Source = CHRISMappingSource.KeyAxis1;
+                entry.Negative = BimanualKeyName(source, "negative", at);
+                entry.Positive = BimanualKeyName(source, "positive", at);
+            }
+            else if ((scalar || action == CHRISMappedAction.BrushSize) && type == "mouse_wheel")
+            {
+                OnlyFields(source, at, "type");
+                entry.Source = CHRISMappingSource.MouseWheel;
+            }
+            else throw Schema(at, "no allowed source for this action");
+            return entry;
+        }
+
+        static readonly Dictionary<string, CHRISMappedAction> BimanualActions =
+            new Dictionary<string, CHRISMappedAction>(StringComparer.Ordinal) {
+                { "trigger", CHRISMappedAction.Trigger }, { "grip_toggle", CHRISMappedAction.GripToggle },
+                { "primary_button", CHRISMappedAction.PrimaryButton }, { "secondary_button", CHRISMappedAction.SecondaryButton },
+                { "stick_click", CHRISMappedAction.StickClick }, { "stick_axis", CHRISMappedAction.StickAxis },
+                { "pose_xy", CHRISMappedAction.PoseXY }, { "pose_depth", CHRISMappedAction.PoseDepth },
+                { "rotate_xy", CHRISMappedAction.RotateXY }, { "rotate_roll", CHRISMappedAction.RotateRoll },
+                { "select_hand", CHRISMappedAction.SelectHand }, { "mode_ui", CHRISMappedAction.ModeUI },
+                { "mode_position", CHRISMappedAction.ModePosition }, { "mode_rotation", CHRISMappedAction.ModeRotation },
+                { "recenter", CHRISMappedAction.Recenter }, { "hand_back", CHRISMappedAction.HandBack },
+                { "undo", CHRISMappedAction.Undo }, { "brush_size", CHRISMappedAction.BrushSize },
+                { "move_view", CHRISMappedAction.MoveView }
+            };
+
         static void Unique(string code, Dictionary<string, string> seen, string value, string id)
         {
             if (seen.TryGetValue(value, out var first))
@@ -146,12 +350,16 @@ namespace TiltBrush
                     return new[] { "key." + entry.Up, "key." + entry.Down, "key." + entry.Left, "key." + entry.Right };
                 case CHRISMappingSource.MouseButton: return new[] { "mouse." + entry.Button };
                 case CHRISMappingSource.MouseDelta: return new[] { "mouse.delta" };
+                case CHRISMappingSource.KeyAxis1:
+                    return new[] { "key." + entry.Negative, "key." + entry.Positive };
                 default: return new[] { "mouse.wheel" };
             }
         }
 
         static string ActionName(CHRISMappedAction action)
         {
+            foreach (var name in BimanualActions)
+                if (name.Value == action) return name.Key;
             switch (action)
             {
                 case CHRISMappedAction.Draw: return "draw";

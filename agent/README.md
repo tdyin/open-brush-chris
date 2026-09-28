@@ -77,6 +77,57 @@ generated evidence in ignored `agent/logs`, and failure captures in ignored
   registered: N; chris.mapping.reload present` and a `CHRIS mapping` line
   naming the full path it checked.
 
+## Two-hand keyboard and mouse control (v0.1.2)
+
+The optional v0.1.2 profile controls logical Brush and Wand independently while
+the XR controllers remain connected, including when they are asleep. Fully
+disconnected controllers are not supported. v0.1.1 files still load unchanged;
+they are never rewritten into v0.1.2. Unity validates v0.1.2 independently of
+the Python service, using the schema and shared cases in
+`C:\Dev\chris\schemas\v0.1.2\` and
+`C:\Dev\chris\tests\core\fixtures\mapping_v012\` for editor checks only. The
+player bundles a byte-identical copy of the default preset at
+`Assets/CHRIS/Resources/CHRIS/TwoHandDefault.json`; it has no runtime dependency
+on the sibling repository.
+
+F1 explicitly enters keyboard UI control and opens the floating CHRIS Controls
+page, even after Stop or with no active mapping. In that UI mode, mouse movement
+and arrow keys point at native panels;
+mouse left or Enter activates the hovered UI control. They cannot draw in UI
+mode. Review the bundled preset or saved mapping, visit every before/after page,
+then Confirm. The existing mapping authority checks exact bytes, digest, session
+and revision, waits for neutral input, and persists atomically. The Controls
+page also lists every current binding. Edit bindings captures a key or mouse
+button (or the ordered keys of an axis), validates the entire candidate, and
+requires a fresh review. F1 cancels capture. Source type cycles only through
+forms allowed for that action. The Voice tab remains available. Stop on either
+tab cancels mapped control when one is active; the saved profile remains on disk
+for explicit review and reactivation.
+
+The saved v0.1.2 profile loads at startup with physical controller pose,
+pointing, buttons and trigger still in control; its default UI mode does not
+take over until F1. F2 enters virtual position mode, F3 virtual rotation mode,
+1 selects Brush, 2 selects Wand, F5 requests a neutral recenter, and F6 returns
+to physical controllers, including when the Controls panel remains open. Escape
+is local Stop and also restores physical pointing and input.
+The fixed room frame follows head yaw only when the profile first activates or
+F5 completes; looking around does not move either hand. Mouse movement moves
+the selected hand in position mode or yaws/pitches it in rotation mode. Q/E
+controls depth in position mode and roll in rotation mode. Brush uses Space
+trigger, G grip toggle, X/C face buttons, B stick click and arrows for stick
+axis. Wand uses Enter trigger, H grip toggle, T/Y face buttons, U stick click
+and I/J/K/L for stick axis. Z is undo, wheel changes brush size, and W/A/S/D
+moves the view in pose modes. Triggers are binary; adjustable analog pressure
+is outside this profile. Both grips are independent, and mode changes, Stop,
+focus loss and hand-back release their virtual buttons. Pose hand-back waits
+for an active stroke or grab to finish and requires a fresh physical release.
+
+Use `./agent/scripts/verify-native-ui.ps1` for edit-mode parser, state and UI
+checks. The Controls browse/edit/review/recovery renders appear in
+`agent/logs/native-ui/`. A Windows/OpenXR player and the bounded Simulator
+gate are separate from edit-mode checks; headset comfort and physical timing
+still require user acceptance.
+
 ## Upstream integration points
 
 CHRIS uses the existing TiltBrush namespace and compilation boundaries.

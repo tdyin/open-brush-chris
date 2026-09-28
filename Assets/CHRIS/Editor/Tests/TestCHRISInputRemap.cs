@@ -5,6 +5,8 @@ using System.Reflection;
 using System.Text;
 using NUnit.Framework;
 using UnityEngine;
+using UnityEngine.InputSystem;
+using UnityEngine.InputSystem.LowLevel;
 
 namespace TiltBrush
 {
@@ -31,6 +33,120 @@ namespace TiltBrush
         static CHRISInputMapping Space() => Mapping("{\"type\":\"key\",\"key\":\"space\"}",
             ",{\"id\":\"undo\",\"source\":{\"type\":\"key\",\"key\":\"z\"},\"action\":\"undo\"}");
         static CHRISInputMapping LeftButton() => Mapping("{\"type\":\"mouse_button\",\"button\":\"left\"}");
+
+        [Test]
+        public void RealKeyboardDigitControlsSelectBothHands()
+        {
+            var previous = Keyboard.current;
+            var keyboard = InputSystem.AddDevice<Keyboard>();
+            keyboard.MakeCurrent();
+            try
+            {
+                var digits = new[] { Key.Digit0, Key.Digit1, Key.Digit2, Key.Digit3, Key.Digit4,
+                    Key.Digit5, Key.Digit6, Key.Digit7, Key.Digit8, Key.Digit9 };
+                for (int i = 0; i < digits.Length; i++)
+                {
+                    Assert.That(keyboard[digits[i]].name, Is.EqualTo(i.ToString()),
+                        "Binding capture must save the actual Input System control name");
+                    InputSystem.QueueStateEvent(keyboard, new KeyboardState(digits[i]));
+                    InputSystem.Update();
+                    Assert.That(CHRISDeviceInput.Instance.IsPressed("key." + i), Is.True,
+                        "The production adapter must resolve the schema digit " + i);
+                    InputSystem.QueueStateEvent(keyboard, new KeyboardState());
+                    InputSystem.Update();
+                    Assert.That(CHRISDeviceInput.Instance.IsPressed("key." + i), Is.False);
+                }
+
+                var asset = Resources.Load<TextAsset>("CHRIS/TwoHandDefault");
+                var mapping = CHRISInputMapping.Parse(asset.bytes);
+                var hand = new CHRISBimanualInput();
+                void StepHand() => hand.Step(mapping, CHRISDeviceInput.Instance, true, false,
+                    Vector3.zero, Vector3.forward, true, 1f / 60f);
+                StepHand();
+                InputSystem.QueueStateEvent(keyboard, new KeyboardState(Key.F2));
+                InputSystem.Update();
+                StepHand();
+                Assert.That(hand.Mode, Is.EqualTo(CHRISControlMode.Position));
+                InputSystem.QueueStateEvent(keyboard, new KeyboardState());
+                InputSystem.Update();
+                StepHand();
+                InputSystem.QueueStateEvent(keyboard, new KeyboardState(Key.Digit2));
+                InputSystem.Update();
+                StepHand();
+                Assert.That(hand.Selected, Is.EqualTo("wand"), "2 selects the left Wand in the default layout");
+                InputSystem.QueueStateEvent(keyboard, new KeyboardState());
+                InputSystem.Update();
+                StepHand();
+                InputSystem.QueueStateEvent(keyboard, new KeyboardState(Key.Digit1));
+                InputSystem.Update();
+                StepHand();
+                Assert.That(hand.Selected, Is.EqualTo("brush"), "1 selects Brush");
+            }
+            finally
+            {
+                InputSystem.RemoveDevice(keyboard);
+                if (previous != null) previous.MakeCurrent();
+            }
+        }
+
+        [Test]
+        public void RecoveryCaptureSuppressesMappedInputsAndNativeShortcuts()
+        {
+            Assert.That(CHRISInputMappingHost.ShouldOwnKeyboardShortcuts(false, true, true), Is.True,
+                "No active profile still owns native shortcuts during F1 recovery capture");
+            Assert.That(CHRISInputMappingHost.ShouldOwnKeyboardShortcuts(false, false, false), Is.False);
+            var (remap, input) = Activated(AllKeys());
+            input.Held.Add("key.space"); input.Held.Add("key.z"); input.Held.Add("key.w");
+            remap.Tick(input, true, false);
+            Assert.That(remap.DrawHeld, Is.True);
+            remap.SuppressForEditor(input);
+            Assert.That(remap.DrawHeld || remap.UndoPressed || remap.ViewKeys != Vector2.zero, Is.False,
+                "The captured press cannot also draw, undo, or move the view");
+            remap.Tick(input, true, false);
+            Assert.That(remap.DrawHeld || remap.UndoPressed || remap.ViewKeys != Vector2.zero, Is.False,
+                "Held captured inputs stay latched until release");
+        }
+
+        [Test]
+        public void LoadedTwoHandProfileLeavesNativeShortcutsAndConvenienceUntilTakeover()
+        {
+            var bimanual = CHRISInputMapping.Parse(Resources.Load<TextAsset>("CHRIS/TwoHandDefault").bytes);
+            Assert.That(CHRISInputMappingHost.MappingOwnsKeyboardShortcuts(bimanual, false), Is.False);
+            Assert.That(CHRISInputMappingHost.AllowsMappedConvenience(bimanual, false), Is.False,
+                "Mapped undo, wheel and view movement remain dormant during physical control");
+            Assert.That(CHRISInputMappingHost.MappingOwnsKeyboardShortcuts(bimanual, true), Is.True);
+            Assert.That(CHRISInputMappingHost.AllowsMappedConvenience(bimanual, true), Is.True);
+            Assert.That(CHRISInputMappingHost.MappingUsesCombinedTrigger(bimanual), Is.False,
+                "An unclaimed two-hand profile must preserve the native controller trigger path");
+            Assert.That(CHRISInputMappingHost.MappingOwnsKeyboardShortcuts(AllKeys(), false), Is.True,
+                "Legacy mapping still owns its shortcuts");
+            Assert.That(CHRISInputMappingHost.AllowsMappedConvenience(AllKeys(), false), Is.True);
+            Assert.That(CHRISInputMappingHost.MappingUsesCombinedTrigger(AllKeys()), Is.True);
+        }
+
+        [Test]
+        public void BimanualWheelWorksInPoseModeAndUICarryIsDiscarded()
+        {
+            var asset = Resources.Load<TextAsset>("CHRIS/TwoHandDefault");
+            var mapping = CHRISInputMapping.Parse(asset.bytes);
+            var (remap, input) = Activated(mapping);
+            input.WheelNotches = 0.6f;
+            remap.Tick(input, true, false);
+            remap.SuppressBimanualConvenience(input);
+            Assert.That(remap.SizeNotches, Is.Zero);
+            input.WheelNotches = 0.6f;
+            remap.Tick(input, true, false);
+            Assert.That(remap.SizeNotches, Is.Zero, "UI fractional wheel does not carry into pose mode");
+            input.WheelNotches = 0.5f;
+            remap.Tick(input, true, false);
+            Assert.That(remap.SizeNotches, Is.EqualTo(1), "Wheel applies brush size while in a pose mode");
+            input.WheelNotches = 0;
+            input.Held.Add("key.w");
+            remap.Tick(input, true, false);
+            remap.SuppressBimanualConvenience(input);
+            remap.Tick(input, true, false);
+            Assert.That(remap.ViewKeys, Is.EqualTo(Vector2.zero), "Held view key needs release after UI mode");
+        }
 
         static (CHRISInputRemap, FakeInput) Activated(CHRISInputMapping mapping)
         {
