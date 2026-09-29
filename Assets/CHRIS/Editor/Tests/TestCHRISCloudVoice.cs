@@ -144,6 +144,7 @@ namespace TiltBrush
                 var host = obj.AddComponent<CHRISGatewayTestHost>(); host.Initialize();
                 var model = obj.AddComponent<CHRISPanel>(); model.Gateway = host;
                 TestCHRISAssistance.Call(model, "Start");
+                model.EnableVoiceBackend();
                 model.Speech.Session.SetEnabled(true);
                 var popup = obj.AddComponent<CHRISNativePopup>();
                 var stateType = typeof(PopUpWindow).GetNestedType("State", BindingFlags.NonPublic);
@@ -326,47 +327,5 @@ namespace TiltBrush
             state.Observe(null); Assert.That(state.Accepts(third, "approval-three"), Is.False);
         }
 
-        [Test]
-        public void PanelJoystickClickRequiresFreshPressAndLeavesOtherControlsAlone()
-        {
-            foreach (bool rightHand in new[] { false, true })
-            {
-                var shortcut = new CHRISVoiceShortcut();
-                Assert.That(shortcut.Sample(false, true, rightHand, false), Is.False);
-                Assert.That(shortcut.Sample(false, true, rightHand, true), Is.False);
-                Assert.That(shortcut.SuppressClick, Is.False, "Native input is unchanged outside CHRIS");
-                Assert.That(shortcut.Sample(true, true, rightHand, true), Is.False, "Opening while held cannot record");
-                shortcut.Sample(true, true, rightHand, false);
-                Assert.That(shortcut.Sample(true, true, rightHand, true), Is.True);
-                foreach (VrInput alias in new[] { VrInput.Thumbstick, VrInput.Directional })
-                    Assert.That(shortcut.Suppresses(alias), Is.True);
-                foreach (VrInput input in new[] { VrInput.Grip, VrInput.Trigger, VrInput.Touchpad,
-                    VrInput.Button01, VrInput.Button02, VrInput.Button03, VrInput.Button04, VrInput.Button05, VrInput.Button06 })
-                    Assert.That(shortcut.Suppresses(input), Is.False, "Only the joystick click is reserved");
-                for (int i = 0; i < 3; i++) Assert.That(shortcut.Sample(true, true, rightHand, true), Is.False);
-                shortcut.Sample(true, true, rightHand, false);
-                Assert.That(shortcut.Sample(true, true, rightHand, true), Is.True, "Release then click again to finish");
-            }
-        }
-
-        [Test]
-        public void ClosingRoleSwapAndTrackingRecoveryQuarantineHeldJoystickClicks()
-        {
-            foreach (string transition in new[] { "close", "swap", "tracking" })
-            {
-                var shortcut = new CHRISVoiceShortcut();
-                shortcut.Sample(true, true, false, false);
-                shortcut.Sample(true, true, false, true);
-                bool scope = transition != "close", right = transition == "swap";
-                if (transition == "tracking") shortcut.Sample(scope, false, right, false);
-                Assert.That(shortcut.Sample(scope, true, right, true), Is.False);
-                Assert.That(shortcut.SuppressClick, Is.True, transition);
-                shortcut.Sample(scope, true, right, false);
-                Assert.That(shortcut.SuppressClick, Is.True, "Consume the held click's release edge");
-                shortcut.Sample(scope, true, right, false);
-                Assert.That(shortcut.SuppressClick, Is.EqualTo(scope));
-                Assert.That(shortcut.Sample(scope, true, right, true), Is.EqualTo(scope));
-            }
-        }
     }
 }

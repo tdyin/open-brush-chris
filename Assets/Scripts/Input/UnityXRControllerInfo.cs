@@ -29,8 +29,6 @@ namespace TiltBrush
         private const float kInputScrollScalar = 0.5f;
 
         private bool isBrush = false;
-        readonly CHRISVoiceShortcut m_VoiceShortcut = new CHRISVoiceShortcut();
-        int m_VoiceSampleFrame = -1;
         bool m_PhysicalAwaitNeutral;
         int m_PhysicalReleasedFrame = -1;
 
@@ -66,30 +64,6 @@ namespace TiltBrush
         internal bool PhysicalRightHand => isBrush;
         internal bool IsLogicalBrush => InputManager.m_Instance != null && InputManager.Controllers != null &&
             ReferenceEquals(InputManager.Brush, this);
-
-        void SampleVoiceShortcut()
-        {
-            if (m_VoiceSampleFrame == Time.frameCount) return;
-            m_VoiceSampleFrame = Time.frameCount;
-            var panel = CHRISPanel.Instance;
-            // Quest/OpenXR is audited. Other controller profiles retain their native click bindings.
-            bool supported = Behavior.ControllerGeometry.Style == ControllerStyle.OculusTouch ||
-                (device.name ?? "").Contains("Oculus Touch");
-            bool scope = panel != null && panel.Popup != null && panel.Popup.IsOpen() &&
-                supported && InputManager.m_Instance != null && InputManager.Controllers != null && ReferenceEquals(InputManager.Wand, this);
-            bool tracked = device.isValid && device.TryGetFeatureValue(UnityEngine.XR.CommonUsages.isTracked, out bool isTracked) && isTracked && !IsStylusActive();
-            // Read the physical OpenXR feature directly; the voice gesture must not depend on action-map masking.
-            bool pressed = device.TryGetFeatureValue(UnityEngine.XR.CommonUsages.primary2DAxisClick, out bool click)
-                ? click : MapVrInput(VrInput.Thumbstick);
-            if (m_VoiceShortcut.Sample(scope, tracked, isBrush, pressed))
-                panel.QueueVoiceShortcut(this);
-        }
-
-        bool VoiceConsumes(VrInput input)
-        {
-            SampleVoiceShortcut();
-            return m_VoiceShortcut.Suppresses(input);
-        }
 
         private StylusInputs stylusState => VrStylusHandler.m_Instance?.CurrentState;
 
@@ -476,9 +450,9 @@ namespace TiltBrush
             if (!PhysicalInputReady()) return false;
             if (UsesCombinedTrigger(input))
             {
-                return !VoiceConsumes(input) && m_CombinedTrigger.Held;
+                return m_CombinedTrigger.Held;
             }
-            return !VoiceConsumes(input) && MapVrInput(input);
+            return MapVrInput(input);
         }
 
         private bool MapVrInputPerFrame(VrInput input, bool down)
@@ -532,9 +506,9 @@ namespace TiltBrush
             if (!PhysicalInputReady()) return false;
             if (UsesCombinedTrigger(input))
             {
-                return !VoiceConsumes(input) && m_CombinedTrigger.Down;
+                return m_CombinedTrigger.Down;
             }
-            return !VoiceConsumes(input) && MapVrInputPerFrame(input, true);
+            return MapVrInputPerFrame(input, true);
         }
 
         /// Returns true if the specified input has just been deactivated (falling-edge trigger).
@@ -545,9 +519,9 @@ namespace TiltBrush
             if (!PhysicalInputReady()) return false;
             if (UsesCombinedTrigger(input))
             {
-                return !VoiceConsumes(input) && m_CombinedTrigger.Up;
+                return m_CombinedTrigger.Up;
             }
-            return !VoiceConsumes(input) && MapVrInputPerFrame(input, false);
+            return MapVrInputPerFrame(input, false);
         }
         public override void TriggerControllerHaptics(float seconds)
         {

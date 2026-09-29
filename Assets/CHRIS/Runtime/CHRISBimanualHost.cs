@@ -20,9 +20,9 @@ namespace TiltBrush
             if (Requested && (!busy || ownsPose)) Granted = true;
         }
 
-        public void UpdateRecovery(bool focused, bool popupReady, bool busy, bool ownsPose)
+        public void UpdateRecovery(bool focused, bool busy, bool ownsPose)
         {
-            if (!focused || !popupReady) { Release(); return; }
+            if (!focused) { Release(); return; }
             if (Requested && !busy && !ownsPose) Granted = true;
         }
     }
@@ -57,12 +57,7 @@ namespace TiltBrush
         public static bool Focused => s_Focused;
         public static bool RecoveryUI
         {
-            get
-            {
-                var popup = CHRISPanel.Instance?.Popup;
-                return !s_Input.Active && s_KeyboardUI.Granted && popup != null &&
-                    popup.IsOpen() && popup.ControlsVisible;
-            }
+            get { return !s_Input.Active && s_KeyboardUI.Granted; }
         }
 
         public static void ResetUIPointer() => s_UIPointerOffset = Vector2.zero;
@@ -99,9 +94,7 @@ namespace TiltBrush
             ray = default;
             if ((!InUIMode && !RecoveryUI) || !s_Focused || ViewpointScript.Head == null) return false;
             var head = ViewpointScript.Head;
-            var popup = CHRISPanel.Instance?.Popup;
-            var panel = popup != null && popup.IsOpen() ? popup.GetParentPanel() as CHRISFloatingPanel : null;
-            Vector3 center = panel != null ? (panel.transform.position - head.position).normalized : head.forward;
+            Vector3 center = head.forward;
             Vector3 right = Vector3.Cross(Vector3.up, center).normalized;
             Vector3 up = Vector3.Cross(center, right).normalized;
             ray = new Ray(head.position, (center + right * s_UIPointerOffset.x + up * s_UIPointerOffset.y).normalized);
@@ -114,9 +107,6 @@ namespace TiltBrush
             s_Focused = focused;
             bool active = mapping != null && mapping.SchemaVersion == CHRISInputMapping.BimanualVersion;
             var head = active ? ViewpointScript.Head : null;
-            var popup = CHRISPanel.Instance?.Popup;
-            if (!focused && popup?.BindingCaptureActive == true)
-                popup.CancelBindingCapture("Focus lost; capture cancelled.");
             var controls = SketchControlsScript.m_Instance;
             bool busy = strokeInProgress || (controls != null &&
                 (controls.IsUserGrabbingWorld() || controls.IsUserInteractingWithAnyWidget()));
@@ -128,19 +118,13 @@ namespace TiltBrush
                 s_Input.Stop();
                 ReleaseWhenSafe(busy);
                 if (wasActive) s_KeyboardUI.Release();
-                s_KeyboardUI.UpdateRecovery(focused, popup != null && !popup.IsClosingOrClosed() &&
-                    popup.ControlsVisible, busy, s_BrushDriver != null || s_WandDriver != null);
+                s_KeyboardUI.UpdateRecovery(focused, busy,
+                    s_BrushDriver != null || s_WandDriver != null);
                 if (focused && RecoveryUI) UpdateUIPointer(deviceInput);
                 return;
             }
 
             var manager = InputManager.m_Instance;
-            if (focused && popup?.BindingCaptureActive == true)
-            {
-                s_Input.SuspendForEditor(deviceInput);
-                if (focused && InUIMode) UpdateUIPointer(deviceInput);
-                return;
-            }
             s_Input.Step(mapping, deviceInput, focused, busy, head.position, head.forward,
                 manager != null && !manager.WandOnRight, Time.deltaTime);
             s_KeyboardUI.UpdateActive(focused, s_Input.Mode == CHRISControlMode.UI,

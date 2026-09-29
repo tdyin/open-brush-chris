@@ -12,6 +12,30 @@ namespace TiltBrush
 {
     public class TestCHRISMappingAuthority
     {
+        static JObject BuildApplyRequest(JObject status, string json, string requestId) => new JObject {
+            ["request_id"] = requestId,
+            ["expected_session_id"] = status["session_id"].DeepClone(),
+            ["expected_revision"] = status["revision"].DeepClone(),
+            ["expected_active_digest"] = status["active_digest"].DeepClone(),
+            ["proposed_digest"] = CHRISCommandGateway.Hash(json),
+            ["mapping_json"] = json
+        };
+
+        static bool SameMappingStatus(JObject before, JObject now) => before != null &&
+            JToken.DeepEquals(before["session_id"], now["session_id"]) &&
+            JToken.DeepEquals(before["revision"], now["revision"]) &&
+            JToken.DeepEquals(before["active_digest"], now["active_digest"]);
+
+        static string CandidateOutcome(JObject status, string json, string requestId)
+        {
+            string digest = CHRISCommandGateway.Hash(json);
+            if ((string)status["pending_digest"] == digest) return null;
+            if ((string)status["pending_digest"] == null && (string)status["active_digest"] == digest)
+                return "Mapping active.";
+            string receipt = (string)status["last_request_id"] == requestId ?
+                (string)status["last_request_result"] : "superseded";
+            return "Mapping " + (receipt ?? "cancelled") + ". Review again before submitting.";
+        }
         sealed class FakeInput : ICHRISInputState
         {
             public readonly HashSet<string> Held = new HashSet<string>();
@@ -116,7 +140,7 @@ namespace TiltBrush
                     Assert.That((string)status["state"], Is.EqualTo("none"), kv.Key + ": wire state unchanged");
                     Assert.That(status["active_digest"].Type, Is.EqualTo(JTokenType.Null), kv.Key);
 
-                    var reply = authority.Apply(CHRISNativePopup.BuildApplyRequest(status, proposed, "headset-invalid"));
+                    var reply = authority.Apply(BuildApplyRequest(status, proposed, "headset-invalid"));
                     Assert.That((string)reply["result"], Is.EqualTo("pending_neutral"), kv.Key + ": " + (string)reply["reason"]);
                     Assert.That(File.ReadAllBytes(path), Is.EqualTo(kv.Value), kv.Key + ": pending never writes");
                     Tick(authority, remap, input);
@@ -143,7 +167,7 @@ namespace TiltBrush
                 var authority = new CHRISMappingAuthority(invalidPath);
                 authority.NoteFileRejected();
                 File.WriteAllText(invalidPath, "{ still not json, but different", new UTF8Encoding(false));
-                var reply = authority.Apply(CHRISNativePopup.BuildApplyRequest(authority.Status(), proposed, "r-invalid"));
+                var reply = authority.Apply(BuildApplyRequest(authority.Status(), proposed, "r-invalid"));
                 Assert.That((string)reply["reason"], Is.EqualTo("file_changed"), "The rejected file changed before apply");
                 Assert.That(File.ReadAllText(invalidPath), Is.EqualTo("{ still not json, but different"), "Never overwritten");
             }
@@ -159,7 +183,7 @@ namespace TiltBrush
                 authority.OfferLoaded(CHRISInputMapping.Parse(Encoding.UTF8.GetBytes(before)), Encoding.UTF8.GetBytes(before));
                 Tick(authority, remap, input);
                 File.WriteAllText(validPath, before + " ", new UTF8Encoding(false));
-                var reply = authority.Apply(CHRISNativePopup.BuildApplyRequest(authority.Status(), proposed, "r-valid"));
+                var reply = authority.Apply(BuildApplyRequest(authority.Status(), proposed, "r-valid"));
                 Assert.That((string)reply["reason"], Is.EqualTo("file_changed"), "A valid file edited after load");
                 Assert.That((string)authority.Status()["state"], Is.EqualTo("active"), "The active mapping is kept");
                 Assert.That(authority.SavedFileInvalid, Is.False);
@@ -168,7 +192,7 @@ namespace TiltBrush
         }
 
         [Test]
-        public void PanelReviewConfirmReportsActiveCancelledSupersededAndStale()
+        public void MappingRequestsReportActiveCancelledSupersededAndStale()
         {
             var wire = Wire();
             string before = (string)wire["before"]["active_mapping_json"];
@@ -185,32 +209,32 @@ namespace TiltBrush
 
                 // Confirm -> pending -> active.
                 var reviewBase = authority.Status();
-                Assert.That(CHRISNativePopup.SameMappingStatus(reviewBase, authority.Status()), Is.True);
-                Assert.That((string)authority.Apply(CHRISNativePopup.BuildApplyRequest(reviewBase, proposed, "headset-1"))["result"],
+                Assert.That(SameMappingStatus(reviewBase, authority.Status()), Is.True);
+                Assert.That((string)authority.Apply(BuildApplyRequest(reviewBase, proposed, "headset-1"))["result"],
                     Is.EqualTo("pending_neutral"));
-                Assert.That(CHRISNativePopup.CandidateOutcome(authority.Status(), proposed, "headset-1"), Is.Null, "Still pending");
+                Assert.That(CandidateOutcome(authority.Status(), proposed, "headset-1"), Is.Null, "Still pending");
                 Tick(authority, remap, input);
-                Assert.That(CHRISNativePopup.CandidateOutcome(authority.Status(), proposed, "headset-1"), Is.EqualTo("Mapping active."));
+                Assert.That(CandidateOutcome(authority.Status(), proposed, "headset-1"), Is.EqualTo("Mapping active."));
 
                 // Stale: the status moved after review, so Confirm is refused and the apply is rejected.
-                Assert.That(CHRISNativePopup.SameMappingStatus(reviewBase, authority.Status()), Is.False);
-                Assert.That((string)authority.Apply(CHRISNativePopup.BuildApplyRequest(reviewBase, before, "headset-stale"))["reason"],
+                Assert.That(SameMappingStatus(reviewBase, authority.Status()), Is.False);
+                Assert.That((string)authority.Apply(BuildApplyRequest(reviewBase, before, "headset-stale"))["reason"],
                     Is.EqualTo("stale_status"));
 
                 // Cancelled: a pending candidate stopped by Escape.
                 var reviewAgain = authority.Status();
-                Assert.That((string)authority.Apply(CHRISNativePopup.BuildApplyRequest(reviewAgain, before, "headset-2"))["result"],
+                Assert.That((string)authority.Apply(BuildApplyRequest(reviewAgain, before, "headset-2"))["result"],
                     Is.EqualTo("pending_neutral"));
                 input.StopPressedThisFrame = true;
                 Tick(authority, remap, input);
                 input.StopPressedThisFrame = false;
-                Assert.That(CHRISNativePopup.CandidateOutcome(authority.Status(), before, "headset-2"),
+                Assert.That(CandidateOutcome(authority.Status(), before, "headset-2"),
                     Is.EqualTo("Mapping cancelled. Review again before submitting."));
 
                 // Superseded: after that, another request (not ours) becomes the latest.
-                Assert.That((string)authority.Apply(CHRISNativePopup.BuildApplyRequest(authority.Status(), proposed, "backend-3"))["result"],
+                Assert.That((string)authority.Apply(BuildApplyRequest(authority.Status(), proposed, "backend-3"))["result"],
                     Is.EqualTo("pending_neutral"));
-                Assert.That(CHRISNativePopup.CandidateOutcome(authority.Status(), before, "headset-2"),
+                Assert.That(CandidateOutcome(authority.Status(), before, "headset-2"),
                     Is.EqualTo("Mapping superseded. Review again before submitting."));
             }
             finally { if (File.Exists(path)) File.Delete(path); }
@@ -236,12 +260,12 @@ namespace TiltBrush
                 Assert.That((long)now["revision"], Is.GreaterThan((long)reviewed["revision"]), "The changed file advances the revision");
                 Assert.That((string)now["state"], Is.EqualTo("none"), "Wire state unchanged");
 
-                var reply = authority.Apply(CHRISNativePopup.BuildApplyRequest(reviewed, proposed, "headset-old"));
+                var reply = authority.Apply(BuildApplyRequest(reviewed, proposed, "headset-old"));
                 Assert.That((string)reply["reason"], Is.EqualTo("stale_status"), "The old approval is refused");
                 Assert.That(File.ReadAllText(path), Is.EqualTo("{ invalid B"), "The new file is untouched");
 
                 // Re-reviewed against the current file, the replacement is accepted.
-                Assert.That((string)authority.Apply(CHRISNativePopup.BuildApplyRequest(now, proposed, "headset-new"))["result"],
+                Assert.That((string)authority.Apply(BuildApplyRequest(now, proposed, "headset-new"))["result"],
                     Is.EqualTo("pending_neutral"));
 
                 // Reloading the same unchanged file does not move the revision.
@@ -269,7 +293,7 @@ namespace TiltBrush
                 authority.OfferLoaded(CHRISInputMapping.Parse(Encoding.UTF8.GetBytes(before)), Encoding.UTF8.GetBytes(before));
                 Tick(authority, remap, input);
                 Assert.That(authority.PersistCount, Is.Zero, "Activating the loaded file writes nothing");
-                Assert.That((string)authority.Apply(CHRISNativePopup.BuildApplyRequest(authority.Status(), proposed, "headset-1"))["result"],
+                Assert.That((string)authority.Apply(BuildApplyRequest(authority.Status(), proposed, "headset-1"))["result"],
                     Is.EqualTo("pending_neutral"));
                 Assert.That(authority.PersistCount, Is.Zero, "Pending writes nothing");
                 Tick(authority, remap, input);

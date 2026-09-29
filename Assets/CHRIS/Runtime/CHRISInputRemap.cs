@@ -366,7 +366,7 @@ namespace TiltBrush
         internal static bool MappingInUse => Remap.Active != null || Remap.HasPending || s_Authority.HasPending;
         public static CHRISViewHeading Heading { get; private set; } = new CHRISViewHeading();
         public static bool DesktopControlsOwned => CHRISBimanualHost.OwnsDesktopControl ||
-            CHRISBimanualHost.RecoveryUI || CHRISPanel.Instance?.Popup?.BindingCaptureActive == true;
+            CHRISBimanualHost.RecoveryUI;
         internal static bool AllowsMappedConvenience(CHRISInputMapping mapping, bool ownsMappedPose) =>
             mapping?.SchemaVersion != CHRISInputMapping.BimanualVersion || ownsMappedPose;
         internal static bool MappingOwnsKeyboardShortcuts(CHRISInputMapping mapping, bool desktopOwned) =>
@@ -446,14 +446,13 @@ namespace TiltBrush
             if (wasActive && Remap.Active == null) Debug.Log("CHRIS mapping stopped: shortcuts restored; reload to use it again");
             if (!Remap.StoppedThisFrame && focused && Keyboard.current != null &&
                 Keyboard.current.f1Key.wasPressedThisFrame)
-            {
-                if (CHRISFloatingPanel.Show(true))
-                    CHRISBimanualHost.RequestKeyboardUI();
-            }
+                CHRISBimanualHost.RequestKeyboardUI();
+            if (focused && Keyboard.current != null && Keyboard.current.f6Key.wasPressedThisFrame)
+                CHRISBimanualHost.ReleaseKeyboardUI();
             // Legacy move_brush relinquishes its driver before two-hand control can take it.
             UpdateBrushOwnership(ViewpointScript.Head);
             CHRISBimanualHost.Tick(Remap.Active, CHRISDeviceInput.Instance, focused, stroke);
-            if (CHRISPanel.Instance?.Popup?.BindingCaptureActive == true || CHRISBimanualHost.RecoveryUI)
+            if (CHRISBimanualHost.RecoveryUI)
                 Remap.SuppressForEditor(CHRISDeviceInput.Instance);
             else if (CHRISBimanualHost.MappingActive && (!CHRISBimanualHost.OwnsMappedPose ||
                 CHRISBimanualHost.Input.NeedsConvenienceRelease))
@@ -743,7 +742,7 @@ namespace TiltBrush
             bool mappingOwnsShortcuts = MappingOwnsKeyboardShortcuts(Remap.Active,
                 CHRISBimanualHost.OwnsDesktopControl);
             bool active = ShouldOwnKeyboardShortcuts(mappingOwnsShortcuts, CHRISBimanualHost.RecoveryUI,
-                CHRISPanel.Instance?.Popup?.BindingCaptureActive == true);
+                false);
             if (active && !s_ShortcutsOwned)
             {
                 s_ShortcutsBefore = input.DisableKeyboardShortcuts;

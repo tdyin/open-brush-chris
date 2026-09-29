@@ -5,7 +5,7 @@ using UnityEngine;
 
 namespace TiltBrush
 {
-    // A separate native panel owns the CHRIS popup. It never attaches to a hand.
+    // A separate native panel carries only status and Stop. It never attaches to a hand.
     // Moving uses the ordinary UI trigger, so it also works in basic mode.
     [DefaultExecutionOrder(-100)]
     public class CHRISFloatingPanel : BasePanel
@@ -58,7 +58,7 @@ namespace TiltBrush
             gameObject.SetActive(false);
         }
 
-        public static bool Show(bool controls = false)
+        public static bool Show()
         {
             var manager = PanelManager.m_Instance;
             var panel = manager?.GetOrCreateCHRISPanel();
@@ -68,12 +68,7 @@ namespace TiltBrush
             panel.gameObject.SetActive(true);
             if (panel.PanelPopUp == null)
                 panel.CreatePopUp(CHRISUIResources.Load().PopupPrefab, Vector3.zero, false, true);
-            if (controls && panel.PanelPopUp is CHRISNativePopup popup)
-            {
-                CHRISBimanualHost.ResetUIPointer();
-                popup.ShowControls(true);
-            }
-            // A new popup is Opening, not yet IsOpen(); F1 still requested a visible UI.
+            // A new popup is Opening, not yet IsOpen().
             return panel.gameObject.activeInHierarchy && panel.PanelPopUp is CHRISNativePopup shown &&
                 !shown.IsClosingOrClosed();
         }
@@ -124,7 +119,6 @@ namespace TiltBrush
         {
             if (!TryGetPointerRay(out var ray) || PanelPopUp == null || !PanelPopUp.IsOpen())
                 return;
-            CHRISPanel.Instance?.StopLocal(); // A pending confirmation must not survive a move gesture.
             BeginDrag(ray, SketchControlsScript.m_Instance.GetUIReticlePos());
         }
 

@@ -322,6 +322,7 @@ namespace TiltBrush
             Host(host =>
             {
                 var model = host.gameObject.AddComponent<CHRISPanel>(); model.Gateway = host; Call(model, "Start");
+                model.EnableVoiceBackend();
                 Property(model.Assistance, "TaskId", null); Property(model.Assistance, "PendingRequest", null);
                 var popup = host.gameObject.AddComponent<CHRISNativePopup>(); Property(model, "Popup", popup);
                 var task = TaskFor(host); Property(model.Assistance, "Task", task); Property(model.Assistance, "Busy", true);
@@ -351,10 +352,6 @@ namespace TiltBrush
                 var partial = new JObject { ["status"] = "partial" };
                 Assert.That(CHRISAssistanceClient.Terminal(partial), Is.True);
                 partial["status"] = "unverified"; Assert.That(CHRISAssistanceClient.Terminal(partial), Is.False);
-                string longSummary = string.Join("\n", Enumerable.Repeat(new string('x', 200), 5));
-                var pages = CHRISNativePopup.ReviewPages(longSummary);
-                Assert.That(pages.Length, Is.GreaterThan(1)); Assert.That(string.Concat(pages), Is.EqualTo(longSummary));
-                Assert.That(pages.All(p => p.Length <= 320), Is.True);
             });
         }
     }

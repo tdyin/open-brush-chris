@@ -642,7 +642,6 @@ namespace TiltBrush
             switch (rCommand)
             {
                 case SketchCommands.Activate:
-                    if (CHRISPanel.Instance?.Popup?.BindingCaptureActive == true) return false;
                     if (CHRISBimanualHost.RecoveryUI)
                         return Brush.GetCommand(rCommand) ||
                             (SketchControlsScript.m_Instance != null &&
@@ -734,7 +733,6 @@ namespace TiltBrush
             switch (rCommand)
             {
                 case SketchCommands.Activate:
-                    if (CHRISPanel.Instance?.Popup?.BindingCaptureActive == true) return false;
                     if (CHRISBimanualHost.RecoveryUI)
                         return Brush.GetCommandDown(rCommand) ||
                             (SketchControlsScript.m_Instance != null &&
@@ -864,8 +862,7 @@ namespace TiltBrush
         /// presses when you fiddle with the joystick.
         public bool GetMouseButton(int button)
         {
-            if (App.Config.IsMobileHardware || Mouse.current == null || CHRISBimanualHost.RecoveryUI ||
-                CHRISPanel.Instance?.Popup?.BindingCaptureActive == true)
+            if (App.Config.IsMobileHardware || Mouse.current == null || CHRISBimanualHost.RecoveryUI)
             {
                 return false;
             }
@@ -885,8 +882,7 @@ namespace TiltBrush
         /// presses when you fiddle with the joystick.
         public bool GetMouseButtonDown(int button)
         {
-            if (App.Config.IsMobileHardware || Mouse.current == null || CHRISBimanualHost.RecoveryUI ||
-                CHRISPanel.Instance?.Popup?.BindingCaptureActive == true)
+            if (App.Config.IsMobileHardware || Mouse.current == null || CHRISBimanualHost.RecoveryUI)
             {
                 return false;
             }

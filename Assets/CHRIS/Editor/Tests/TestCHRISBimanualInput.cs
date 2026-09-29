@@ -283,34 +283,6 @@ namespace TiltBrush
         }
 
         [Test]
-        public void StructuredEditChecksTheWholeMappingBeforeChangingIt()
-        {
-            string preset = System.Text.Encoding.UTF8.GetString(Resources.Load<TextAsset>("CHRIS/TwoHandDefault").bytes);
-            var editor = new CHRISMappingEditor(null, preset);
-            int brushTrigger = -1;
-            for (int i = 0; i < editor.Entries.Count; i++)
-                if (editor.Entries[i].Action == CHRISMappedAction.Trigger && editor.Entries[i].Target == "brush")
-                    brushTrigger = i;
-            Assert.That(brushTrigger, Is.GreaterThanOrEqualTo(0));
-            Assert.That(editor.TryChangeSource(brushTrigger,
-                new JObject { ["type"] = "key", ["key"] = "h" }, out string collision), Is.False);
-            Assert.That(collision, Does.Contain("duplicate_input"));
-            Assert.That(editor.Entries[brushTrigger].Key, Is.EqualTo("space"));
-            Assert.That(editor.TryChangeSource(brushTrigger,
-                new JObject { ["type"] = "key", ["key"] = "f4" }, out _), Is.True);
-            Assert.That(editor.Entries[brushTrigger].Key, Is.EqualTo("f4"));
-            Assert.That(editor.ReviewText(), Does.Contain("Added: Trigger (brush): Key f4"));
-            Assert.That(CHRISInputMapping.Parse(System.Text.Encoding.UTF8.GetBytes(editor.WorkingJson))
-                .Find(CHRISMappedAction.Trigger, "brush").Key, Is.EqualTo("f4"));
-
-            var concise = new CHRISMappingEditor(preset, preset);
-            Assert.That(concise.TryChangeSource(brushTrigger,
-                new JObject { ["type"] = "key", ["key"] = "f4" }, out _), Is.True);
-            Assert.That(concise.ReviewText(), Does.Contain("25 unchanged bindings"));
-            Assert.That(concise.ReviewText(), Does.Not.Contain("Added: Mode UI"));
-        }
-
-        [Test]
         public void HandednessSwapRestoresBothOriginalPoseDrivers()
         {
             var left = new GameObject("CHRIS left driver test");
@@ -377,18 +349,6 @@ namespace TiltBrush
         }
 
         [Test]
-        public void RetakeHintNamesTheMappingsModeKeys()
-        {
-            var mapping = Preset();
-            Assert.That(CHRISNativePopup.RetakeHint(mapping, true, false), Is.Empty, "Nothing to retake");
-            Assert.That(CHRISNativePopup.RetakeHint(mapping, true, true),
-                Is.EqualTo("Press F2 (position) or F3 (rotation) to take control"));
-            Assert.That(CHRISNativePopup.RetakeHint(mapping, false, false),
-                Is.EqualTo("Return to Open Brush, then press F2 (position) or F3 (rotation) to take control"));
-            Assert.That(CHRISNativePopup.RetakeHint(null, false, true), Is.Empty, "No mapping, no hint");
-        }
-
-        [Test]
         public void SavedProfileStartsPhysicalUntilExplicitUIOrPoseTakeover()
         {
             var mapping = Preset();
@@ -438,23 +398,27 @@ namespace TiltBrush
         }
 
         [Test]
-        public void StopLeavesPhysicalPointerEvenWithControlsOpenUntilNewF1Recovery()
+        public void StopLeavesPhysicalPointerUntilNewF1Recovery()
         {
             var keyboardUI = new CHRISKeyboardUIOwnership();
             keyboardUI.Request();
             keyboardUI.UpdateActive(true, true, false, false, false);
             Assert.That(keyboardUI.Granted, Is.True);
             keyboardUI.Release(); // Escape or StopMapping releases the explicit UI owner.
-            keyboardUI.UpdateRecovery(true, true, false, false); // Controls remains visible.
+            keyboardUI.UpdateRecovery(true, false, false); // No popup is needed.
             Assert.That(keyboardUI.Granted, Is.False);
             Assert.That(CHRISBimanualHost.UsesVirtualHands(false, false), Is.False);
 
-            keyboardUI.Request(); // First F1 without a profile, while the popup is Opening.
-            keyboardUI.UpdateRecovery(true, true, true, false);
+            keyboardUI.Request(); // First F1 without a profile.
+            keyboardUI.UpdateRecovery(true, true, false);
             Assert.That(keyboardUI.Granted, Is.False, "Physical grab drains before recovery UI takes the ray");
-            keyboardUI.UpdateRecovery(true, true, false, false);
+            keyboardUI.Release(); // F6 cancels a request even before it is granted.
+            keyboardUI.UpdateRecovery(true, false, false);
+            Assert.That(keyboardUI.Granted, Is.False);
+            keyboardUI.Request();
+            keyboardUI.UpdateRecovery(true, false, false);
             Assert.That(keyboardUI.Granted, Is.True);
-            keyboardUI.UpdateRecovery(false, true, false, false);
+            keyboardUI.UpdateRecovery(false, false, false);
             Assert.That(keyboardUI.Granted, Is.False, "Focus loss returns to physical routing");
         }
     }
