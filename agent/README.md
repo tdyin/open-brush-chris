@@ -182,6 +182,62 @@ A Windows/OpenXR player and the bounded Simulator
 gate are separate from edit-mode checks; headset comfort and physical timing
 still require user acceptance.
 
+## Controller-driven brush selection
+
+The plan is `C:\Users\Yin\Dev\agents\_common\chris\Sage-Implementation-Plan.md`
+(D48). Uni is the native writer for this job; Bac owns the Python side.
+
+### Phase 0 baseline (2026-10-03)
+
+Recorded read-only by Uni. No Unity, player or build was launched, and no OpenXR
+setting or saved mapping changed.
+
+1. Native commit: `main-chris` @ `25729a182f8ebc4a8eab1cfb9d92f51b2f43a070`, clean
+   and equal to `origin/main-chris`.
+2. Player: `Build/CHRIS-current` is a junction to
+   `Build/CHRIS-v013-pixel-20261002-223950`. Its Assembly-CSharp.dll SHA256
+   `8f3c5d3ada6c21ac785ae76773193433a2622605247e7219d41b5275289c9f5c` matches
+   the v0.1.3 record above. The banner reads `Open Brush 2.0.0 build
+   chris-v013-pixel-20261002-223950`.
+3. Unity: `6000.6.0f1 (f7f8ed4d1e24)` in `ProjectSettings/ProjectVersion.txt`,
+   installed at the path `verify-native-ui.ps1` expects. 6000.6.4f1 is also
+   installed but unused.
+4. OpenXR active runtime (`HKLM\SOFTWARE\Khronos\OpenXR\1`, read only):
+   `C:\Program Files\Meta Horizon\Support\oculus-runtime\oculus_openxr_64.json`
+   ("Oculus OpenXR"). There is no HKCU override.
+5. Meta runtime: Meta Horizon Link 1.115.0 (installed programs). The player log
+   reports OpenXR runtime `Oculus` version `1.208.0` and system `Meta Quest 3`.
+6. Interaction profile: Standalone OpenXR settings enable Oculus Touch, HTC Vive,
+   Valve Index, Microsoft Motion, HP Reverb G2 and SteamFrame. Meta Quest Touch
+   Plus and Touch Pro are disabled. The player requests the Oculus Touch
+   Controller Profile, and both hands report `Oculus, Oculus Touch Controller
+   OpenXR`. Quest 3 controllers therefore use
+   `/interaction_profiles/oculus/touch_controller`.
+7. Source facts the plan relies on still hold at this commit (files last changed
+   in `e2e8f4e1`):
+   - `CHRISBimanualHost` disables a hand's `TrackedPoseDriver` while CHRIS owns
+     its pose and restores the previous enabled state on release.
+     `OwnsBrushPose`/`OwnsWandPose` report that ownership.
+   - `BrushTypeButton.OnButtonPressed` calls
+     `BrushController.m_Instance.SetActiveBrush(m_Brush)`.
+   - The `CHRISCommandGateway` context reports `brush_id` (current brush GUID),
+     size, colour, the brush catalog, Brush/Color panel visibility,
+     `stroke_active` and the scene pose.
+   - `App.METERS_TO_UNITS` is 10.
+
+Items 5 and 6 come from the last player log for this build on this PC
+(`LocalLow\Icosa Foundation\Open Brush\Player.log`, 2026-10-02 23:21), not from
+a fresh run. The saved mapping is the v0.1.3 default preset (2,875 bytes, SHA256
+`4726b6f09d872c04f894542611eb404384a01e9e148608322d4f47deff65d77a`); it was
+recorded, not replaced.
+
+Manual comparison (brush change with the normal controller palette, then v0.1.3
+keyboard control): **NOT RUN**, deferred by the user (D51). The user has the
+checklist. Simulator gates: **NOT RUN** (D40). Phase 1 (Operator feasibility) was
+skipped by the user's choice of the native route (D50): no Operator install, and
+the first procedure uses the native controller path with CHRISBimanualHost-style
+ownership.
+
 ## Upstream integration points
 
 CHRIS uses the existing TiltBrush namespace and compilation boundaries.
