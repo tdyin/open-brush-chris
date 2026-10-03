@@ -1,10 +1,17 @@
 // Copyright 2026 The Open Brush Authors
 // Licensed under the Apache License, Version 2.0.
+using UnityEngine;
 namespace TiltBrush
 {
     // Uses the same serialized geometry, atlas and native hover/press handling as peer Lab features.
     public class CHRISLabButton : BaseButton
     {
+        protected override void Awake()
+        {
+            m_ButtonTexture = Resources.Load<Texture2D>("Icons/settings");
+            base.Awake();
+        }
+
         protected override void OnButtonPressed()
         {
             var popup = CHRISPanel.Instance?.Popup;

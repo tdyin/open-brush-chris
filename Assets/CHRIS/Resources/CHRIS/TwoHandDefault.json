@@ -1,0 +1,38 @@
+{
+  "version": "v0.1.2",
+  "app": "openbrush",
+  "profile": "keyboard_mouse",
+  "frame": {"kind": "fixed_recenterable"},
+  "mappings": [
+    {"id": "ui_mode", "action": "mode_ui", "source": {"type": "key", "key": "f1"}},
+    {"id": "position_mode", "action": "mode_position", "source": {"type": "key", "key": "f2"}},
+    {"id": "rotation_mode", "action": "mode_rotation", "source": {"type": "key", "key": "f3"}},
+    {"id": "select_brush", "action": "select_hand", "target": "brush", "source": {"type": "key", "key": "1"}},
+    {"id": "select_wand", "action": "select_hand", "target": "wand", "source": {"type": "key", "key": "2"}},
+    {"id": "recenter", "action": "recenter", "source": {"type": "key", "key": "f5"}},
+    {"id": "hand_back", "action": "hand_back", "source": {"type": "key", "key": "f6"}},
+
+    {"id": "pose_xy", "action": "pose_xy", "target": "selected", "source": {"type": "mouse_delta"}},
+    {"id": "pose_depth", "action": "pose_depth", "target": "selected", "source": {"type": "key_axis1", "negative": "q", "positive": "e"}},
+    {"id": "rotate_xy", "action": "rotate_xy", "target": "selected", "source": {"type": "mouse_delta"}},
+    {"id": "rotate_roll", "action": "rotate_roll", "target": "selected", "source": {"type": "key_axis1", "negative": "q", "positive": "e"}},
+
+    {"id": "brush_trigger", "action": "trigger", "target": "brush", "source": {"type": "key", "key": "space"}},
+    {"id": "brush_grip", "action": "grip_toggle", "target": "brush", "source": {"type": "key", "key": "g"}},
+    {"id": "brush_primary", "action": "primary_button", "target": "brush", "source": {"type": "key", "key": "x"}},
+    {"id": "brush_secondary", "action": "secondary_button", "target": "brush", "source": {"type": "key", "key": "c"}},
+    {"id": "brush_stick_click", "action": "stick_click", "target": "brush", "source": {"type": "key", "key": "b"}},
+    {"id": "brush_stick_axis", "action": "stick_axis", "target": "brush", "source": {"type": "key_vector2", "up": "upArrow", "down": "downArrow", "left": "leftArrow", "right": "rightArrow"}},
+
+    {"id": "wand_trigger", "action": "trigger", "target": "wand", "source": {"type": "key", "key": "enter"}},
+    {"id": "wand_grip", "action": "grip_toggle", "target": "wand", "source": {"type": "key", "key": "h"}},
+    {"id": "wand_primary", "action": "primary_button", "target": "wand", "source": {"type": "key", "key": "t"}},
+    {"id": "wand_secondary", "action": "secondary_button", "target": "wand", "source": {"type": "key", "key": "y"}},
+    {"id": "wand_stick_click", "action": "stick_click", "target": "wand", "source": {"type": "key", "key": "u"}},
+    {"id": "wand_stick_axis", "action": "stick_axis", "target": "wand", "source": {"type": "key_vector2", "up": "i", "down": "k", "left": "j", "right": "l"}},
+
+    {"id": "undo", "action": "undo", "source": {"type": "key", "key": "z"}},
+    {"id": "brush_size", "action": "brush_size", "source": {"type": "mouse_wheel"}},
+    {"id": "move_view", "action": "move_view", "source": {"type": "key_vector2", "up": "w", "down": "s", "left": "a", "right": "d"}}
+  ]
+}

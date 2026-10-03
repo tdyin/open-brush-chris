@@ -642,8 +642,22 @@ namespace TiltBrush
             switch (rCommand)
             {
                 case SketchCommands.Activate:
+                    if (CHRISBimanualHost.RecoveryUI)
+                        return Brush.GetCommand(rCommand) ||
+                            (SketchControlsScript.m_Instance != null &&
+                             SketchControlsScript.m_Instance.IsUserInteractingWithUI() &&
+                             ((Mouse.current != null && Mouse.current.leftButton.isPressed) ||
+                              (Keyboard.current != null && Keyboard.current.enterKey.isPressed)));
+                    if (CHRISBimanualHost.MappingActive)
+                        return CHRISBimanualHost.InUIMode
+                            ? SketchControlsScript.m_Instance != null &&
+                              SketchControlsScript.m_Instance.IsUserInteractingWithUI() &&
+                              ((Mouse.current != null && Mouse.current.leftButton.isPressed) ||
+                               (Keyboard.current != null && Keyboard.current.enterKey.isPressed))
+                            : Brush.GetCommand(rCommand);
                     return Brush.GetCommand(rCommand) || (!isDemoMode && GetMouseButton(0));
                 case SketchCommands.AltActivate:
+                    if (CHRISBimanualHost.MappingActive) return Wand.GetCommand(rCommand);
                     return GetMouseButton(1) || Wand.GetCommand(rCommand);
                 case SketchCommands.LockToHead:
                     return GetKeyboardShortcut(shortcut.Value);
@@ -656,8 +670,10 @@ namespace TiltBrush
                 case SketchCommands.Scale:
                     return GetKeyboardShortcut(shortcut.Value) || Brush.GetCommand(rCommand);
                 case SketchCommands.Sensitivity:
-                    return Mathf.Abs(Mouse.current.scroll.x.ReadValue()) > m_InputThreshold;
+                    return !CHRISInputMappingHost.DesktopControlsOwned && Mouse.current != null &&
+                        Mathf.Abs(Mouse.current.scroll.x.ReadValue()) > m_InputThreshold;
                 case SketchCommands.Panic:
+                    if (CHRISBimanualHost.MappingActive) return Wand.GetCommand(rCommand);
                     return GetMouseButton(1) || Wand.GetCommand(rCommand);
                 case SketchCommands.MultiCamSelection:
                     return Brush.GetCommand(rCommand);
@@ -717,6 +733,19 @@ namespace TiltBrush
             switch (rCommand)
             {
                 case SketchCommands.Activate:
+                    if (CHRISBimanualHost.RecoveryUI)
+                        return Brush.GetCommandDown(rCommand) ||
+                            (SketchControlsScript.m_Instance != null &&
+                             SketchControlsScript.m_Instance.IsUserInteractingWithUI() &&
+                             ((Mouse.current != null && Mouse.current.leftButton.wasPressedThisFrame) ||
+                              (Keyboard.current != null && Keyboard.current.enterKey.wasPressedThisFrame)));
+                    if (CHRISBimanualHost.MappingActive)
+                        return CHRISBimanualHost.InUIMode
+                            ? SketchControlsScript.m_Instance != null &&
+                              SketchControlsScript.m_Instance.IsUserInteractingWithUI() &&
+                              ((Mouse.current != null && Mouse.current.leftButton.wasPressedThisFrame) ||
+                               (Keyboard.current != null && Keyboard.current.enterKey.wasPressedThisFrame))
+                            : Brush.GetCommandDown(rCommand);
                     return GetMouseButtonDown(0) || Brush.GetCommandDown(rCommand);
                 case SketchCommands.RewindTimeline:
                 case SketchCommands.AdvanceTimeline:
@@ -751,6 +780,7 @@ namespace TiltBrush
                 case SketchCommands.SwapControls:
                     return HasSwapGestureCompleted();
                 case SketchCommands.AltActivate:
+                    if (CHRISBimanualHost.MappingActive) return Wand.GetCommandDown(rCommand);
                     return GetMouseButtonDown(1) || Wand.GetCommandDown(rCommand);
                 case SketchCommands.ShowPinCushion:
                     return Brush.GetCommandDown(rCommand);
@@ -807,31 +837,32 @@ namespace TiltBrush
 
         public Vector2 GetMouseMoveDelta()
         {
-            if (App.Config.IsMobileHardware)
+            // A CHRIS mapping that uses mouse movement owns it while active.
+            if (App.Config.IsMobileHardware || CHRISInputMappingHost.MouseDeltaMapped)
             {
                 return Vector2.zero;
             }
 
-            Vector2 mv = Mouse.current.delta.ReadValue() * 0.125f;
+            Vector2 mv = Mouse.current != null ? Mouse.current.delta.ReadValue() * 0.125f : Vector2.zero;
             return new Vector2(Mathf.Abs(mv.x) > m_InputThreshold ? mv.x : 0f,
                 Mathf.Abs(mv.y) > m_InputThreshold ? mv.y : 0f);
         }
 
         public float GetMouseWheel()
         {
-            if (App.Config.IsMobileHardware)
+            if (App.Config.IsMobileHardware || CHRISInputMappingHost.DesktopControlsOwned)
             {
                 return 0.0f;
             }
 
-            return Mouse.current.scroll.x.ReadValue();
+            return Mouse.current != null ? Mouse.current.scroll.x.ReadValue() : 0f;
         }
 
         /// Mouse input is ignored on mobile platform because the Oculus Quest seems to emulate mouse
         /// presses when you fiddle with the joystick.
         public bool GetMouseButton(int button)
         {
-            if (App.Config.IsMobileHardware)
+            if (App.Config.IsMobileHardware || Mouse.current == null || CHRISBimanualHost.RecoveryUI)
             {
                 return false;
             }
@@ -851,7 +882,7 @@ namespace TiltBrush
         /// presses when you fiddle with the joystick.
         public bool GetMouseButtonDown(int button)
         {
-            if (App.Config.IsMobileHardware)
+            if (App.Config.IsMobileHardware || Mouse.current == null || CHRISBimanualHost.RecoveryUI)
             {
                 return false;
             }
@@ -874,8 +905,8 @@ namespace TiltBrush
 
         public float GetBrushScrollAmount()
         {
-            // Check mouse first.
-            if (!App.Config.IsMobileHardware)
+            // Check mouse first, unless a CHRIS mapping owns mouse movement.
+            if (!App.Config.IsMobileHardware && !CHRISInputMappingHost.MouseDeltaMapped)
             {
                 float fMouse = Mouse.current.delta.x.ReadValue();
                 if (Mathf.Abs(fMouse) > m_InputThreshold)
@@ -916,7 +947,8 @@ namespace TiltBrush
 
         public float GetToolSelection()
         {
-            float fScrollWheel = Mouse.current.scroll.x.ReadValue();
+            float fScrollWheel = !CHRISInputMappingHost.DesktopControlsOwned && Mouse.current != null ?
+                Mouse.current.scroll.x.ReadValue() : 0f;
             if (Mathf.Abs(fScrollWheel) > m_InputThreshold)
             {
                 return fScrollWheel;

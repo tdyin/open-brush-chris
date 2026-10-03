@@ -91,7 +91,7 @@ namespace TiltBrush
                     localized.FindPropertyRelative("m_TableEntryReference.m_KeyId").longValue = 0;
                     localized.FindPropertyRelative("m_TableEntryReference.m_Key").stringValue = "";
                 }
-                settings.FindProperty("m_ButtonTexture").objectReferenceValue = Resources.Load<Texture2D>("Icons/mic");
+                settings.FindProperty("m_ButtonTexture").objectReferenceValue = Resources.Load<Texture2D>("Icons/settings");
                 settings.FindProperty("m_ToggleButton").boolValue = true;
                 settings.ApplyModifiedPropertiesWithoutUndo();
                 buttons.Add(entry);

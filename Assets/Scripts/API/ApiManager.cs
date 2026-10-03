@@ -435,6 +435,7 @@ Success. If you are not automatically redirected, please visit <a href='{success
                 }
             }
             App.HttpServer.AddHttpHandler(ROOT_API_URL, ApiCommandCallback);
+            Debug.Log($"API commands registered: {endpoints.Count}; chris.mapping.reload {(endpoints.ContainsKey("chris.mapping.reload") ? "present" : "MISSING")}");
             if (GetComponent<CHRISCommandGateway>() == null)
                 gameObject.AddComponent<CHRISCommandGateway>();
         }

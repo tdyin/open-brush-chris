@@ -2,12 +2,13 @@
 
 ## Working checkout and ownership
 
-Use this repository root on
-`codex/chris-native-companion`. The former `Build/CHRISUI-worktree` checkout
+Use this repository root at `C:/Users/Yin/Dev/open-brush-chris`, currently on
+`main-chris`, restored from `e6775e838741f7691cae64fd9c2cae9a1d61710c`, with the
+v0.1.3 implementation described below. The former `Build/CHRISUI-worktree` checkout
 has been retired after root verification and local evidence preservation.
-Pixel owns native implementation
-and shared Git operations, Iris owns design content, and Logic owns the Python
-service. Coordinate Git changes before switching or retiring either checkout.
+Pixel owns native implementation and build work; Logic owns the Python service;
+Atlas coordinates and reviews. Iris, Quill and Vector are inactive; preserve their
+existing work. Keep one writer per file and coordinate repository operations.
 Do not push as part of local cleanup.
 
 `design/chris/native-companion/` holds the approved v5 boards, exact image
@@ -30,17 +31,156 @@ generated evidence in ignored `agent/logs`, and failure captures in ignored
 - CHRIS owns only its generated materials. Native tooltip materials and shared
   fonts/textures survive closing the panel. Do not destroy materials found by
   walking every child renderer.
-- Recording uses Record/Finish or the scoped non-drawing-hand joystick click.
-  Retry replaces voice input where appropriate; outcome recovery never blindly
-  replays commands. Keep the visible left/right hint synchronized with handedness.
-- Preserve the complete ordered review text and values across pages, explicit
-  Confirm, release gating, cancellation, expiry and local manual takeover.
-  Stop stays on the CHRIS panel; the legacy More-menu Stop has been removed.
+- The floating headset panel shows only mapping/control status and local Stop.
+  It remains optional and nonmodal. Its Brush/Wand role hint follows handedness.
+  The legacy More-menu Stop has been removed.
+- Voice and mapping authority endpoints remain available for external clients.
+  Opening the status panel does not start microphone, speech or review work.
 - Python owns speech credentials and models. The spoken-only introduction is
   `Is your commands are:`; it is not part of the displayed approval or digest.
 - The CHRIS `view.move` contract forwards to native `user.move` behavior through
   `ApiMethods.MoveUserBy`, using fixed room/world XYZ and native units. Do not
   reinterpret values in head or sketch coordinates during cleanup.
+- Keyboard/mouse mapping (v0.1.1): `C:\Dev\chris` owns the schema (`schemas/`),
+  the shared cases and the rules in its `agent/README.md` ("v0.1.1 mapping
+  execution path"). `CHRISInputMapping` must give the same result code as its
+  generated, gitignored `schemas/v0.1.1/fixtures/cases.json`, which the editor
+  check reads in place (sibling `../chris` or `CHRIS_REPO`). If the folder is
+  missing, run `uv run python -m chris.core.mapping_cases` in that repository;
+  Unity never runs Python. The mapping loads
+  from `<persistentDataPath>/CHRIS/active-mapping.json` at startup and on the
+  `chris.mapping.reload` API command, with no file watcher and no Python.
+  With no active mapping, the brush trigger path is exactly the native one.
+  A proposed mapping waits in memory until desktop and XR display focus are
+  present, no stroke is in progress, and neither the old nor proposed mapping's
+  inputs are held. Only then does native persist its exact approved bytes and
+  switch runtime mapping. Escape Stop cancels pending work and deactivates the
+  runtime mapping; after mapped drawing or focus loss, a physical trigger held
+  through the transition needs release and a fresh press. The logical Brush
+  role follows Open Brush's handedness swap. A failed reload preserves the
+  previous active mapping. `GET /chris/mapping/status` reports exact active and
+  pending JSON/digests plus session and mapping revision; the latest request
+  receipt (`last_request_id`/`last_request_result`) is separate from active and
+  pending ownership IDs, so a lost apply reply is checked by status rather than
+  blindly retried. A duplicate request is rejected without replacing that
+  receipt.
+  If the default generated fixture directory is inaccessible, set the test-only
+  `CHRIS_MAPPING_TEST_FIXTURES` environment variable to a readable directory
+  containing `cases.json` and its case files. The current byte-matched local copy
+  is `agent/logs/mapping-shared-cases-20260925/fixtures/`; native checks can use it
+  without touching the original ignored fixture directory. The mapping wire
+  regression reads `mapping_wire.json` there when present, otherwise from the
+  sibling CHRIS repository's checked-in `tests/core/fixtures/` directory.
+  The committed Enter Play Mode Options skip the domain and scene reloads, so
+  CHRIS static state resets itself on `SubsystemRegistration`. Startup logs
+  `HttpListener listening on http://127.0.0.1:40074/`, `API commands
+  registered: N; chris.mapping.reload present` and a `CHRIS mapping` line
+  naming the full path it checked.
+
+## Two-hand keyboard and mouse control (v0.1.2)
+
+### v0.1.3 update (October 2)
+
+The optional v0.1.3 schema keeps the two-hand contract and recovery gates while
+combining position and rotation in F2 control mode. Mouse XY moves the selected
+hand, Q/E controls depth, W/S tilts up/down, A/D turns left/right, and arrows move
+the viewpoint. In F1 menu mode arrows still navigate without viewpoint movement.
+R/F rolls the selected controller. F3 and the Brush stick axis are unbound in the new standard
+preset; all other bindings below remain. Custom roll bindings are optional and
+must not overlap position inputs. `mode_rotation` is not part of v0.1.3.
+
+Use the backend's `schemas/v0.1.3/openbrush_keyboard-mouse_two-hand.default.json`
+through explicit saved-file/reload with a compatible player. Existing v0.1.1 and
+v0.1.2 files retain their behavior, and the bundled v0.1.2 preset is unchanged.
+Offline verification: 89 native regression methods pass, including 16 shared v0.1.3
+validation fixtures, opposite R/F roll, combined selected-hand motion, arrow movement
+and recovery checks. Evidence: `agent/logs/native-ui-runs/20261002-223537/` (exit 0).
+The snapshot at `agent/logs/v013-roll-20261002/source-before-editor/` reports zero differences across
+10,322 source paths and unchanged Git status after Unity. Backend verification
+passes 697 tests and Ruff (backend evidence supplied by Atlas; Pixel did not rerun it).
+Pixel reviewed the existing native implementation against the approved controls and
+found no concrete issue requiring a runtime change. A fresh native run passed all 89
+methods at `agent/logs/native-ui-runs/20261002-223950/`.
+
+Fresh Windows/OpenXR player: `Build/CHRIS-v013-pixel-20261002-223950/OpenBrush.exe`.
+Build result Success, editor exit 0; log and included source patch are under
+`agent/logs/builds/v013-pixel-20261002-223950/`. The previous
+`Build/CHRIS-local-20261002/` player remains intact; `Build/CHRIS-current` points to
+the new folder. Assembly-CSharp.dll SHA256:
+`8f3c5d3ada6c21ac785ae76773193433a2622605247e7219d41b5275289c9f5c`.
+The helper archived and restored 17 known generated paths. Full snapshot check at
+`agent/logs/pixel-v013-20261002/source-before-build/` found zero differences across
+10,322 paths and unchanged Git status before this documentation update.
+
+Simulator gate: **NOT RUN**. The Operator layer manifest
+`sdk/package/Editor/MetaXROperator/x64/XrApiLayer_METAX_operator.json` and Meta XR
+Simulator runtime distribution are absent under both `C:/Users/Yin/Dev/xr-operator`
+and the historical `C:/Dev/xr-operator`. The retained gate also launches the player
+and changes the saved mapping, which this assignment excludes. Prerequisite evidence:
+`agent/logs/pixel-v013-20261002/simulator-prerequisites.json`. No tooling installed
+or restored, player launched, saved mapping changed, or LocalLow restore attempted.
+This is a compiled, offline-verified player, not an acceptance-ready handoff.
+Owner headset acceptance on this PC remains pending for both handedness settings,
+connected/asleep controllers, simultaneous hand position/rotation/roll, F1 menu
+isolation, arrow viewpoint motion, and focus/release/Stop/hand-back timing.
+The owner authorized committing, pushing and opening a PR after this verification;
+hardware acceptance remains unconfirmed. No model call accompanied this work.
+Setup diagnosis found a manually copied `active-mapping.json.json`; subsequent
+physical-volume inspection verified the correct `CHRIS/active-mapping.json` now
+matches the v0.1.3 preset byte-for-byte (2,875 bytes). Pixel did not write or reload
+it. Startup deliberately retains physical control: focus the player window and
+press F2 for pose control, then 1/2 to select Brush/Wand. F1 remains menu control.
+
+### Existing v0.1.2 behavior
+
+The optional v0.1.2 profile controls logical Brush and Wand independently while
+the XR controllers remain connected, including when they are asleep. Fully
+disconnected controllers are not supported. v0.1.1 files still load unchanged;
+they are never rewritten into v0.1.2. Unity validates v0.1.2 independently of
+the Python service, using the schema and shared cases in
+`C:\Dev\chris\schemas\v0.1.2\` and
+`C:\Dev\chris\tests\core\fixtures\mapping_v012\` for editor checks only. The
+player bundles a byte-identical copy of the default preset at
+`Assets/CHRIS/Resources/CHRIS/TwoHandDefault.json`; it has no runtime dependency
+on the sibling repository.
+
+F1 explicitly enters keyboard UI pointer control, including after Stop or with
+no active mapping; it does not open a CHRIS popup. Mouse movement and arrow keys
+point at native menus, and mouse left or Enter activates the hovered native
+control. They cannot draw in UI mode. F6 returns this pointer to physical
+controllers, including when an F1 request is still waiting for a grab to end.
+The floating CHRIS status panel is opened from Labs and can be dragged. It
+contains status, selected mode/hand, physical Brush/Wand handedness, and Stop.
+There is no headset binding browser, editor, review page, or voice-command panel.
+The mapping authority API still checks exact bytes, digest, session and revision,
+waits for neutral input, and persists atomically. To use a custom v0.1.2
+profile, author valid JSON at `<persistentDataPath>/CHRIS/active-mapping.json`
+and call `chris.mapping.reload` to activate it; the CLI currently edits v0.1.1
+only. Stop cancels mapped control; the saved file remains for explicit reload.
+
+The saved v0.1.2 profile loads at startup with physical controller pose,
+pointing, buttons and trigger still in control; its default UI mode does not
+take over until F1. F2 enters virtual position mode, F3 virtual rotation mode,
+1 selects Brush, 2 selects Wand, F5 requests a neutral recenter, and F6 returns
+to physical controllers. Escape
+is local Stop and also restores physical pointing and input.
+The fixed room frame follows head yaw only when the profile first activates or
+F5 completes; looking around does not move either hand. Mouse movement moves
+the selected hand in position mode or yaws/pitches it in rotation mode. Q/E
+controls depth in position mode and roll in rotation mode. Brush uses Space
+trigger, G grip toggle, X/C face buttons, B stick click and arrows for stick
+axis. Wand uses Enter trigger, H grip toggle, T/Y face buttons, U stick click
+and I/J/K/L for stick axis. Z is undo, wheel changes brush size, and W/A/S/D
+moves the view in pose modes. Triggers are binary; adjustable analog pressure
+is outside this profile. Both grips are independent, and mode changes, Stop,
+focus loss and hand-back release their virtual buttons. Pose hand-back waits
+for an active stroke or grab to finish and requires a fresh physical release.
+
+Use `./agent/scripts/verify-native-ui.ps1` for edit-mode parser, state and UI
+checks. A compact status-panel render appears in `agent/logs/native-ui/`.
+A Windows/OpenXR player and the bounded Simulator
+gate are separate from edit-mode checks; headset comfort and physical timing
+still require user acceptance.
 
 ## Upstream integration points
 
@@ -53,7 +193,9 @@ Directory grouping does not require new generic interfaces or assembly splits.
 | `Assets/Scripts/App.cs` | Allow editor checks to exercise internal runtime contracts through the existing editor assembly. |
 | `Assets/Scripts/GUI/BasePanel.cs` | Reserve the CHRIS panel type. |
 | `Assets/Scripts/GUI/PanelManager.cs` | Check availability and lazily construct the optional floating panel. |
-| `Assets/Scripts/Input/UnityXRControllerInfo.cs` | Sample and scope the audited joystick recording shortcut. |
+| `Assets/Scripts/InputManager.cs` | While a CHRIS mapping uses mouse movement, drop the mouse branch of `GetBrushScrollAmount` and `GetMouseMoveDelta`. |
+| `Assets/Scripts/SketchControlsScript.cs` | Make `CanUndo` internal so mapped undo uses the native gate. |
+| `Assets/Scripts/Input/UnityXRControllerInfo.cs` | OR the active mapping's draw into the brush trigger (level, edges and value 1); report the brush as present while CHRIS move_brush owns its pose. |
 | `Assets/Prefabs/Panels/LabsPanel.prefab` | Provide the native CHRIS launcher. |
 
 Shared native meshes, fonts, icon atlas and UI base classes remain in their
@@ -65,8 +207,8 @@ Keep resource loading at `Resources.Load("CHRIS/UI")`; Unity's `Resources` and
 
 Use Unity `6000.6.0f1`. The editor entry point is
 `TiltBrush.TestCHRISNativeUI.Run`, also available as **CHRIS > Verify native UI
-(Edit mode)**. It runs the native assistance, voice, companion and UI checks
-and creates layout renders. Do not run `CHRISCompanionAssets.ConfigureAndVerify`
+(Edit mode)**. It runs the native assistance, voice backend, mapping and compact
+status UI checks and creates a layout render. Do not run `CHRISCompanionAssets.ConfigureAndVerify`
 for routine verification: Configure rewrites authored assets.
 
 Run `./agent/scripts/verify-native-ui.ps1` from PowerShell; `-UnityPath` can
@@ -74,6 +216,13 @@ override the editor executable. The helper resolves this checkout from its own
 location, rejects a second editor for the same project, and records its editor
 log and exit code in `agent/logs/native-ui-runs/<timestamp>/`. Current layout
 renders and protocol fixtures go to `agent/logs/native-ui/`.
+Run `./agent/scripts/test-build-source-patch.ps1` to verify that the build
+helper's Git patch replays text line endings and binary bytes in an isolated
+local fixture. It writes only ignored evidence under `agent/logs/`.
+Run `./agent/scripts/test-unity-generated-sidecars.ps1` to check that a build
+can retain a new Unity `.cs.meta` only for a source file already added before
+the build. The helper records each retained path, owner, and SHA256 in
+`unity-state/generated-sidecars.tsv`; other new paths still stop for review.
 
 The approved directory relocation passed all 30 native editor checks. All 11
 preview PNGs matched the pre-move root renders byte-for-byte, with no source
@@ -90,6 +239,10 @@ The user reported that the functional acceptance sequence passed for earlier
 source `0b7dae2e3e1e93ee3fdf73c3428bc559d54cc828`; keep its player at
 `Build/CHRIS-M2-hover-fix-20260914/` as the accepted backup. This does not establish
 headset acceptance of later polish or a quantitative usability study.
+On September 25, after the `55e042bb` native activation/status checkpoint and
+the corresponding backend `6e3cfb` checkpoint, the user reported that the
+supplied 12-item headset recheck sequence passed ("Tests are good"). No
+per-step logs, timings, or independent headset measurements were captured.
 
 Checkpoint `c42330f488ce83c68d1e88df7c304393741d5b8e` preserves the preexisting
 font state used by verified players. Do not revert that font as generated dirt.
@@ -119,91 +272,20 @@ if any other source hash or Git status differs. Newly generated build files must
 be inspected and archived separately before removal. Never restore over another
 agent's concurrent edits; keep shared-checkout writes paused during verification.
 
-## Cloud voice (Windows PCVR)
+## Voice backend retained for external workflows
 
-Unity captures microphone audio and plays approval readouts. The CHRIS Python
-service owns credentials, exact model selection and structured logging. This
-replaces Vosk; there is no local-model fallback. Use Record/Finish; re-record to replace a request.
-Only finalized text starts planning; only explicit Confirm authorizes execution.
+The headset status panel has no microphone, voice-command, approval, or readout
+controls. Opening it does not instantiate `CHRISAssistanceClient`,
+`CHRISVoiceInput`, or `CHRISConfirmationSpeech`. The voice backend classes and
+Python relay protocol remain in source for explicitly enabled workflows and
+in-memory regression checks; they are not started by the status panel. The
+external CHRIS service owns credentials and models. The native command gateway
+and mapping status/activation/reload APIs remain independent of the voice UI.
 
-### Transcription
-
-Exact `gpt-4o-transcribe` runs through a Realtime transcription session. Phrase
-updates arrive during the manual recording, often after pauses. This does not
-promise word-by-word text during uninterrupted speech. VAD completion never ends
-the recording or starts planning. Finish flushes and waits for one ordered final.
-The [model page](https://developers.openai.com/api/docs/models/gpt-4o-transcribe)
-lists Realtime transcription support; the current
-[live guide](https://developers.openai.com/api/docs/guides/realtime-transcription)
-also describes newer models, which this integration does not substitute.
-
-The fixed loopback WebSocket is `ws://127.0.0.1:8765/voice/transcribe`:
-
-- First text frame: `{"type":"start","session_id":"<fresh GUID>"}`.
-- Wait for matching `ready`, then binary PCM16 little-endian mono 24 kHz,
-  at most 4,800 bytes/frame (100 ms), at most two seconds of queued audio.
-- Finish: `{"type":"finish","session_id":"<same GUID>"}`. Cancel/disconnect
-  closes the stream. There is no reconnect or audio replay.
-- Server events carry `type`, `session_id`, and full-so-far `text` for `partial`
-  and `final`; errors carry a safe `code`. Only one final after Finish is accepted.
-
-Recording is limited to 60 seconds and 2,000 transcript characters. Startup times
-out after 10 seconds; finalization after 20. Failures stop capture and show connection/microphone guidance for re-recording. Audio and partial text are transient. Provider availability, quality
-and latency need live acceptance with the configured account and headset.
-
-### Spoken confirmation
-
-**Speech On/Off** defaults On and remembers the local choice. A fresh valid
-review requests one readout of its complete immutable summary, including every
-ordered action/value and review page. Polling/redraw and Off/On do not replay an
-already attempted approval. Confirm never waits for speech to end.
-
-`POST /voice/speech` sends `speech_id`, `task_id`, `approval_id`, `action_digest`
-and exact `summary`. Python checks identity, validity and summary before and
-after synthesis using exact `gpt-4o-mini-tts`. The response is `audio/pcm`, mono
-signed16 little-endian 24 kHz with matching `X-Speech-Id`. Unity bounds it to
-2,880,000 bytes (60 seconds) before decoding. Invalid, oversized or stale audio
-never plays. The full summary is sent; failures never silently truncate it.
-See the official [TTS guide](https://developers.openai.com/api/docs/guides/text-to-speech).
-
-Off stops audio immediately. Stop, correction, new recording, panel close,
-approval change and expiry stop playback and discard late responses. Pending
-synthesis is aborted and cancelled with `POST /voice/speech/<speech_id>/cancel`
-and `{}`. The native selection sound plays before capture; capture waits for its
-duration plus a 250 ms quiet interval. Haptics mark actual listening and Finish;
-the Finish sound plays after capture stops. Device acoustic echo still needs testing.
-
-### Controller shortcut
-
-On **Quest/OpenXR**, while CHRIS is open, click the **non-drawing hand's joystick**
-(Wand role) to start. Release, then click again to finish. Holding never repeats.
-Record/Finish remains available on the panel, including other controller profiles.
-
-The source audit found no command binding for this click: `ThumbButton` maps to
-`VrInput.Thumbstick` and `Directional`; context/reset/duplicate use primary buttons,
-menu/redo use secondary, and grabbing uses grip. Stick touch and axes still navigate
-the native panels. The shortcut leaves grip, trigger and face buttons unchanged.
-Steam Frame has an additional PadButton alias, so support is restricted to the
-audited Oculus Touch profile or detected Oculus Touch hardware.
-
-Opening, closing, hand-role changes and tracking recovery require a held joystick
-click to release before another action. This applies in Basic/Advanced and follows
-handedness rather than fixed left. Confirm still checks physical grip/trigger
-release. There is no grip reservation or global grab delay.
-
-### Voice verification
-
-No speech binaries/model downloads are needed. Older checkouts must remove the
-generated `Assets/Plugins/CHRISVoice` and `Assets/StreamingAssets/CHRISVoice`
-directories; a preprocessor rejects these retired resources during builds.
-
-Run `TiltBrush.TestCHRISNativeUI.Run` or the CHRIS editor menu. Checks use in-memory
-command adapters, a mocked WebSocket, PCM samples and generation/shortcut state;
-they do not launch a player, access a microphone or call a model. Headset
-acceptance must cover account access, mic routing, phrase updates, exact readout,
-Off/Stop/late audio, both handedness settings, Basic/Advanced, and grab/menu
-conflicts. Physical comfort and recognition quality remain unverified before M3.
-
+`TiltBrush.TestCHRISNativeUI.Run` exercises the retained backend with mocked
+WebSocket, PCM, and command adapters. It does not open a microphone, contact a
+provider, or run the player. Any future headset voice workflow needs separate
+UI and acceptance work before it can be offered to users.
 
 ## Repository rules
 

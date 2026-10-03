@@ -68,8 +68,11 @@ namespace TiltBrush
         void HandleHttp(HttpListenerContext ctx)
         {
             JObject reply;
+            // The mapping is itself capped at 16 KiB. Escaping it inside a JSON string can make
+            // the typed envelope larger; only this route receives the wider transport limit.
+            int bodyLimit = MaxBodyForPath(ctx.Request.Url?.AbsolutePath);
             if (ctx.Request.RemoteEndPoint == null || !IPAddress.IsLoopback(ctx.Request.RemoteEndPoint.Address) ||
-                ctx.Request.Headers["Origin"] != null || ctx.Request.ContentLength64 > 16384 ||
+                ctx.Request.Headers["Origin"] != null || ctx.Request.ContentLength64 > bodyLimit ||
                 (ctx.Request.HttpMethod != "GET" && ctx.Request.HttpMethod != "POST") ||
                 (ctx.Request.HttpMethod == "POST" && (ctx.Request.ContentLength64 < 0 ||
                  !string.Equals((ctx.Request.ContentType ?? "").Split(';')[0].Trim(), "application/json", StringComparison.OrdinalIgnoreCase))))
@@ -80,9 +83,9 @@ namespace TiltBrush
                     Path = ctx.Request.Url.AbsolutePath };
                 using (var reader = new StreamReader(ctx.Request.InputStream, Encoding.UTF8))
                 {
-                    var body = new char[16385];
+                    var body = new char[bodyLimit + 1];
                     int count = reader.ReadBlock(body, 0, body.Length);
-                    if (count > 16384) request.Reply = Error("Request body too large");
+                    if (count > bodyLimit) request.Reply = Error("Request body too large");
                     request.Body = new string(body, 0, count);
                 }
                 lock (m_Requests)
@@ -111,6 +114,7 @@ namespace TiltBrush
                 return BitConverter.ToString(sha.ComputeHash(Encoding.UTF8.GetBytes(value)))
                     .Replace("-", "").ToLowerInvariant();
         }
+        internal static int MaxBodyForPath(string path) => path == "/chris/mapping/activate" ? 49152 : 16384;
         static bool Id(string value) => value != null && Regex.IsMatch(value, "\\A[A-Za-z0-9_-]{1,80}\\z");
         static bool Finite(double value) => !double.IsNaN(value) && !double.IsInfinity(value);
         static void Require(bool valid, string reason)
@@ -336,6 +340,10 @@ namespace TiltBrush
 
         JObject Route(Request request)
         {
+            if (request.Method == "GET" && request.Path == "/chris/mapping/status")
+                return CHRISInputMappingHost.MappingStatus();
+            if (request.Method == "POST" && request.Path == "/chris/mapping/activate")
+                return CHRISInputMappingHost.ActivateMapping(Parse(request.Body));
             if (request.Method == "GET" && request.Path == "/chris/context") return Capture();
             if (request.Method == "GET" && request.Path.StartsWith("/chris/commands/"))
             {

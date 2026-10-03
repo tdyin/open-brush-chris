@@ -5,21 +5,27 @@ using UnityEngine;
 
 namespace TiltBrush
 {
-    // A separate native panel owns the CHRIS popup. It never attaches to a hand.
+    // A separate native panel carries only status and Stop. It never attaches to a hand.
     // Moving uses the ordinary UI trigger, so it also works in basic mode.
     [DefaultExecutionOrder(-100)]
     public class CHRISFloatingPanel : BasePanel
     {
+        const float InitialForwardDistanceMeters = 0.75f;
+        const float InitialRightDistanceMeters = 0.32f;
+        const float InitialDownDistanceMeters = 0.08f;
+        const float MinimumDragDistance = 0.1f;
+
         public bool IsDragging { get; private set; }
 
-        float m_DragDistance;
-        Vector3 m_DragOffset;
+        float m_DragDistanceAlongRay;
+        Vector3 m_PanelOffsetFromRay;
+
         public static CHRISFloatingPanel Create(Transform parent)
         {
-            var obj = new GameObject("CHRIS floating panel");
-            obj.transform.SetParent(parent, false);
-            obj.AddComponent<UIComponentManager>();
-            var panel = obj.AddComponent<CHRISFloatingPanel>();
+            var host = new GameObject("CHRIS floating panel");
+            host.transform.SetParent(parent, false);
+            host.AddComponent<UIComponentManager>();
+            var panel = host.AddComponent<CHRISFloatingPanel>();
             panel.BuildHost();
             return panel;
         }
@@ -52,16 +58,19 @@ namespace TiltBrush
             gameObject.SetActive(false);
         }
 
-        public static void Show()
+        public static bool Show()
         {
             var manager = PanelManager.m_Instance;
             var panel = manager?.GetOrCreateCHRISPanel();
             if (panel == null || !manager.IsPanelAvailable(panel))
-                return;
+                return false;
             panel.PlaceInFront(ViewpointScript.Head);
             panel.gameObject.SetActive(true);
             if (panel.PanelPopUp == null)
                 panel.CreatePopUp(CHRISUIResources.Load().PopupPrefab, Vector3.zero, false, true);
+            // A new popup is Opening, not yet IsOpen().
+            return panel.gameObject.activeInHierarchy && panel.PanelPopUp is CHRISNativePopup shown &&
+                !shown.IsClosingOrClosed();
         }
 
         // Called only when opening/retrieving the window, never every frame.
@@ -72,7 +81,8 @@ namespace TiltBrush
             if (forward.sqrMagnitude < 0.01f)
                 forward = Vector3.forward;
             var right = Vector3.Cross(Vector3.up, forward);
-            transform.position = head.position + App.METERS_TO_UNITS * (forward * 0.75f + right * 0.32f - Vector3.up * 0.08f);
+            transform.position = head.position + App.METERS_TO_UNITS *
+                (forward * InitialForwardDistanceMeters + right * InitialRightDistanceMeters - Vector3.up * InitialDownDistanceMeters);
             FaceUser(head.position);
         }
 
@@ -87,9 +97,10 @@ namespace TiltBrush
             m_Mesh.transform.rotation = transform.rotation;
         }
 
-        static bool PointerRay(out Ray ray)
+        static bool TryGetPointerRay(out Ray ray)
         {
             ray = default;
+            if (CHRISBimanualHost.TryGetUIPointerRay(out ray)) return true;
             if (InputManager.m_Instance == null)
                 return false;
             if (App.Config.m_SdkMode != SdkMode.Monoscopic)
@@ -106,16 +117,15 @@ namespace TiltBrush
 
         public void BeginDrag()
         {
-            if (!PointerRay(out var ray) || PanelPopUp == null || !PanelPopUp.IsOpen())
+            if (!TryGetPointerRay(out var ray) || PanelPopUp == null || !PanelPopUp.IsOpen())
                 return;
-            CHRISPanel.Instance?.StopLocal(); // A pending confirmation must not survive a move gesture.
             BeginDrag(ray, SketchControlsScript.m_Instance.GetUIReticlePos());
         }
 
         public void BeginDrag(Ray ray, Vector3 hit)
         {
-            m_DragDistance = Mathf.Max(0.1f, Vector3.Dot(hit - ray.origin, ray.direction));
-            m_DragOffset = transform.position - ray.GetPoint(m_DragDistance);
+            m_DragDistanceAlongRay = Mathf.Max(MinimumDragDistance, Vector3.Dot(hit - ray.origin, ray.direction));
+            m_PanelOffsetFromRay = transform.position - ray.GetPoint(m_DragDistanceAlongRay);
             IsDragging = true;
         }
 
@@ -129,7 +139,7 @@ namespace TiltBrush
                 return;
             }
 
-            transform.position = ray.GetPoint(m_DragDistance) + m_DragOffset;
+            transform.position = ray.GetPoint(m_DragDistanceAlongRay) + m_PanelOffsetFromRay;
         }
 
         public void EndDrag()
@@ -147,23 +157,32 @@ namespace TiltBrush
         void Update()
         {
             BaseUpdate();
-            if (IsDragging)
-            {
-                if (PanelPopUp == null || !PanelPopUp.IsOpen() || !PointerRay(out var ray))
-                    EndDrag();
-                else
-                    MoveDrag(ray, InputManager.m_Instance.GetCommand(InputManager.SketchCommands.Activate));
-            }
+            UpdateDrag();
 
             var head = ViewpointScript.Head;
             if (head != null)
                 FaceUser(head.position);
         }
 
+        void UpdateDrag()
+        {
+            if (!IsDragging)
+                return;
+            if (PanelPopUp == null || !PanelPopUp.IsOpen() || !TryGetPointerRay(out var ray))
+                EndDrag();
+            else
+                MoveDrag(ray, InputManager.m_Instance.GetCommand(InputManager.SketchCommands.Activate));
+        }
+
         protected override void OnDisablePanel()
         {
             base.OnDisablePanel();
             EndDrag();
+            DisposePopupStack();
+        }
+
+        void DisposePopupStack()
+        {
             // Dispose the popup stack when native availability hides the host.
             var popup = m_ActivePopUp;
             m_ActivePopUp = null;

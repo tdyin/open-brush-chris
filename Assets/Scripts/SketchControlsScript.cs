@@ -1330,7 +1330,11 @@ namespace TiltBrush
             bool hasController = m_ControlsType == ControlsType.SixDofControllers;
             if (hasController)
             {
-                if (InputManager.Brush.IsTrackedObjectValid)
+                if (CHRISBimanualHost.TryGetUIPointerRay(out var uiRay))
+                {
+                    m_GazeControllerRay = uiRay;
+                }
+                else if (InputManager.Brush.IsTrackedObjectValid)
                 {
                     Transform rAttachPoint = InputManager.m_Instance.GetBrushControllerAttachPoint();
                     m_GazeControllerRay.direction = rAttachPoint.forward;
@@ -1706,7 +1710,7 @@ namespace TiltBrush
             UnityEngine.Profiling.Profiler.EndSample();
         }
 
-        bool CanUndo()
+        internal bool CanUndo()
         {
             return SketchMemoryScript.m_Instance.CanUndo() &&
                 !IsUIBlockingUndoRedo() &&
@@ -3134,6 +3138,8 @@ namespace TiltBrush
             float fNearestPointableWidget = 99999.0f;
 
             bool hasController = m_ControlsType == ControlsType.SixDofControllers;
+            float panelPointerDistance = CHRISBimanualHost.PanelRayReach(m_GazeControllerPointingDistance,
+                CHRISBimanualHost.TryGetUIPointerRay(out _));
 
             //if we're re-positioning a panel, keep it active
             if (m_PositioningPanelWithHead)
@@ -3204,7 +3210,7 @@ namespace TiltBrush
 
                                                 bRayHit = false;
                                                 bRayHit = aAllPanels[i].m_Panel.RaycastAgainstMeshCollider(
-                                                    m_GazeControllerRay, out rHitInfo, m_GazeControllerPointingDistance);
+                                                    m_GazeControllerRay, out rHitInfo, panelPointerDistance);
 
                                                 if (bRayHit)
                                                 {
@@ -3250,7 +3256,7 @@ namespace TiltBrush
                             if (Vector3.Angle(aAllPanels[iPrevGazeObject].m_Panel.transform.forward, vToPanel) <
                                 m_GazeMaxAngleFacingToForward)
                             {
-                                float fDist = m_GazeControllerPointingDistance * 1.5f;
+                                float fDist = panelPointerDistance * 1.5f;
                                 bRayHit = aAllPanels[iPrevGazeObject].m_Panel.RaycastAgainstMeshCollider(
                                     m_GazeControllerRayActivePanel, out rHitInfo, fDist);
                                 if (bRayHit)
@@ -3548,7 +3554,7 @@ namespace TiltBrush
 
         void UpdatePanInput()
         {
-            if (Mouse.current.rightButton.isPressed)
+            if (!CHRISInputMappingHost.DesktopControlsOwned && Mouse.current != null && Mouse.current.rightButton.isPressed)
             {
                 Vector3 vPanDiff = Vector3.zero;
                 vPanDiff += (Vector3.right * m_MouseDeltaXScaled);

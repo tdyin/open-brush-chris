@@ -53,6 +53,7 @@ namespace TiltBrush
                 // CHRIS runs on this PC; bind locally instead of relying on peer filters.
                 m_HttpListener.Prefixes.Add($"http://127.0.0.1:{HTTP_PORT}/");
                 m_HttpListener.Start();
+                Debug.Log($"HttpListener listening on http://127.0.0.1:{HTTP_PORT}/");
                 ThreadPool.QueueUserWorkItem((o) =>
                 {
                     while (m_HttpListener != null && m_HttpListener.IsListening)
@@ -130,9 +131,11 @@ namespace TiltBrush
                     }
                 });
             }
-            catch (System.Net.Sockets.SocketException e)
+            catch (Exception e)
             {
-                Debug.LogFormat("HttpListener failed to start\n{0}", e);
+                // Runs inside Task.Run: anything uncaught here (e.g. HttpListenerException for a
+                // port already in use) would otherwise vanish without a log line.
+                Debug.LogErrorFormat("HttpListener failed to start on port {0}\n{1}", HTTP_PORT, e);
                 m_HttpListener = null;
             }
         }

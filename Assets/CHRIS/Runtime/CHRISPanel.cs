@@ -21,7 +21,7 @@ namespace TiltBrush
         public CHRISVoiceInput Voice { get; private set; }
         public CHRISConfirmationSpeech Speech { get; private set; }
         public CHRISNativePopup Popup { get; private set; }
-        public string Notice { get; private set; } = "Record a request. Confirm only after reviewing the commands.";
+        public string Notice { get; private set; } = "";
         public string Prompt { get; private set; } = "";
         public JObject ReviewedApproval { get; private set; }
         public string ReviewText { get; private set; }
@@ -38,12 +38,18 @@ namespace TiltBrush
         float m_ReleaseDeadline, m_NextPoll;
         long m_IntentVersion, m_RecordingIntent;
         string m_ReplacementPrompt;
-        ControllerInfo m_PendingVoiceShortcut;
         CHRISVoiceSession.Phase m_LastVoicePhase;
 
         void Start()
         {
             Instance = this;
+            Gateway.Stopped += OnGatewayStopped;
+        }
+
+        // Voice services are an optional backend workflow. Opening the status panel never starts them.
+        public void EnableVoiceBackend()
+        {
+            if (Assistance != null) return;
             Assistance = GetComponent<CHRISAssistanceClient>() ?? gameObject.AddComponent<CHRISAssistanceClient>();
             Voice = GetComponent<CHRISVoiceInput>() ?? gameObject.AddComponent<CHRISVoiceInput>();
             Speech = GetComponent<CHRISConfirmationSpeech>() ?? gameObject.AddComponent<CHRISConfirmationSpeech>();
@@ -54,15 +60,13 @@ namespace TiltBrush
             Voice.Finalized += AcceptVoice;
             Voice.PlayStartCue = PlayRecordingCue;
             Voice.CaptureStopped += PlayFinishCue;
-            Gateway.Stopped += OnGatewayStopped;
         }
 
         public void Opened(CHRISNativePopup popup)
         {
             if (Popup != null && Popup != popup) Popup.RequestClose(true);
             Popup = popup;
-            ClearReview();
-            if (Assistance.TaskId != null) Assistance.Refresh();
+            if (Assistance?.TaskId != null) Assistance.Refresh();
             Refresh();
         }
 
@@ -70,8 +74,6 @@ namespace TiltBrush
         {
             if (Popup != popup) return;
             Popup = null;
-            CancelInput();
-            ClearReview();
         }
 
         void ClearReview()
@@ -85,7 +87,6 @@ namespace TiltBrush
         void CancelInput()
         {
             m_IntentVersion++;
-            m_PendingVoiceShortcut = null;
             Speech?.Cancel();
             Voice?.CancelRecording();
             m_ReplacementPrompt = null;
@@ -133,8 +134,6 @@ namespace TiltBrush
             m_RecordingIntent = BeginCorrection();
             Voice.StartRecording();
         }
-
-        internal void QueueVoiceShortcut(ControllerInfo controller) => m_PendingVoiceShortcut = controller;
 
         float PlayRecordingCue()
         {
@@ -194,10 +193,11 @@ namespace TiltBrush
         public static bool PassiveNativeUIHover()
         {
             var popup = Instance?.Popup;
+            if (popup == null || !popup.IsOpen()) return false;
+            var floating = popup.GetParentPanel() as CHRISFloatingPanel;
             var controls = SketchControlsScript.m_Instance;
-            return popup != null && popup.IsOpen() && popup.GetParentPanel() is CHRISFloatingPanel floating &&
-                !floating.IsDragging && popup.GetParentPanel()?.PanelPopUp == popup &&
-                controls != null && controls.IsUserLookingAtPanel(popup.GetParentPanel()) && InputReleased();
+            return floating != null && !floating.IsDragging && floating.PanelPopUp == popup && controls != null &&
+                controls.IsUserLookingAtPanel(floating) && InputReleased();
         }
 
         public static bool SameContext(JObject reviewed, JObject current) => reviewed != null && current != null &&
@@ -288,10 +288,9 @@ namespace TiltBrush
         void Update()
         {
             if (Gateway == null || Assistance == null) return;
-            ProcessVoiceShortcut();
             ProcessReleasedDecision();
             SubmitReplacementWhenReady();
-            if (Popup != null && Time.unscaledTime >= m_NextPoll)
+            if (Assistance.TaskId != null && Time.unscaledTime >= m_NextPoll)
             {
                 m_NextPoll = Time.unscaledTime + TaskPollIntervalSeconds;
                 Assistance.Refresh();
@@ -299,19 +298,10 @@ namespace TiltBrush
             }
         }
 
-        void ProcessVoiceShortcut()
-        {
-            var controller = m_PendingVoiceShortcut;
-            m_PendingVoiceShortcut = null;
-            if (controller != null && Popup != null && Popup.IsOpen() && InputManager.m_Instance != null &&
-                ReferenceEquals(controller, InputManager.Wand) && controller.IsTrackedObjectValid)
-                TapMicrophone();
-        }
-
         void ProcessReleasedDecision()
         {
             if (m_AfterRelease == null) return;
-            if (Popup == null || Time.unscaledTime > m_ReleaseDeadline)
+            if (Time.unscaledTime > m_ReleaseDeadline)
             {
                 m_AfterRelease = null;
                 Notice = "Input was not released. Review and confirm again.";
