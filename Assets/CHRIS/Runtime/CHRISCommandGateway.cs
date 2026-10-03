@@ -142,8 +142,22 @@ namespace TiltBrush
                 ["brushes"] = new JObject(), ["panels"] = new JObject(),
                 ["scene_position"] = null, ["scene_rotation"] = null, ["scene_scale"] = null,
                 ["active_task"] = m_ActiveTask == null ? JValue.CreateNull() : new JValue(m_ActiveTask),
-                ["unknown"] = new JArray("active_layer", "selected_model", "physical_scale", "generation") };
+                ["unknown"] = new JArray("active_layer", "selected_model", "physical_scale", "generation"),
+                ["palette"] = null, ["hover_target_id"] = null,
+                ["grab_active"] = null, ["focus"] = null, ["buttons_neutral"] = null };
             if (!ready) return c;
+            // Read-only procedure observations; not part of MateriallyChanged, so hover alone
+            // never advances the revision.
+            // A failed palette read reports null; it must never fail the context for one-shot tasks.
+            try
+            {
+                c["palette"] = CHRISPaletteObserver.Snapshot();
+                c["hover_target_id"] = CHRISPaletteObserver.HoverTargetId();
+            }
+            catch (Exception) { c["palette"] = c["hover_target_id"] = null; }
+            c["grab_active"] = SketchControlsScript.m_Instance.IsUserGrabbingWorld();
+            c["focus"] = CHRISInputMappingHost.InputFocusedNow;
+            c["buttons_neutral"] = CHRISHandAuthority.BrushButtonsNeutral;
             c["brush_id"] = pointer.CurrentBrush.m_Guid.ToString();
             c["brush_size"] = pointer.BrushSize01;
             c["brush_color"] = "#" + ColorUtility.ToHtmlStringRGB(pointer.GetCurrentColor());
@@ -161,14 +175,14 @@ namespace TiltBrush
             return c;
         }
 
-        static BasePanel FindPanel(string name)
+        internal static BasePanel FindPanel(string name)
         {
             if (PanelManager.m_Instance == null) return null;
             return PanelManager.m_Instance.GetAllPanels().Select(p => p.m_Panel)
                 .FirstOrDefault(p => p != null && p.Type.ToString() == name &&
                     PanelManager.m_Instance.IsPanelAvailable(p));
         }
-        static bool PanelVisible(BasePanel panel) => panel.gameObject.activeInHierarchy &&
+        internal static bool PanelVisible(BasePanel panel) => panel.gameObject.activeInHierarchy &&
             (panel.WidgetSibling == null || panel.WidgetSibling.Showing);
 
         public static bool NativeInteractionBusy()
@@ -236,8 +250,9 @@ namespace TiltBrush
             else if (MateriallyChanged(m_ObservedContext, context))
             {
                 m_Revision++;
+                // A procedure's own brush change must not revoke it; its lease has local triggers.
                 if (manual && !(m_Pending != null && ExpectedPendingChange(m_Pending, context)))
-                    Stop("Manual state changed; pending work cancelled", announce: m_Pending != null);
+                    Stop("Manual state changed; pending work cancelled", announce: m_Pending != null, revokeLease: false);
                 m_ObservedContext = (JObject)context.DeepClone();
             }
             else if (!manual) m_ObservedContext = (JObject)context.DeepClone();
@@ -360,12 +375,100 @@ namespace TiltBrush
                 Require(m_InvalidTasks.Contains(task) || m_InvalidTasks.Count < 4096, "Session ledger full; restart host");
                 Invalidate(task);
                 if (m_ActiveTask == task) Stop("Task cancelled");
+                if (CHRISHandAuthority.ActiveTaskId == task) CHRISHandAuthority.Revoke("Task cancelled");
                 return new JObject { ["cancelled"] = true, ["host_session"] = m_Session };
             }
             if (request.Method == "POST" && request.Path == "/chris/commands")
                 return Submit(Parse(request.Body));
+            if (request.Path.StartsWith(ProcedureRoute)) return RouteProcedure(request);
             return Error("Unknown route");
         }
+
+        // ---- Controller procedure lease (Brush hand pose and trigger only) ----
+        const string ProcedureRoute = "/chris/procedure/";
+        static readonly Regex s_LeaseId = new Regex("\\A[0-9a-f]{32}\\z");
+
+        JObject RouteProcedure(Request request)
+        {
+            string rest = request.Path.Substring(ProcedureRoute.Length);
+            if (request.Method == "POST" && rest == "acquire") return AcquireLease(Parse(request.Body));
+            string[] parts = rest.Split('/');
+            if (parts.Length > 2 || !s_LeaseId.IsMatch(parts[0])) return Error("Unknown route");
+            var lease = CHRISHandAuthority.Find(parts[0]);
+            if (lease == null) return Error("Unknown lease");
+            float now = Time.realtimeSinceStartup;
+            if (request.Method == "GET" && parts.Length == 1)
+            {
+                lease.Heartbeat(now);
+                var status = lease.Status();
+                status["host_session"] = m_Session;
+                status["captured_at"] = Now;
+                status["pointer"] = CHRISHandAuthority.Pointer(lease);
+                return status;
+            }
+            if (request.Method != "POST" || parts.Length != 2) return Error("Unknown route");
+            var body = Parse(request.Body);
+            if (parts[1] == "steps")
+            {
+                string error = lease.Submit(body, now);
+                return error != null ? Error(error) :
+                    new JObject { ["lease_id"] = lease.LeaseId, ["step_id"] = body["step_id"], ["accepted"] = true };
+            }
+            if (parts[1] == "release")
+            {
+                Fields(body);
+                // Idempotent: a revoked, expired or released lease reports its current state.
+                CHRISHandAuthority.Release(lease);
+                return new JObject { ["lease_id"] = lease.LeaseId, ["released"] = true,
+                    ["buttons_neutral"] = lease.ButtonsNeutral,
+                    ["restored_mode"] = CHRISHandAuthority.RestoredMode(lease),
+                    ["hand_back_pending"] = CHRISHandAuthority.HandBackPending(lease) };
+            }
+            return Error("Unknown route");
+        }
+
+        // Message shape only, as the shared procedure cases describe (stateless).
+        internal static string ValidateAcquire(JObject data)
+        {
+            var fields = new[] { "task_id", "host_session", "authority_epoch", "revision", "hand", "channels" };
+            if (data == null || !data.Properties().All(p => fields.Contains(p.Name)) || !fields.All(f => data[f] != null))
+                return "Invalid lease request fields";
+            if (!StringValue(data["task_id"]) || !StringValue(data["host_session"]) || !StringValue(data["hand"]) ||
+                data["authority_epoch"].Type != JTokenType.Integer || data["revision"].Type != JTokenType.Integer ||
+                (long)data["authority_epoch"] < 0 || (long)data["revision"] < 0) return "Invalid lease request types";
+            if (!Id((string)data["task_id"])) return "Invalid task_id";
+            if ((string)data["hand"] != "brush") return "Only the brush hand can be leased";
+            if (!JToken.DeepEquals(data["channels"], new JArray("pose", "trigger"))) return "Channels must be pose and trigger";
+            return null;
+        }
+
+        JObject AcquireLease(JObject data)
+        {
+            Require(!m_Closed && m_Registered, "Host closed or unavailable");
+            string invalid = ValidateAcquire(data);
+            if (invalid != null) return Error(invalid);
+            string task = (string)data["task_id"];
+            Observe(true);
+            var context = ReadContext();
+            if (m_InvalidTasks.Contains(task)) return Error("Task authority invalidated");
+            if (m_Pending != null) return Error("A one-shot command is active");
+            if ((string)data["host_session"] != m_Session || (long)data["authority_epoch"] != m_Epoch ||
+                (long)data["revision"] != m_Revision) return Error("Stale context or host session");
+            if (!(bool)context["ready"] || (bool)context["stroke_active"]) return Error("Host busy or unavailable");
+            Require(m_InvalidTasks.Count < 4096, "Session ledger full; restart host");
+            var lease = AcquireHand(task, out string refusal);
+            if (lease == null) return Error(refusal);
+            // One lease per task: the task cannot lease again or run one-shot commands.
+            Invalidate(task);
+            double granted = Now;
+            lease["host_session"] = m_Session;
+            lease["granted_at"] = granted;
+            lease["expires_at"] = granted + CHRISProcedureExecutor.MaxLeaseSeconds;
+            return lease;
+        }
+
+        protected virtual JObject AcquireHand(string task, out string refusal) =>
+            CHRISHandAuthority.Acquire(task, IsNativeInteractionBusy(), out refusal);
 
         static JObject Parse(string json)
         {
@@ -418,6 +521,7 @@ namespace TiltBrush
             string rejection = null;
             if (m_InvalidTasks.Contains(task)) rejection = "Task authority invalidated";
             else if (m_Pending != null) rejection = "Another command is active";
+            else if (CHRISHandAuthority.OwnsBrush) rejection = "A controller procedure is active";
             else if ((string)approval["host_session"] != m_Session ||
                 (long)approval["authority_epoch"] != m_Epoch || (long)approval["revision"] != m_Revision)
                 rejection = "Stale context or host session";
@@ -552,9 +656,10 @@ namespace TiltBrush
         {
             if (task != null && m_InvalidTasks.Count < 4096) m_InvalidTasks.Add(task);
         }
-        public void Stop(string reason = "Stopped locally", bool announce = true)
+        public void Stop(string reason = "Stopped locally", bool announce = true, bool revokeLease = true)
         {
             var timer = System.Diagnostics.Stopwatch.StartNew();
+            if (revokeLease) CHRISHandAuthority.Revoke(reason);
             m_Epoch++;
             Invalidate(m_ActiveTask);
             m_ActiveTask = null;

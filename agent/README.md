@@ -238,6 +238,52 @@ skipped by the user's choice of the native route (D50): no Operator install, and
 the first procedure uses the native controller path with CHRISBimanualHost-style
 ownership.
 
+### Phase 2 native procedure path (2026-10-03, branch `chris/phase2-procedure`)
+
+One bounded procedure lease can own the logical Brush hand's pose and trigger. The Wand
+stays with its current owner (physical or mapped). `CHRISHandAuthority` answers who owns
+each hand; `CHRISBimanualHost` remains the only code that disables/restores the
+TrackedPoseDrivers and supplies virtual hands. `CHRISProcedureExecutor` is the pure lease
+and step state machine; `CHRISPaletteObserver` reads the Brush palette without writing it.
+
+- Routes: `POST /chris/procedure/acquire`, `GET /chris/procedure/{lease_id}` (heartbeat),
+  `POST /chris/procedure/{lease_id}/steps`, `POST /chris/procedure/{lease_id}/release`
+  (idempotent). Wire shapes match the backend's `schemas/procedure/v0.1/` cases.
+  `/chris/context` adds `palette`, `hover_target_id`, `grab_active`, `focus` and
+  `buttons_neutral`; these do not advance the revision. The palette is built with the
+  service's limits (unique lowercase `brush:<guid>` targets, at most 64, labels of at most
+  80 characters, finite centres or null, `0 <= page < page_count`), and a failed palette
+  read reports null instead of failing the context.
+- Acquire requires focus, no stroke/grab/widget, no F1 UI pointer, no pending mapping
+  change, no legacy move_brush ownership, no held physical or mapped Brush input and no
+  one-shot command. One lease per task; one-shot commands are refused while a lease owns
+  the hand.
+- `aim` keeps every Brush button released and the stick at zero; it turns the pointer
+  attach point onto the re-resolved target and moves position only when the target is
+  beyond 3.5 units (panel rays reach 4) or at a grazing angle, inside the 20-unit clamp.
+  It succeeds after 3 hover frames. `press` requires the expected hover, holds the trigger
+  0.1 s (cap 0.25 s) with the pose fixed, then presents one release edge.
+- Local revocation: Escape, focus loss, 1 s without a heartbeat, the 30 s limit, a
+  handedness change, a mapping change/reload/activation, F1/F6 or another mode/recenter/
+  hand-back key, mapped or physical trigger/grip on the Brush hand, a stroke or grab, the
+  gateway Stop and `/chris/cancel` for the task. A gateway revision change caused by the
+  procedure's own brush change does not revoke it.
+- Hand-back: the released hand is shown for one more frame, physical input then needs a
+  fresh press, and mapped keys held through the lease are latched. `hand_back_pending`
+  stays true while CHRIS still owns the pose or the physical controller is untracked.
+- The agent path never calls `SetActiveBrush`, button callbacks or panel/page setters; an
+  editor check fails if the new files or the procedure routes reference them.
+
+Offline verification: 101 native regression methods pass (89 existing + 12 procedure),
+including 23 request/step cases of 51 in the shared procedure fixture, read in place from
+`../chris`; the 28 response-shape cases are validated in Python, and native checks its
+responses against the fixture's valid documents' keys. Evidence:
+`agent/logs/native-ui-runs/20261003-152946/` (exit 0). Snapshot check
+`agent/logs/phase2-procedure-20261003/snapshot-before-editor-7/` found zero source
+differences and unchanged Git status after Unity. Not verified: any Play-mode, player,
+HTTP or headset behaviour (palette hover through the virtual pose, real hand-back timing,
+both handedness settings). No player was built. Simulator gates: **NOT RUN** (D40).
+
 ## Upstream integration points
 
 CHRIS uses the existing TiltBrush namespace and compilation boundaries.

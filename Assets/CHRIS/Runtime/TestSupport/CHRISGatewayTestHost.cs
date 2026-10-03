@@ -20,9 +20,20 @@ namespace TiltBrush
             ["scene_rotation"] = new JArray(0.0, 0.0, 0.0, 1.0), ["scene_scale"] = 1.0 };
         public int Applied, ThrowOnAction;
         public bool Busy, SkipMutation, DelayPanel;
+        public string LeaseRefusal;
+
         public double Clock = Now;
         protected override double AuthorityTime => Clock;
         protected override bool IsNativeInteractionBusy() => Busy;
+        // Controllers do not exist in edit mode: grant a physical-return lease at the origin.
+        protected override JObject AcquireHand(string task, out string refusal)
+        {
+            refusal = LeaseRefusal ?? (CHRISHandAuthority.OwnsBrush ? "Another procedure lease is active" : null);
+            if (refusal != null) return null;
+            var physical = new JObject { ["source"] = "physical", ["mode"] = null, ["selected_hand"] = null };
+            return CHRISHandAuthority.Grant(CHRISHandAuthority.Begin(task, physical, Vector3.zero, Quaternion.identity), true);
+        }
+
 
         public void Initialize()
         {
