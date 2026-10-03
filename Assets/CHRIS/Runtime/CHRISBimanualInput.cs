@@ -223,7 +223,7 @@ namespace TiltBrush
             bool strokeOrGrab, Vector3 headPosition, Vector3 headForward, bool brushOnRight, float deltaTime)
         {
             NeedsConvenienceRelease = false;
-            if (mapping == null || mapping.SchemaVersion != CHRISInputMapping.BimanualVersion) { Stop(); return; }
+            if (mapping == null || !mapping.IsBimanual) { Stop(); return; }
             if (!ReferenceEquals(mapping, m_Mapping))
             {
                 NeedsConvenienceRelease = true;
@@ -234,6 +234,8 @@ namespace TiltBrush
                 m_BrushGrip = m_WandGrip = false;
                 HandBackPending = RecenterPending = false;
                 m_Mapping = mapping;
+                if (mapping.SchemaVersion == CHRISInputMapping.DirectPoseVersion && Mode == CHRISControlMode.Rotation)
+                    Mode = CHRISControlMode.Position;
                 if (firstActivation) Recenter(headPosition, headForward, brushOnRight);
                 LatchHeld(input);
                 Remember(input);
@@ -308,7 +310,7 @@ namespace TiltBrush
                 selected.Position = ClampToOrigin(selected.Position + m_Right * (xy.x * scale) + Vector3.up * (xy.y * scale) +
                     m_Forward * (Axis1(input, CHRISMappedAction.PoseDepth) * depthScale), selected.Origin, MaxHandOffsetUnits);
             }
-            else
+            if (Mode == CHRISControlMode.Rotation || mapping.SchemaVersion == CHRISInputMapping.DirectPoseVersion)
             {
                 var entry = mapping.Find(CHRISMappedAction.RotateXY, "selected");
                 Vector2 xy = Axis(input, CHRISMappedAction.RotateXY, "selected");
@@ -317,7 +319,7 @@ namespace TiltBrush
                 selected.Rotation = Quaternion.AngleAxis(xy.x * scale, Vector3.up) *
                     Quaternion.AngleAxis(-xy.y * scale, m_Right) * selected.Rotation;
                 var roll = mapping.Find(CHRISMappedAction.RotateRoll, "selected");
-                float rollScale = roll.Source == CHRISMappingSource.MouseWheel ?
+                float rollScale = roll != null && roll.Source == CHRISMappingSource.MouseWheel ?
                     WheelRollDegreesPerNotch : KeyDegreesPerSecond * deltaTime;
                 selected.Rotation = Quaternion.AngleAxis(
                     Axis1(input, CHRISMappedAction.RotateRoll) * rollScale,

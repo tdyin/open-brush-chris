@@ -54,9 +54,11 @@ namespace TiltBrush
         public const int MaxBytes = 16384;
         public const string Version = "v0.1.1";
         public const string BimanualVersion = "v0.1.2";
+        public const string DirectPoseVersion = "v0.1.3";
 
         public IReadOnlyList<CHRISInputMappingEntry> Mappings { get; }
         public string SchemaVersion { get; }
+        public bool IsBimanual => SchemaVersion == BimanualVersion || SchemaVersion == DirectPoseVersion;
         CHRISInputMapping(List<CHRISInputMappingEntry> mappings, string version = Version)
         {
             Mappings = mappings.AsReadOnly();
@@ -119,7 +121,7 @@ namespace TiltBrush
             var document = new StrictJson(text).ParseDocument();
             if (document is Dictionary<string, object> root &&
                 root.TryGetValue("version", out var version) && version is string named &&
-                named == BimanualVersion) return CheckBimanual(root);
+                (named == BimanualVersion || named == DirectPoseVersion)) return CheckBimanual(root, named);
             return Check(document);
         }
 
@@ -158,10 +160,10 @@ namespace TiltBrush
             return new CHRISInputMapping(entries);
         }
 
-        static CHRISInputMapping CheckBimanual(Dictionary<string, object> root)
+        static CHRISInputMapping CheckBimanual(Dictionary<string, object> root, string version)
         {
             OnlyFields(root, "", "version", "app", "profile", "frame", "mappings");
-            Const(root, "version", BimanualVersion, "");
+            Const(root, "version", version, "");
             Const(root, "app", "openbrush", "");
             Const(root, "profile", "keyboard_mouse", "");
             if (!(root["frame"] is Dictionary<string, object> frame)) throw Schema("frame", "must be an object");
@@ -172,7 +174,13 @@ namespace TiltBrush
 
             // Validate every row's shape before checking cross-row claims, as the shared schema does.
             var entries = new List<CHRISInputMappingEntry>();
-            for (int i = 0; i < list.Count; i++) entries.Add(BimanualEntry(list[i], "mappings/" + i));
+            for (int i = 0; i < list.Count; i++)
+            {
+                var entry = BimanualEntry(list[i], "mappings/" + i);
+                if (version == DirectPoseVersion && entry.Action == CHRISMappedAction.ModeRotation)
+                    throw Schema("mappings/" + i + "/action", "v0.1.3 uses combined pose control");
+                entries.Add(entry);
+            }
             var ids = new Dictionary<string, string>(StringComparer.Ordinal);
             var actions = new Dictionary<string, string>(StringComparer.Ordinal);
             var claims = new Dictionary<string, List<KeyValuePair<int, string>>>(StringComparer.Ordinal);
@@ -181,6 +189,7 @@ namespace TiltBrush
                 var entry = entries[i];
                 Unique("duplicate_id", ids, entry.Id, entry.Id);
                 int scope = InputScope(entry.Action);
+                if (version == DirectPoseVersion && (scope == 2 || scope == 4)) scope = 6;
                 foreach (string input in Inputs(entry))
                 {
                     if (!claims.TryGetValue(input, out var previous)) claims[input] = previous = new List<KeyValuePair<int, string>>();
@@ -192,9 +201,13 @@ namespace TiltBrush
                 Unique("duplicate_action", actions, ActionName(entry.Action) + ":" + entry.Target, entry.Id);
             }
             foreach (var required in BimanualRequired)
+            {
+                if (version == DirectPoseVersion && (required == "mode_rotation:" || required == "rotate_roll:selected"))
+                    continue;
                 if (!actions.ContainsKey(required))
                     throw Schema("mappings", "required " + required + " is missing");
-            return new CHRISInputMapping(entries, BimanualVersion);
+            }
+            return new CHRISInputMapping(entries, version);
         }
 
         static readonly string[] BimanualRequired = {

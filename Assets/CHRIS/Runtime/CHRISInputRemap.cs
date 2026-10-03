@@ -368,9 +368,9 @@ namespace TiltBrush
         public static bool DesktopControlsOwned => CHRISBimanualHost.OwnsDesktopControl ||
             CHRISBimanualHost.RecoveryUI;
         internal static bool AllowsMappedConvenience(CHRISInputMapping mapping, bool ownsMappedPose) =>
-            mapping?.SchemaVersion != CHRISInputMapping.BimanualVersion || ownsMappedPose;
+            mapping?.IsBimanual != true || ownsMappedPose;
         internal static bool MappingOwnsKeyboardShortcuts(CHRISInputMapping mapping, bool desktopOwned) =>
-            mapping != null && (mapping.SchemaVersion != CHRISInputMapping.BimanualVersion || desktopOwned);
+            mapping != null && (!mapping.IsBimanual || desktopOwned);
         internal static bool MappingUsesCombinedTrigger(CHRISInputMapping mapping) =>
             mapping?.SchemaVersion == CHRISInputMapping.Version;
         public static bool MouseDeltaMapped => Remap.MouseDeltaMapped || DesktopControlsOwned;

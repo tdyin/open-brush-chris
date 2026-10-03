@@ -2,12 +2,13 @@
 
 ## Working checkout and ownership
 
-Use this repository root, currently on `uni/v0.1.1-input-mapping` (the
-`codex/chris-native-companion` branch is its consolidated base). The former `Build/CHRISUI-worktree` checkout
+Use this repository root at `C:/Users/Yin/Dev/open-brush-chris`, currently on
+`main-chris`, restored from `e6775e838741f7691cae64fd9c2cae9a1d61710c`, with the
+v0.1.3 implementation described below. The former `Build/CHRISUI-worktree` checkout
 has been retired after root verification and local evidence preservation.
-Pixel owns native implementation
-and shared Git operations, Iris owns design content, and Logic owns the Python
-service. Coordinate Git changes before switching or retiring either checkout.
+Pixel owns native implementation and build work; Logic owns the Python service;
+Atlas coordinates and reviews. Iris, Quill and Vector are inactive; preserve their
+existing work. Keep one writer per file and coordinate repository operations.
 Do not push as part of local cleanup.
 
 `design/chris/native-companion/` holds the approved v5 boards, exact image
@@ -77,6 +78,60 @@ generated evidence in ignored `agent/logs`, and failure captures in ignored
   naming the full path it checked.
 
 ## Two-hand keyboard and mouse control (v0.1.2)
+
+### v0.1.3 update (October 2)
+
+The optional v0.1.3 schema keeps the two-hand contract and recovery gates while
+combining position and rotation in F2 control mode. Mouse XY moves the selected
+hand, Q/E controls depth, W/S tilts up/down, A/D turns left/right, and arrows move
+the viewpoint. In F1 menu mode arrows still navigate without viewpoint movement.
+R/F rolls the selected controller. F3 and the Brush stick axis are unbound in the new standard
+preset; all other bindings below remain. Custom roll bindings are optional and
+must not overlap position inputs. `mode_rotation` is not part of v0.1.3.
+
+Use the backend's `schemas/v0.1.3/openbrush_keyboard-mouse_two-hand.default.json`
+through explicit saved-file/reload with a compatible player. Existing v0.1.1 and
+v0.1.2 files retain their behavior, and the bundled v0.1.2 preset is unchanged.
+Offline verification: 89 native regression methods pass, including 16 shared v0.1.3
+validation fixtures, opposite R/F roll, combined selected-hand motion, arrow movement
+and recovery checks. Evidence: `agent/logs/native-ui-runs/20261002-223537/` (exit 0).
+The snapshot at `agent/logs/v013-roll-20261002/source-before-editor/` reports zero differences across
+10,322 source paths and unchanged Git status after Unity. Backend verification
+passes 697 tests and Ruff (backend evidence supplied by Atlas; Pixel did not rerun it).
+Pixel reviewed the existing native implementation against the approved controls and
+found no concrete issue requiring a runtime change. A fresh native run passed all 89
+methods at `agent/logs/native-ui-runs/20261002-223950/`.
+
+Fresh Windows/OpenXR player: `Build/CHRIS-v013-pixel-20261002-223950/OpenBrush.exe`.
+Build result Success, editor exit 0; log and included source patch are under
+`agent/logs/builds/v013-pixel-20261002-223950/`. The previous
+`Build/CHRIS-local-20261002/` player remains intact; `Build/CHRIS-current` points to
+the new folder. Assembly-CSharp.dll SHA256:
+`8f3c5d3ada6c21ac785ae76773193433a2622605247e7219d41b5275289c9f5c`.
+The helper archived and restored 17 known generated paths. Full snapshot check at
+`agent/logs/pixel-v013-20261002/source-before-build/` found zero differences across
+10,322 paths and unchanged Git status before this documentation update.
+
+Simulator gate: **NOT RUN**. The Operator layer manifest
+`sdk/package/Editor/MetaXROperator/x64/XrApiLayer_METAX_operator.json` and Meta XR
+Simulator runtime distribution are absent under both `C:/Users/Yin/Dev/xr-operator`
+and the historical `C:/Dev/xr-operator`. The retained gate also launches the player
+and changes the saved mapping, which this assignment excludes. Prerequisite evidence:
+`agent/logs/pixel-v013-20261002/simulator-prerequisites.json`. No tooling installed
+or restored, player launched, saved mapping changed, or LocalLow restore attempted.
+This is a compiled, offline-verified player, not an acceptance-ready handoff.
+Owner headset acceptance on this PC remains pending for both handedness settings,
+connected/asleep controllers, simultaneous hand position/rotation/roll, F1 menu
+isolation, arrow viewpoint motion, and focus/release/Stop/hand-back timing.
+The owner authorized committing, pushing and opening a PR after this verification;
+hardware acceptance remains unconfirmed. No model call accompanied this work.
+Setup diagnosis found a manually copied `active-mapping.json.json`; subsequent
+physical-volume inspection verified the correct `CHRIS/active-mapping.json` now
+matches the v0.1.3 preset byte-for-byte (2,875 bytes). Pixel did not write or reload
+it. Startup deliberately retains physical control: focus the player window and
+press F2 for pose control, then 1/2 to select Brush/Wand. F1 remains menu control.
+
+### Existing v0.1.2 behavior
 
 The optional v0.1.2 profile controls logical Brush and Wand independently while
 the XR controllers remain connected, including when they are asleep. Fully

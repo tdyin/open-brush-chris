@@ -76,6 +76,8 @@ namespace TiltBrush
             string selected = hand.Selected == "wand" ? "Wand" : "Brush";
             string side = (hand.Selected == "wand" ? !brushRight : brushRight) ? "Right" : "Left";
             string mode = keyboardUI ? "Menu" : poseOwned ? hand.Mode.ToString() : "Physical";
+            if (poseOwned && !keyboardUI && mapping.SchemaVersion == CHRISInputMapping.DirectPoseVersion)
+                mode = "Pose";
             return mode + " · " + selected + " (" + side + ")";
         }
 

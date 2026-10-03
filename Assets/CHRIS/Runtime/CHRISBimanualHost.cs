@@ -105,7 +105,7 @@ namespace TiltBrush
             bool focused, bool strokeInProgress)
         {
             s_Focused = focused;
-            bool active = mapping != null && mapping.SchemaVersion == CHRISInputMapping.BimanualVersion;
+            bool active = mapping != null && mapping.IsBimanual;
             var head = active ? ViewpointScript.Head : null;
             var controls = SketchControlsScript.m_Instance;
             bool busy = strokeInProgress || (controls != null &&

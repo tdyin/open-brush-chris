@@ -23,6 +23,170 @@ namespace TiltBrush
         static string Backend => System.Environment.GetEnvironmentVariable("CHRIS_REPO") is string repo && repo.Length > 0
             ? repo : Path.GetFullPath("../chris");
         static string PresetPath => Path.Combine(Backend, "schemas/v0.1.2/openbrush_keyboard-mouse_two-hand.default.json");
+        static CHRISInputMapping DirectPreset() => CHRISInputMapping.Load(Path.Combine(Backend,
+            "schemas/v0.1.3/openbrush_keyboard-mouse_two-hand.default.json"));
+
+        [Test]
+        public void DirectPoseRollKeysRotateOppositelyWithoutMovingEitherHand()
+        {
+            var mapping = DirectPreset();
+            var input = new FakeInput();
+            var state = new CHRISBimanualInput();
+            Step(state, mapping, input);
+            input.Held.Add("key.f2"); Step(state, mapping, input);
+            input.Held.Clear(); Step(state, mapping, input);
+            Vector3 brush = state.Brush.Position, wand = state.Wand.Position;
+            input.Held.Add("key.r"); Step(state, mapping, input, dt: 0.1f);
+            Quaternion rolled = state.Brush.Rotation;
+            Assert.That((rolled * Vector3.right).y, Is.LessThan(0));
+            Assert.That(Vector3.Angle(rolled * Vector3.forward, Vector3.forward), Is.LessThan(0.01f));
+            Assert.That(state.Brush.Position, Is.EqualTo(brush));
+            Assert.That(state.Wand.Position, Is.EqualTo(wand));
+            Assert.That(state.Wand.Rotation, Is.EqualTo(Quaternion.identity));
+            input.Held.Add("key.f"); Step(state, mapping, input, dt: 0.1f);
+            Assert.That(Quaternion.Angle(state.Brush.Rotation, rolled), Is.LessThan(0.01f),
+                "Opposite roll keys held together cancel");
+            input.Held.Remove("key.r"); Step(state, mapping, input, dt: 0.1f);
+            Assert.That(Quaternion.Angle(state.Brush.Rotation, Quaternion.identity), Is.LessThan(0.01f),
+                "F rolls back through the same angle as R");
+            input.Held.Clear(); Step(state, mapping, input);
+            input.Held.Add("key.2"); Step(state, mapping, input);
+            input.Held.Clear(); Step(state, mapping, input);
+            input.Held.Add("key.f"); Step(state, mapping, input, dt: 0.1f);
+            Assert.That((state.Wand.Rotation * Vector3.right).y, Is.GreaterThan(0));
+            Assert.That(Quaternion.Angle(state.Brush.Rotation, Quaternion.identity), Is.LessThan(0.01f));
+        }
+
+        [Test]
+        public void DirectPoseSharedCasesMatchBackendVerdicts()
+        {
+            string directory = Path.Combine(Backend, "tests/core/fixtures/mapping_v013");
+            var cases = JArray.Parse(File.ReadAllText(Path.Combine(directory, "cases.json")));
+            Assert.That(cases.Count, Is.GreaterThan(10));
+            foreach (var item in cases)
+            {
+                string file = (string)item["file"], expected = (string)item["expect"];
+                string actual;
+                try { CHRISInputMapping.Load(Path.Combine(directory, file)); actual = "valid"; }
+                catch (CHRISMappingException error) { actual = error.Code; }
+                Assert.That(actual, Is.EqualTo(expected), file);
+            }
+            Assert.That(DirectPreset().SchemaVersion, Is.EqualTo(CHRISInputMapping.DirectPoseVersion));
+        }
+
+        [Test]
+        public void DirectPoseMovesAndRotatesOnlyTheSelectedHandTogether()
+        {
+            var mapping = DirectPreset();
+            var input = new FakeInput();
+            var state = new CHRISBimanualInput();
+            Step(state, mapping, input);
+            Vector3 original = state.Brush.Position, other = state.Wand.Position;
+            input.Held.Add("key.w"); input.MouseDelta = Vector2.right * 10;
+            Step(state, mapping, input);
+            Assert.That(state.Brush.Position, Is.EqualTo(original), "Startup leaves physical control intact");
+            Assert.That(state.Brush.Rotation, Is.EqualTo(Quaternion.identity));
+            input.Held.Clear(); input.MouseDelta = Vector2.zero;
+            Step(state, mapping, input);
+            input.Held.Add("key.f2"); Step(state, mapping, input);
+            input.Held.Clear(); Step(state, mapping, input);
+            input.MouseDelta = new Vector2(10, 10);
+            input.Held.Add("key.w"); input.Held.Add("key.d"); input.Held.Add("key.e");
+            Step(state, mapping, input);
+            Assert.That(state.Mode, Is.EqualTo(CHRISControlMode.Position));
+            Assert.That(state.Brush.Position.x, Is.GreaterThan(original.x));
+            Assert.That(state.Brush.Position.y, Is.GreaterThan(original.y));
+            Assert.That(state.Brush.Position.z, Is.GreaterThan(original.z));
+            Vector3 facing = state.Brush.Rotation * Vector3.forward;
+            Assert.That(facing.x, Is.GreaterThan(0), "D turns right");
+            Assert.That(facing.y, Is.GreaterThan(0), "W tilts up");
+            Assert.That(state.Wand.Position, Is.EqualTo(other));
+            Assert.That(state.Wand.Rotation, Is.EqualTo(Quaternion.identity));
+            Quaternion brushRotation = state.Brush.Rotation;
+            input.Held.Clear(); input.MouseDelta = Vector2.zero; Step(state, mapping, input);
+            input.Held.Add("key.2"); Step(state, mapping, input);
+            input.Held.Clear(); Step(state, mapping, input);
+            input.Held.Add("key.s"); input.Held.Add("key.a"); Step(state, mapping, input);
+            facing = state.Wand.Rotation * Vector3.forward;
+            Assert.That(facing.x, Is.LessThan(0), "A turns left");
+            Assert.That(facing.y, Is.LessThan(0), "S tilts down");
+            Assert.That(state.Brush.Rotation, Is.EqualTo(brushRotation));
+        }
+
+        [Test]
+        public void DirectPoseArrowsMoveViewWithoutBrushStickOrWasdMovement()
+        {
+            var mapping = DirectPreset();
+            var input = new FakeInput();
+            var remap = new CHRISInputRemap();
+            remap.Offer(mapping); remap.Tick(input, true, false);
+            input.Held.Add("key.w"); remap.Tick(input, true, false);
+            Assert.That(remap.ViewKeys, Is.EqualTo(Vector2.zero));
+            input.Held.Clear(); input.Held.Add("key.upArrow"); remap.Tick(input, true, false);
+            Assert.That(remap.ViewKeys, Is.EqualTo(Vector2.up));
+            input.Held.Clear(); input.Held.Add("key.downArrow"); remap.Tick(input, true, false);
+            Assert.That(remap.ViewKeys, Is.EqualTo(Vector2.down));
+            input.Held.Clear(); input.Held.Add("key.leftArrow"); remap.Tick(input, true, false);
+            Assert.That(remap.ViewKeys, Is.EqualTo(Vector2.left));
+            input.Held.Clear(); input.Held.Add("key.rightArrow"); remap.Tick(input, true, false);
+            Assert.That(remap.ViewKeys, Is.EqualTo(Vector2.right));
+            remap.Tick(input, true, true);
+            Assert.That(remap.ViewKeys, Is.EqualTo(Vector2.zero), "View motion is blocked during drawing");
+            Assert.That(mapping.Find(CHRISMappedAction.StickAxis, "brush"), Is.Null);
+            Assert.That(CHRISInputMappingHost.AllowsMappedConvenience(mapping, false), Is.False,
+                "Menu and physical-control states must not move the viewpoint");
+            Assert.That(CHRISInputMappingHost.MappingOwnsKeyboardShortcuts(mapping, false), Is.False);
+            Assert.That(CHRISInputMappingHost.AllowsMappedConvenience(mapping, true), Is.True);
+            Assert.That(CHRISInputMappingHost.MappingUsesCombinedTrigger(mapping), Is.False);
+        }
+
+        [Test]
+        public void DirectPoseFocusAndHandBackRequireFreshControl()
+        {
+            var mapping = DirectPreset();
+            var input = new FakeInput();
+            var state = new CHRISBimanualInput();
+            Step(state, mapping, input);
+            input.Held.Add("key.f2"); Step(state, mapping, input);
+            input.Held.Clear(); Step(state, mapping, input);
+            input.Held.Add("key.w"); Step(state, mapping, input);
+            Quaternion rotated = state.Brush.Rotation;
+            Step(state, mapping, input, focused: false);
+            Step(state, mapping, input);
+            Assert.That(state.Brush.Rotation, Is.EqualTo(rotated));
+            input.Held.Add("key.f2"); Step(state, mapping, input);
+            input.Held.Remove("key.f2"); Step(state, mapping, input);
+            Assert.That(state.Brush.Rotation, Is.EqualTo(rotated), "Held W must be released before it resumes");
+            input.Held.Clear(); Step(state, mapping, input);
+            input.Held.Add("key.w"); Step(state, mapping, input);
+            Assert.That(Quaternion.Angle(rotated, state.Brush.Rotation), Is.GreaterThan(0.1f));
+            rotated = state.Brush.Rotation;
+            input.Held.Add("key.f6"); Step(state, mapping, input);
+            Assert.That(state.HandBackPending, Is.True);
+            Assert.That(state.Brush.Rotation, Is.EqualTo(rotated));
+            state.Stop();
+            Assert.That(state.Active, Is.False);
+            Assert.That(state.Brush.IsNeutral && state.Wand.IsNeutral, Is.True);
+        }
+
+        [Test]
+        public void DirectPoseReloadFromLegacyRotationUsesCombinedPoseMode()
+        {
+            var input = new FakeInput();
+            var state = new CHRISBimanualInput();
+            var legacy = Preset();
+            Step(state, legacy, input);
+            input.Held.Add("key.f3"); Step(state, legacy, input);
+            Assert.That(state.Mode, Is.EqualTo(CHRISControlMode.Rotation));
+            input.Held.Clear(); Step(state, legacy, input);
+            var mapping = DirectPreset();
+            Step(state, mapping, input);
+            Assert.That(state.Mode, Is.EqualTo(CHRISControlMode.Position));
+            input.Held.Add("key.f3"); Step(state, mapping, input);
+            Assert.That(state.Mode, Is.EqualTo(CHRISControlMode.Position), "F3 is unassigned in the new preset");
+            Assert.That(CHRISNativePopup.ModeLabel(mapping, state, false, true, true),
+                Is.EqualTo("Pose · Brush (Right)"));
+        }
 
         static CHRISInputMapping Preset()
         {
