@@ -1,5 +1,6 @@
 // Copyright 2026 The Open Brush Authors
 // Licensed under the Apache License, Version 2.0.
+using System;
 using System.Collections.Generic;
 using System.Linq;
 using System.Text.RegularExpressions;
@@ -52,8 +53,8 @@ namespace TiltBrush
         sealed class Step
         {
             public string Id, Kind, Target, Status = "pending", Reason;
-            public int Seq, Hovered;
-            public float Deadline, PressStart = -1;
+            public int Seq, Hovered, Frames;
+            public float Started, Deadline, PressStart = -1, Held;
             public bool Released;
         }
 
@@ -71,6 +72,9 @@ namespace TiltBrush
         public Vector3 Origin { get; }
         public string WantedTargetId => m_Current?.Target;
         public bool ButtonsNeutral => Hand.IsNeutral;
+        // Optional evidence sink; the host logs one line per step start and end.
+        public Action<string> Log;
+        void Note(string message) { if (Log != null) Log(message); }
 
         public CHRISProcedureExecutor(string leaseId, string taskId, JObject returnMode,
             Vector3 position, Quaternion rotation, float now)
@@ -130,8 +134,9 @@ namespace TiltBrush
             if (m_Steps.Count >= MaxSteps) return "Step limit reached";
             m_Current = new Step { Id = id, Kind = kind, Seq = m_Steps.Count + 1,
                 Target = (string)step[kind == "aim" ? "target_id" : "expected_hover_target_id"],
-                Deadline = now + (long)step["timeout_ms"] / 1000f };
+                Started = now, Deadline = now + (long)step["timeout_ms"] / 1000f };
             m_Steps.Add(m_Current);
+            Note($"lease {LeaseId} step {m_Current.Seq} {kind} {m_Current.Target} started");
             return null;
         }
 
@@ -151,6 +156,9 @@ namespace TiltBrush
         {
             step.Status = status;
             step.Reason = reason;
+            Note($"lease {LeaseId} step {step.Seq} {step.Kind} {status}" + (reason != null ? $" ({reason})" : "") +
+                $"; {step.Frames} frames, {(m_LastTick - step.Started) * 1000:F0} ms" +
+                (step.Kind == "aim" ? $", hover frames {step.Hovered}" : $", trigger held {step.Held * 1000:F0} ms"));
             if (ReferenceEquals(step, m_Current)) m_Current = null;
         }
 
@@ -164,6 +172,7 @@ namespace TiltBrush
             if (frame.Now - m_LastHeartbeat > HeartbeatSeconds) { Revoke("Heartbeat lost"); return; }
             var step = m_Current;
             if (step == null) { Hand.Release(); return; }
+            step.Frames++;
             if (step.Kind == "aim") TickAim(step, frame, dt);
             else TickPress(step, frame);
         }
@@ -203,6 +212,7 @@ namespace TiltBrush
                 bool timedOut = frame.Now >= step.Deadline;
                 if (held >= PressHoldSeconds || held >= MaxPressHoldSeconds || timedOut)
                 {
+                    step.Held = held;
                     Hand.Release();
                     step.Released = true;
                     if (timedOut) Finish(step, "timeout", "Step deadline reached; trigger released");

@@ -48,6 +48,7 @@ namespace TiltBrush
         private bool m_Closed, m_Registered;
         private HttpServer m_Server;
         private CHRISBrushNames m_BrushNames;
+        private string m_PaletteError;
         public string Status { get; private set; } = "Waiting for native host";
         public double LastStopMilliseconds { get; private set; }
         public long StopCount { get; private set; }
@@ -154,7 +155,13 @@ namespace TiltBrush
                 c["palette"] = CHRISPaletteObserver.Snapshot();
                 c["hover_target_id"] = CHRISPaletteObserver.HoverTargetId();
             }
-            catch (Exception) { c["palette"] = c["hover_target_id"] = null; }
+            catch (Exception error)
+            {
+                c["palette"] = c["hover_target_id"] = null;
+                string message = error.GetType().Name + ": " + error.Message;
+                if (message != m_PaletteError) Debug.LogWarning("CHRIS palette read failed: " + message);
+                m_PaletteError = message;
+            }
             c["grab_active"] = SketchControlsScript.m_Instance.IsUserGrabbingWorld();
             c["focus"] = CHRISInputMappingHost.InputFocusedNow;
             c["buttons_neutral"] = CHRISHandAuthority.BrushButtonsNeutral;

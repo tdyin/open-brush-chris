@@ -4,6 +4,7 @@ using System;
 using System.Collections.Generic;
 using Newtonsoft.Json.Linq;
 using UnityEngine;
+using UnityEngine.InputSystem;
 using UnityEngine.XR;
 
 namespace TiltBrush
@@ -15,7 +16,7 @@ namespace TiltBrush
     internal struct CHRISAcquireFacts
     {
         public bool Focused, Busy, LeaseActive, KeyboardUI, MappingChangePending, LegacyBrushPose,
-            PhysicalHeld, MappedHeld, ControllersReady;
+            PhysicalHeld, MappedHeld, MouseHeld, ControllersReady;
     }
 
     // The single answer to "who owns each hand" for the native input path. Physical input,
@@ -31,6 +32,7 @@ namespace TiltBrush
         static bool s_WandOnRight;
         static CHRISInputMapping s_Mapping;
         static CHRISControlMode s_Mode;
+        static bool s_HandBackPending, s_RecenterPending;
         static Vector3 s_MappedBrushPosition;
         static Quaternion s_MappedBrushRotation;
         static int s_GraceUntilFrame = -1;
@@ -70,8 +72,23 @@ namespace TiltBrush
             if (f.LegacyBrushPose) return "move_brush mapping owns the brush pose";
             if (f.PhysicalHeld) return "Physical brush controller input held";
             if (f.MappedHeld) return "Mapped brush input held";
+            if (f.MouseHeld) return "Mouse button held";
             return null;
         }
+
+        // A mapped mode, recenter or hand-back key pressed during the lease takes control back.
+        // Compared with the values at acquire: focus loss sets HandBackPending on its own, and a
+        // flag already set when the lease began is not a new request.
+        internal static string MappedTakeover(CHRISControlMode modeAtAcquire, bool handBackAtAcquire,
+            bool recenterAtAcquire, CHRISControlMode mode, bool handBack, bool recenter) =>
+            mode != modeAtAcquire || handBack != handBackAtAcquire || recenter != recenterAtAcquire
+                ? "Manual takeover" : null;
+
+        // Open Brush also reads mouse buttons as Activate; any press ends the lease.
+        static bool MouseHeld() => Mouse.current != null && (Mouse.current.leftButton.isPressed ||
+            Mouse.current.rightButton.isPressed || Mouse.current.middleButton.isPressed);
+
+        static void Log(string message) => Debug.Log("CHRIS procedure: " + message);
 
         static bool ControllersPresent => InputManager.m_Instance != null && InputManager.Controllers != null;
 
@@ -117,7 +134,9 @@ namespace TiltBrush
                 LegacyBrushPose = CHRISInputMappingHost.BrushPoseOwned,
                 PhysicalHeld = PhysicalHeld(),
                 MappedHeld = CHRISInputMappingHost.Remap.DrawHeld || (CHRISBimanualHost.MappingActive && !bimanual.Brush.IsNeutral),
+                MouseHeld = MouseHeld(),
             });
+            if (refusal != null) Log($"acquire refused for task {taskId}: {refusal}");
             if (refusal != null) return null;
 
             var brush = InputManager.Brush;
@@ -141,9 +160,12 @@ namespace TiltBrush
             s_WandOnRight = InputManager.m_Instance.WandOnRight;
             s_Mapping = CHRISInputMappingHost.Remap.Active;
             s_Mode = bimanual.Mode;
+            s_HandBackPending = bimanual.HandBackPending;
+            s_RecenterPending = bimanual.RecenterPending;
             s_MappedBrushPosition = bimanual.Brush.Position;
             s_MappedBrushRotation = bimanual.Brush.Rotation;
             var xr = brush as UnityXRControllerInfo;
+            Log($"lease {lease.LeaseId} acquired for task {taskId}; return {lease.ReturnMode["source"]}");
             return Grant(lease, xr != null ? xr.PhysicalRightHand : !s_WandOnRight);
         }
 
@@ -154,6 +176,7 @@ namespace TiltBrush
             s_Lease = new CHRISProcedureExecutor(Guid.NewGuid().ToString("N"), taskId, returnMode,
                 position, rotation, Time.realtimeSinceStartup);
             s_Ledger[s_Lease.LeaseId] = s_Lease;
+            s_Lease.Log = Log;
             s_Ended = false;
             return s_Lease;
         }
@@ -180,6 +203,7 @@ namespace TiltBrush
         {
             if (!LeaseActive) return;
             s_Lease.Revoke(reason);
+            Log($"lease {s_Lease.LeaseId} revoked: {reason}");
             OnEnded();
         }
 
@@ -187,6 +211,7 @@ namespace TiltBrush
         {
             if (!lease.Active) return;
             lease.Release();
+            Log($"lease {lease.LeaseId} released");
             if (ReferenceEquals(lease, s_Lease)) OnEnded();
         }
 
@@ -256,7 +281,11 @@ namespace TiltBrush
                     out frame.TargetCenter, out frame.TargetForward, out frame.TargetInteractable);
             }
             s_Lease.Tick(frame);
-            if (!s_Lease.Active) OnEnded();
+            if (!s_Lease.Active)
+            {
+                Log($"lease {s_Lease.LeaseId} {s_Lease.State.ToString().ToLowerInvariant()}: {s_Lease.Reason}");
+                OnEnded();
+            }
             return true;
         }
 
@@ -268,13 +297,16 @@ namespace TiltBrush
             if (!ControllersPresent || !ReferenceEquals(InputManager.Brush, s_BrushController) ||
                 InputManager.m_Instance.WandOnRight != s_WandOnRight) return "Handedness changed";
             if (PhysicalHeld()) return "Physical input on the leased hand";
+            if (MouseHeld()) return "Mouse input during the lease";
             if (!ReferenceEquals(CHRISInputMappingHost.Remap.Active, s_Mapping)) return "Mapping changed";
             if (CHRISInputMappingHost.Remap.DrawHeld) return "Mapped input on the leased hand";
             if (CHRISBimanualHost.InUIMode || CHRISBimanualHost.RecoveryUI) return "Manual takeover";
             var bimanual = CHRISBimanualHost.Input;
             if (bimanual.Active)
             {
-                if (bimanual.Mode != s_Mode || bimanual.HandBackPending || bimanual.RecenterPending) return "Manual takeover";
+                string takeover = MappedTakeover(s_Mode, s_HandBackPending, s_RecenterPending,
+                    bimanual.Mode, bimanual.HandBackPending, bimanual.RecenterPending);
+                if (takeover != null) return takeover;
                 if (!bimanual.Brush.IsNeutral || bimanual.Brush.Position != s_MappedBrushPosition ||
                     bimanual.Brush.Rotation != s_MappedBrushRotation) return "Mapped input on the leased hand";
             }

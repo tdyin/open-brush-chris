@@ -273,6 +273,12 @@ and step state machine; `CHRISPaletteObserver` reads the Brush palette without w
   stays true while CHRIS still owns the pose or the physical controller is untracked.
 - The agent path never calls `SetActiveBrush`, button callbacks or panel/page setters; an
   editor check fails if the new files or the procedure routes reference them.
+- Headset findings fixed 2026-10-03: mapped Mode/HandBackPending/RecenterPending count as a
+  takeover only when they change during the lease (focus loss sets HandBackPending, which
+  revoked every lease on its first tick); a held mouse button refuses acquire and any mouse
+  press revokes; the Unity log has one `CHRIS procedure:` line per acquire, step start/end
+  (frames, ms, hover frames or trigger hold), revoke and release, and a failed palette read
+  logs its exception once.
 
 Offline verification: 101 native regression methods pass (89 existing + 12 procedure),
 including 23 request/step cases of 51 in the shared procedure fixture, read in place from

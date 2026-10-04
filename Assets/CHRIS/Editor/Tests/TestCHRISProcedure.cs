@@ -82,6 +82,7 @@ namespace TiltBrush
                 (f => { f.LegacyBrushPose = true; return f; }, "move_brush mapping owns the brush pose"),
                 (f => { f.PhysicalHeld = true; return f; }, "Physical brush controller input held"),
                 (f => { f.MappedHeld = true; return f; }, "Mapped brush input held"),
+                (f => { f.MouseHeld = true; return f; }, "Mouse button held"),
             };
             foreach (var (set, reason) in cases) Assert.That(CHRISHandAuthority.AcquireRefusal(set(clear)), Is.EqualTo(reason));
             Assert.That(CHRISHandAuthority.Owner(true, true), Is.EqualTo(CHRISHandOwner.Mapped));
@@ -347,6 +348,62 @@ namespace TiltBrush
                 host.Tick();
                 var status = Route(host, "GET", "/chris/procedure/" + (string)lease["lease_id"]);
                 Assert.That((string)status["state"], Is.EqualTo("active"));
+            }
+            finally
+            {
+                UnityEngine.Object.DestroyImmediate(obj);
+                CHRISHandAuthority.ResetForPlay();
+            }
+        }
+
+        // Live headset run 2026-10-03: the saved mapping set HandBackPending while the terminal had
+        // focus, and that stale flag revoked every lease on its first tick.
+        [Test]
+        public void OnlyMappedChangesDuringTheLeaseCountAsTakeover()
+        {
+            var ui = CHRISControlMode.UI;
+            Assert.That(CHRISHandAuthority.MappedTakeover(ui, true, false, ui, true, false), Is.Null,
+                "a hand-back flag already set at acquire is not a new request");
+            Assert.That(CHRISHandAuthority.MappedTakeover(ui, false, false, ui, false, false), Is.Null);
+            Assert.That(CHRISHandAuthority.MappedTakeover(ui, false, false, ui, true, false), Is.EqualTo("Manual takeover"), "F6");
+            Assert.That(CHRISHandAuthority.MappedTakeover(ui, true, false, ui, false, false), Is.EqualTo("Manual takeover"),
+                "a mode key clearing the stale flag");
+            Assert.That(CHRISHandAuthority.MappedTakeover(ui, true, false, CHRISControlMode.Position, false, false),
+                Is.EqualTo("Manual takeover"), "F2");
+            Assert.That(CHRISHandAuthority.MappedTakeover(ui, false, false, ui, false, true), Is.EqualTo("Manual takeover"), "F5");
+        }
+
+        [Test]
+        public void StepsLogStartAndEndWithHoverFramesAndHold()
+        {
+            var lines = new System.Collections.Generic.List<string>();
+            var lease = Lease();
+            lease.Log = lines.Add;
+            lease.Submit(Aim(1), 0);
+            for (int i = 1; i <= 3; i++) lease.Tick(Frame(i * 0.011f, Target));
+            lease.Submit(Press(2), 0.04f);
+            float t = 0.04f;
+            while (StepStatus(lease, 1) == "pending") lease.Tick(Frame(t += 0.011f, Target));
+            Assert.That(lines.Count, Is.EqualTo(4), string.Join("\n", lines));
+            Assert.That(lines[1], Does.Contain("aim succeeded").And.Contain("hover frames 3"));
+            Assert.That(lines[3], Does.Contain("press succeeded").And.Contain("trigger held 1"));
+        }
+
+        [Test]
+        public void ReleasingAnActiveLeaseReportsHandBackPendingDuringTheGraceFrame()
+        {
+            CHRISHandAuthority.ResetForPlay();
+            var obj = new GameObject("CHRIS procedure release host");
+            try
+            {
+                var host = obj.AddComponent<CHRISGatewayTestHost>();
+                host.Initialize();
+                var lease = Route(host, "POST", "/chris/procedure/acquire", AcquireBody(host.Capture(), "task_release"));
+                var release = Route(host, "POST", "/chris/procedure/" + (string)lease["lease_id"] + "/release");
+                Assert.That((bool)release["released"], Is.True);
+                Assert.That((bool)release["hand_back_pending"], Is.True, "the released hand is still presented this frame");
+                var status = Route(host, "GET", "/chris/procedure/" + (string)lease["lease_id"]);
+                Assert.That((string)status["state"], Is.EqualTo("released"));
             }
             finally
             {
