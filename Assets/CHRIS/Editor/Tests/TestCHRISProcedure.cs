@@ -540,6 +540,59 @@ namespace TiltBrush
             }
         }
 
+        // Headset session 2026-10-04: the first display arrived while Open Brush was loading, so
+        // a one-shot open failed and later refreshes never retried it.
+        [Test]
+        public void PanelOpenRequestPersistsUntilThePanelIsOpen()
+        {
+            var display = new CHRISTestDisplay();
+            display.Show(Display(null, 60, (4, "Already selected")), 0);
+            Assert.That(display.OpenPending, Is.True);
+            display.Show(Display(null, 60, (4, "Already selected")), 30);
+            Assert.That(display.OpenPending, Is.True, "a refresh keeps the request until the host opens the panel");
+            display.PanelOpened();
+            display.Show(Display(null, 60, (4, "Already selected")), 60);
+            Assert.That(display.OpenPending, Is.False, "an open panel the user later closes is not reopened");
+            var stale = new CHRISTestDisplay();
+            stale.Show(Display(null, 60, (4, "a")), 0);
+            stale.Tick(CHRISTestDisplay.StaleSeconds);
+            Assert.That(stale.OpenPending, Is.False, "a stale display stops asking to open");
+            var cleared = new CHRISTestDisplay();
+            cleared.Show(Display(null, 60, (4, "a")), 0);
+            cleared.Show(new JObject { ["lines"] = new JArray(), ["nonce"] = null, ["buttons"] = new JArray(),
+                ["cases"] = new JArray(), ["ttl_s"] = 1 }, 1);
+            Assert.That(cleared.OpenPending, Is.False);
+        }
+
+        // A lease that took the Brush from physical control must hand its driver back before a
+        // mapping in UI mode runs, or the mapping would keep the held driver as its own pose.
+        [Test]
+        public void PhysicalReturnLeaseGivesTheBrushDriverBack()
+        {
+            var brush = new GameObject("CHRIS hand-back brush");
+            try
+            {
+                var driver = brush.AddComponent<UnityEngine.SpatialTracking.TrackedPoseDriver>();
+                driver.enabled = true;
+                CHRISBimanualHost.RestoreDriverOwnership();
+                CHRISBimanualHost.ReconcileDriverOwnership(driver, null);
+                Assert.That(driver.enabled, Is.False);
+                Assert.That(CHRISBimanualHost.OwnsBrushPose, Is.True);
+                CHRISBimanualHost.BeginPhysicalHandBack();
+                Assert.That(CHRISBimanualHost.FinishPhysicalHandBack(busy: true), Is.False, "waits for a stroke or grab");
+                Assert.That(CHRISBimanualHost.OwnsBrushPose, Is.True);
+                Assert.That(CHRISBimanualHost.FinishPhysicalHandBack(busy: false), Is.True);
+                Assert.That(driver.enabled, Is.True);
+                Assert.That(CHRISBimanualHost.OwnsBrushPose, Is.False);
+                Assert.That(CHRISBimanualHost.OwnsWandPose, Is.False);
+            }
+            finally
+            {
+                CHRISBimanualHost.RestoreDriverOwnership();
+                UnityEngine.Object.DestroyImmediate(brush);
+            }
+        }
+
         // A malformed palette would make the service reject every context, not only the procedure.
         static void AssertPaletteValues(JObject palette)
         {

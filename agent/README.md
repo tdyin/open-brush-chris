@@ -306,8 +306,22 @@ Headset session 2026-10-03 (Link, Unity Play mode, evidence in
 selected Fire through the controller path (lease, aim, press, release; the user saw one
 click). Cases 3/2 did not complete: the stale-flag takeover, a mouse focus click acting
 as Activate and head-facing for panel rays were found and fixed offline afterwards (above);
-the in-headset test flow addresses the headset-off workflow. Not yet verified live: the
-fixes, the in-headset test flow, both handedness settings and sleeping controllers.
+the in-headset test flow addresses the headset-off workflow.
+
+Headset session 2026-10-04 (Link, Unity Play mode at `709975f8`, Bac's `chris test
+--session`, evidence in `agent/logs/headset-20261004/`): all five cases passed from the
+in-headset panel with the saved v0.1.3 mapping active. Case 4 took no lease. Case 1 aimed
+at Fire in 387 ms (3 hover frames), held the trigger 111 ms and changed Light to Fire.
+Case 3 passed twice (real trigger squeeze revoked the lease, nothing clicked). Case 5 was
+refused before review. Case 2 passed twice once the Game view had keyboard focus (Escape
+revoked "Stopped locally"); its first run saw no Escape because a manual Play start
+skipped the Game-view focus. Confirmed live: the stale-flag fix, per-event logs, panel
+nonce approvals, `palette_in_view` and editor foreground ("editor foreground True").
+Fixed afterwards: the launcher retries entering Play until playing and never toggles it
+off; every Play start focuses the Game view; the panel open is retried until it is open
+(the first display arrived while Open Brush loaded); a lease that returns to physical
+gives the Brush driver back before the mapping runs. Not yet verified live: those fixes,
+both handedness settings and sleeping controllers.
 
 ## Upstream integration points
 

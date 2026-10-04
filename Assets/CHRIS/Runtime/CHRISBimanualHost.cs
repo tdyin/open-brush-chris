@@ -36,7 +36,7 @@ namespace TiltBrush
         static TrackedPoseDriver s_BrushDriver, s_WandDriver;
         static bool s_BrushDriverWasEnabled, s_WandDriverWasEnabled;
         static VrSdk s_HookedSdk;
-        static bool s_PhysicalReleaseGated;
+        static bool s_PhysicalReleaseGated, s_PhysicalHandBackPending;
         static Vector2 s_UIPointerOffset;
         static CHRISControlMode s_PreviousMode = CHRISControlMode.UI;
         static bool s_Focused = true;
@@ -74,7 +74,7 @@ namespace TiltBrush
             s_Input = new CHRISBimanualInput();
             s_BrushDriverWasEnabled = s_WandDriverWasEnabled = false;
             s_HookedSdk = null;
-            s_PhysicalReleaseGated = false;
+            s_PhysicalReleaseGated = s_PhysicalHandBackPending = false;
             s_UIPointerOffset = Vector2.zero;
             s_PreviousMode = CHRISControlMode.UI;
             s_Focused = true;
@@ -116,7 +116,11 @@ namespace TiltBrush
                 (controls.IsUserGrabbingWorld() || controls.IsUserInteractingWithAnyWidget()));
             bool procedure = CHRISHandAuthority.Tick(focused, busy, deviceInput);
             // Keys held through a procedure hand-back need a fresh press under the mapping.
-            if (CHRISHandAuthority.TakeEnded() && s_Input.Active) s_Input.SuspendForEditor(deviceInput);
+            if (CHRISHandAuthority.TakeEnded())
+            {
+                if (s_Input.Active) s_Input.SuspendForEditor(deviceInput);
+                s_PhysicalHandBackPending = CHRISHandAuthority.LastReturnPhysical;
+            }
             if (procedure)
             {
                 var owner = InputManager.m_Instance;
@@ -127,6 +131,7 @@ namespace TiltBrush
                 TakeProcedurePose();
                 return;
             }
+            if (s_PhysicalHandBackPending && !FinishPhysicalHandBack(busy)) return;
             if (!active || head == null)
             {
                 bool wasActive = s_Input.Active;
@@ -193,6 +198,20 @@ namespace TiltBrush
             WritePoses();
         }
 
+        internal static void BeginPhysicalHandBack() => s_PhysicalHandBackPending = true;
+
+        // A lease that took the Brush from physical control returns its driver before the
+        // mapping runs again; otherwise a mapping in UI mode would treat the held driver as its
+        // own pose and take both hands. Waits while a stroke or grab is finishing.
+        internal static bool FinishPhysicalHandBack(bool busy)
+        {
+            GatePhysicalRelease();
+            if (busy) return false;
+            Restore(ref s_BrushDriver, ref s_BrushDriverWasEnabled);
+            s_PhysicalHandBackPending = false;
+            return true;
+        }
+
         internal static void ReconcileDriverOwnership(TrackedPoseDriver brushDriver, TrackedPoseDriver wandDriver)
         {
             if (brushDriver != null && ReferenceEquals(brushDriver, wandDriver))
@@ -247,7 +266,7 @@ namespace TiltBrush
 
         static void GatePhysicalRelease()
         {
-            if (s_PhysicalReleaseGated || InputManager.Controllers == null ||
+            if (s_PhysicalReleaseGated || InputManager.m_Instance == null || InputManager.Controllers == null ||
                 InputManager.Brush == null || InputManager.Wand == null) return;
             s_PhysicalReleaseGated = true;
             (InputManager.Brush as UnityXRControllerInfo)?.RequirePhysicalRelease();

@@ -49,6 +49,7 @@ namespace TiltBrush
         private HttpServer m_Server;
         private CHRISBrushNames m_BrushNames;
         private string m_PaletteError;
+        private float m_NextPanelOpen;
         public string Status { get; private set; } = "Waiting for native host";
         public double LastStopMilliseconds { get; private set; }
         public long StopCount { get; private set; }
@@ -275,6 +276,7 @@ namespace TiltBrush
             if (m_Closed) return;
             Observe(true);
             if (m_Pending != null && IsNativeInteractionBusy()) Stop("Native interaction took control");
+            OpenTestPanel();
             AdvanceSegment();
             // Bound request work per frame so an HTTP caller cannot starve native controls.
             for (int i = 0; i < 4; ++i)
@@ -394,14 +396,26 @@ namespace TiltBrush
                 var display = Parse(request.Body);
                 string invalid = CHRISTestDisplay.Validate(display);
                 if (invalid != null) return Error(invalid);
-                long seq = CHRISTestDisplay.Instance.Show(display, Time.realtimeSinceStartup, out bool opened);
-                // A test session starting opens the status panel in front of the user, once.
-                if (opened && !(CHRISPanel.Instance?.Popup?.IsOpen() ?? false)) CHRISFloatingPanel.Show();
+                long seq = CHRISTestDisplay.Instance.Show(display, Time.realtimeSinceStartup);
+                OpenTestPanel();
                 return new JObject { ["shown"] = true, ["seq"] = seq };
             }
             if (request.Method == "GET" && request.Path == "/chris/test/events")
                 return EventsAfter(request.Query) is long after ? CHRISTestDisplay.Instance.Events(after) : Error("Invalid after");
             return Error("Unknown route");
+        }
+
+        // A test session starting opens the status panel in front of the user once. Open Brush
+        // may still be loading when the first display arrives, so retry until it is open.
+        void OpenTestPanel()
+        {
+            var display = CHRISTestDisplay.Instance;
+            if (!display.OpenPending || Time.realtimeSinceStartup < m_NextPanelOpen) return;
+            m_NextPanelOpen = Time.realtimeSinceStartup + 1;
+            bool open = CHRISPanel.Instance?.Popup?.IsOpen() ?? false;
+            if (!open && !CHRISFloatingPanel.Show()) return;
+            display.PanelOpened();
+            Debug.Log(open ? "CHRIS test panel already open" : "CHRIS test panel opened");
         }
 
         // "?after=N" with N a non-negative integer; nothing else is accepted.

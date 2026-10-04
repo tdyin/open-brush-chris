@@ -191,6 +191,7 @@ namespace TiltBrush
         };
 
         internal static string ActiveTaskId => LeaseActive ? s_Lease.TaskId : null;
+        internal static bool LastReturnPhysical => s_Lease != null && (string)s_Lease.ReturnMode["source"] == "physical";
 
         // The logical Brush hand has no trigger or grip held by any source.
         public static bool BrushButtonsNeutral => !PhysicalHeld() && !CHRISInputMappingHost.Remap.DrawHeld &&

@@ -35,6 +35,9 @@ namespace TiltBrush
         public long Latest => m_Seq;
         // Bumped on every change the panel must redraw.
         public int Version { get; private set; }
+        // Set when a test session starts showing; the host opens the panel and clears it.
+        public bool OpenPending { get; private set; }
+        public void PanelOpened() => OpenPending = false;
 
         public bool ButtonsLive(float now) => Nonce != null && now < m_NonceExpiry;
         bool Empty => Lines.Length == 0 && Cases.Length == 0;
@@ -82,6 +85,8 @@ namespace TiltBrush
             Cases = ((JArray)d["cases"]).Select(c => ((int)(long)c["id"], (string)c["title"])).ToArray();
             Version++;
             opened = wasEmpty && !Empty;
+            if (opened) OpenPending = true;
+            if (Empty) OpenPending = false;
             return m_Seq;
         }
 
@@ -95,6 +100,7 @@ namespace TiltBrush
                 Lines = new[] { NotConnected };
                 Cases = new (int, string)[0];
                 Nonce = null;
+                OpenPending = false;
                 Version++;
             }
         }
