@@ -291,15 +291,23 @@ instruction lines stay visible between cases. `/chris/context` reports `palette_
 using Open Brush's own head-facing limit for panel rays (`m_GazeMaxAngleFromFacing`, 70).
 Escape and the panel Stop remain the local stops.
 
-Offline verification: 101 native regression methods pass (89 existing + 12 procedure),
-including 23 request/step cases of 51 in the shared procedure fixture, read in place from
-`../chris`; the 28 response-shape cases are validated in Python, and native checks its
-responses against the fixture's valid documents' keys. Evidence:
-`agent/logs/native-ui-runs/20261003-152946/` (exit 0). Snapshot check
-`agent/logs/phase2-procedure-20261003/snapshot-before-editor-7/` found zero source
-differences and unchanged Git status after Unity. Not verified: any Play-mode, player,
-HTTP or headset behaviour (palette hover through the virtual pose, real hand-back timing,
-both handedness settings). No player was built. Simulator gates: **NOT RUN** (D40).
+Offline verification: 107 native regression methods pass (89 existing + 18 procedure and
+test display), including 43 request cases of 83 in the shared procedure fixture (acquire,
+step, test display and events query), read in place from `../chris`; response-shape cases
+are validated in Python, and native checks its responses against the fixture's valid
+documents' keys. Evidence: `agent/logs/native-ui-runs/20261004-001001/` (exit 0, panel
+previews in `previews/`). Snapshot check
+`agent/logs/phase2-procedure-20261003/snapshot-before-editor-15/` found zero source
+differences and unchanged Git status after Unity. No player was built. Simulator gates:
+**NOT RUN** (D40).
+
+Headset session 2026-10-03 (Link, Unity Play mode, evidence in
+`agent/logs/headset-20261003/`): Phase 0 manual check in the v0.1.3 player passed. Case 1
+selected Fire through the controller path (lease, aim, press, release; the user saw one
+click). Cases 3/2 did not complete: the stale-flag takeover, a mouse focus click acting
+as Activate and head-facing for panel rays were found and fixed offline afterwards (above);
+the in-headset test flow addresses the headset-off workflow. Not yet verified live: the
+fixes, the in-headset test flow, both handedness settings and sleeping controllers.
 
 ## Upstream integration points
 
