@@ -301,7 +301,7 @@ Directory grouping does not require new generic interfaces or assembly splits.
 | `Assets/Scripts/App.cs` | Allow editor checks to exercise internal runtime contracts through the existing editor assembly. |
 | `Assets/Scripts/GUI/BasePanel.cs` | Reserve the CHRIS panel type. |
 | `Assets/Scripts/GUI/PanelManager.cs` | Check availability and lazily construct the optional floating panel. |
-| `Assets/Scripts/InputManager.cs` | While a CHRIS mapping uses mouse movement, drop the mouse branch of `GetBrushScrollAmount` and `GetMouseMoveDelta`. |
+| `Assets/Scripts/InputManager.cs` | While a CHRIS mapping uses mouse movement, drop the mouse branch of `GetBrushScrollAmount` and `GetMouseMoveDelta`. While a CHRIS procedure lease owns the Brush hand, `GetMouseButton`/`GetMouseButtonDown` report nothing, so a mouse click cannot act as Activate at the procedure's aim point. |
 | `Assets/Scripts/SketchControlsScript.cs` | Make `CanUndo` internal so mapped undo uses the native gate. |
 | `Assets/Scripts/Input/UnityXRControllerInfo.cs` | OR the active mapping's draw into the brush trigger (level, edges and value 1); report the brush as present while CHRIS move_brush owns its pose. |
 | `Assets/Prefabs/Panels/LabsPanel.prefab` | Provide the native CHRIS launcher. |

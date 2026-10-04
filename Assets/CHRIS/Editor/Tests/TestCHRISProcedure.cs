@@ -412,6 +412,23 @@ namespace TiltBrush
             }
         }
 
+        // Open Brush reads mouse buttons as Activate/AltActivate/Panic outside the controller path;
+        // both InputManager mouse readers must report nothing while a procedure owns the Brush hand.
+        [Test]
+        public void MouseButtonsAreIgnoredWhileAProcedureOwnsTheBrush()
+        {
+            string source = File.ReadAllText(Path.Combine(Application.dataPath, "Scripts/InputManager.cs"));
+            foreach (string method in new[] { "public bool GetMouseButton(int button)", "public bool GetMouseButtonDown(int button)" })
+            {
+                int start = source.IndexOf(method, StringComparison.Ordinal);
+                Assert.That(start, Is.GreaterThan(0), method);
+                int guard = source.IndexOf("return false;", start, StringComparison.Ordinal);
+                Assert.That(source.Substring(start, guard - start), Does.Contain("CHRISHandAuthority.OwnsBrush"), method);
+            }
+            string authority = File.ReadAllText(Path.Combine(Application.dataPath, "CHRIS/Runtime/CHRISHandAuthority.cs"));
+            Assert.That(authority, Does.Contain("return \"Mouse input during the lease\""));
+        }
+
         // A malformed palette would make the service reject every context, not only the procedure.
         static void AssertPaletteValues(JObject palette)
         {
