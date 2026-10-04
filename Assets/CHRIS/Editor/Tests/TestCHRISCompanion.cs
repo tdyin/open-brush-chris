@@ -48,7 +48,7 @@ namespace TiltBrush
                     var nativeMaterials = materials.Where(EditorUtility.IsPersistent).ToArray();
                     var generatedMaterials = materials.Where(material => !EditorUtility.IsPersistent(material)).ToArray();
                     // UIComponent.Awake creates this same native description under each live button.
-                    var button = popupObject.GetComponentInChildren<ActionButton>();
+                    var button = popupObject.GetComponentInChildren<CHRISNativeButton>();
                     var buttonTooltip = UnityEngine.Object.Instantiate(tooltipPrefab, button.transform);
                     UseSharedTooltipMaterials(buttonTooltip, sharedMaterials);
                     // The popup's play-mode lifecycle does not run automatically in editor previews.

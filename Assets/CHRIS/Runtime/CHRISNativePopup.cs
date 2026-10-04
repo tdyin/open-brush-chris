@@ -7,20 +7,21 @@ using UnityEngine;
 
 namespace TiltBrush
 {
-    // A small, nonmodal status surface built from Open Brush's own pop-up look and
-    // TextActionButton widgets. Mapping review and voice commands live outside the headset.
+    // A small, nonmodal status surface styled like Open Brush's "What's new" panel: its frame,
+    // title and body fonts and its outlined native buttons. Mapping review and voice
+    // commands live outside the headset.
     public class CHRISNativePopup : PopUpWindow
     {
-        public const float Width = 3.4f;
+        public const float Width = 2.6f;
         public const float Height = 2.8f;
-        public const float ButtonWidth = 1.0f;
+        public const float ButtonWidth = 0.7f;
 
         CHRISPanel m_Model;
         TextMeshPro m_Status;
         // Test runner area: instructions and buttons come from CHRISTestDisplay.
         readonly TextMeshPro[] m_TestLines = new TextMeshPro[CHRISTestDisplay.MaxLines];
-        readonly ActionButton[] m_CaseButtons = new ActionButton[CHRISTestDisplay.MaxCases];
-        ActionButton m_Approve, m_Decline;
+        readonly CHRISNativeButton[] m_CaseButtons = new CHRISNativeButton[CHRISTestDisplay.MaxCases];
+        CHRISNativeButton m_Approve, m_Decline;
         int m_TestVersion = -1;
         bool m_ButtonsLive;
         float m_NextStatusPoll;
@@ -47,13 +48,13 @@ namespace TiltBrush
         {
             var resources = CHRISUIResources.Load();
             resources.NativeWindow(transform, new Vector2(Width, Height));
-            resources.NativeButton(transform, "Move CHRIS panel", new Vector3(-1.05f, 1.12f, -0.06f), ButtonWidth,
+            resources.NativeButton(transform, "Move CHRIS panel", new Vector3(-0.85f, 1.1f, -0.06f), ButtonWidth,
                 "Move", () => (m_ParentPanel as CHRISFloatingPanel)?.BeginDrag());
-            resources.NativeText(transform, "Title", new Vector3(0, 1.12f, -0.04f), new Vector2(1.0f, 0.3f), "CHRIS", 1.1f);
+            resources.NativeText(transform, "Title", new Vector3(0, 1.1f, -0.04f), new Vector2(0.8f, 0.3f), "CHRIS", 1.1f);
             // Stop is always shown.
-            resources.NativeButton(transform, "Local Stop", new Vector3(1.05f, 1.12f, -0.06f), ButtonWidth, "STOP", LocalStop);
-            m_Status = resources.NativeText(transform, "Status", new Vector3(0, 0.8f, -0.04f),
-                new Vector2(3.1f, 0.25f), "Physical controllers", 0.72f);
+            resources.NativeButton(transform, "Local Stop", new Vector3(0.85f, 1.1f, -0.06f), ButtonWidth, "STOP", LocalStop);
+            m_Status = resources.NativeBody(transform, "Status", new Vector3(0, 0.8f, -0.04f),
+                new Vector2(2.3f, 0.24f), "Physical controllers", 0.58f);
             BuildTestArea(resources);
         }
 
@@ -62,20 +63,22 @@ namespace TiltBrush
         void BuildTestArea(CHRISUIResources resources)
         {
             for (int i = 0; i < m_TestLines.Length; i++)
-                m_TestLines[i] = resources.NativeText(transform, "Test line " + (i + 1),
-                    new Vector3(0, 0.5f - i * 0.24f, -0.04f), new Vector2(3.1f, 0.24f), "", 0.8f);
+                m_TestLines[i] = resources.NativeBody(transform, "Test line " + (i + 1),
+                    new Vector3(0, 0.5f - i * 0.24f, -0.04f), new Vector2(2.3f, 0.24f), "", 0.62f);
             for (int i = 0; i < m_CaseButtons.Length; i++)
             {
                 int slot = i;
                 m_CaseButtons[i] = resources.NativeButton(transform, "Test case " + (i + 1),
-                    new Vector3(-1.05f + (i % 3) * 1.05f, -0.62f - (i / 3) * 0.28f, -0.06f), ButtonWidth, "",
+                    new Vector3(-0.8f + (i % 3) * 0.8f, -0.55f - (i / 3) * 0.3f, -0.06f), ButtonWidth * 1.07f, "",
                     () => StartCase(slot));
+                // Case titles are longer than "Find out more"; keep them inside the native outline.
+                m_CaseButtons[i].Label.fontSize *= 0.8f;
                 m_CaseButtons[i].gameObject.SetActive(false);
             }
-            m_Approve = resources.NativeButton(transform, "Test approve", new Vector3(-0.7f, -0.75f, -0.06f),
-                ButtonWidth * 1.2f, "Approve", () => Decide(true));
-            m_Decline = resources.NativeButton(transform, "Test decline", new Vector3(0.7f, -0.75f, -0.06f),
-                ButtonWidth * 1.2f, "Decline", () => Decide(false));
+            m_Approve = resources.NativeButton(transform, "Test approve", new Vector3(-0.55f, -0.75f, -0.06f),
+                ButtonWidth * 1.3f, "Approve", () => Decide(true));
+            m_Decline = resources.NativeButton(transform, "Test decline", new Vector3(0.55f, -0.75f, -0.06f),
+                ButtonWidth * 1.3f, "Decline", () => Decide(false));
             m_Approve.gameObject.SetActive(false);
             m_Decline.gameObject.SetActive(false);
         }
@@ -196,14 +199,6 @@ namespace TiltBrush
         void OnDestroy()
         {
             GetComponent<CHRISMaterialOwner>()?.Release();
-            // TextActionButton gives each highlight its own material instance; release those
-            // copies, never the shared Open Brush materials they were made from.
-            foreach (var button in GetComponentsInChildren<TextActionButton>(true))
-            {
-                var highlight = button.m_Highlight != null ? button.m_Highlight.GetComponent<MeshRenderer>() : null;
-                if (highlight != null && highlight.sharedMaterial != null && highlight.sharedMaterial.name.EndsWith("(Instance)"))
-                    Destroy(highlight.sharedMaterial);
-            }
             m_Model?.Closed(this);
         }
     }

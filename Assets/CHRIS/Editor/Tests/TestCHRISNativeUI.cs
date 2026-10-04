@@ -152,10 +152,12 @@ namespace TiltBrush
             try
             {
                 popupObject.GetComponent<CHRISNativePopup>().BuildView();
-                // Every control is Open Brush's own TextActionButton; no CHRIS-drawn buttons remain.
-                Assert.That(popupObject.GetComponentsInChildren<CHRISNativeButton>(true), Is.Empty);
-                Assert.That(popupObject.GetComponentsInChildren<ActionButton>(true).All(b => b is TextActionButton), Is.True);
-                var buttons = popupObject.GetComponentsInChildren<ActionButton>();
+                // Every control is a copy of Open Brush's outlined What's-new button (its native
+                // outline border child) driven by CHRISNativeButton; none keeps the URL action.
+                var all = popupObject.GetComponentsInChildren<CHRISNativeButton>(true);
+                Assert.That(all, Is.Not.Empty);
+                Assert.That(all.All(b => b.transform.Find("Border") != null && b.GetComponent<OpenBrowserButton>() == null), Is.True);
+                var buttons = popupObject.GetComponentsInChildren<CHRISNativeButton>();
                 Assert.That(buttons.Select(button => button.name),
                     Is.EquivalentTo(new[] { "Move CHRIS panel", "Local Stop" }));
                 Assert.That(CHRISNativePopup.StatusLine("Mapping active", true),
@@ -298,7 +300,7 @@ namespace TiltBrush
                 var popup = popupObject.GetComponent<CHRISNativePopup>();
                 popup.BuildView();
                 Physics.SyncTransforms();
-                var buttons = popupObject.GetComponentsInChildren<ActionButton>();
+                var buttons = popupObject.GetComponentsInChildren<CHRISNativeButton>();
                 Assert.That(buttons.Select(b => b.name), Is.EquivalentTo(new[] { "Move CHRIS panel", "Local Stop" }));
                 var cameraObject = new GameObject("CHRIS status preview camera");
                 camera = cameraObject.AddComponent<Camera>();
@@ -318,7 +320,7 @@ namespace TiltBrush
                 void Capture(GameObject root, string file)
                 {
                     Physics.SyncTransforms();
-                    var visible = root.GetComponentsInChildren<ActionButton>().Select(b => b.GetComponent<BoxCollider>().bounds).ToArray();
+                    var visible = root.GetComponentsInChildren<CHRISNativeButton>().Select(b => b.GetComponent<BoxCollider>().bounds).ToArray();
                     for (int a = 0; a < visible.Length; a++)
                         for (int b = a + 1; b < visible.Length; b++)
                             Assert.That(visible[a].Intersects(visible[b]), Is.False, file + ": buttons overlap");
@@ -348,23 +350,24 @@ namespace TiltBrush
                         "preview"), Time.realtimeSinceStartup);
                     popup.RefreshTest();
                     Capture(popupObject, "status-panel-test.png");
-                    Assert.That(popupObject.GetComponentsInChildren<ActionButton>().Select(b => b.name),
+                    Assert.That(popupObject.GetComponentsInChildren<CHRISNativeButton>().Select(b => b.name),
                         Is.EquivalentTo(new[] { "Move CHRIS panel", "Local Stop", "Test approve", "Test decline" }),
                         "a live approval shows only Approve/Decline beside Move and Stop");
                     CHRISTestDisplay.Instance.Tick(Time.realtimeSinceStartup + CHRISTestDisplay.StaleSeconds + 1);
                     popup.RefreshTest();
                     Capture(popupObject, "status-panel-stale.png");
-                    Assert.That(popupObject.GetComponentsInChildren<ActionButton>().Select(b => b.name),
+                    Assert.That(popupObject.GetComponentsInChildren<CHRISNativeButton>().Select(b => b.name),
                         Is.EquivalentTo(new[] { "Move CHRIS panel", "Local Stop" }), "Stop stays available when stale");
                 }
                 finally { CHRISTestDisplay.ResetForPlay(); }
                 popupObject.SetActive(false);
-                // Open Brush's own confirm pop-up at the same scale, for side-by-side comparison.
+                // Open Brush's own What's-new panel at the same scale, for side-by-side comparison.
                 var native = UnityEngine.Object.Instantiate(
-                    AssetDatabase.LoadAssetAtPath<GameObject>("Assets/Prefabs/PopUps/PopUpWindow_Confirm.prefab"));
+                    AssetDatabase.LoadAssetAtPath<GameObject>("Assets/Prefabs/Panels/WhatsNewPanel.prefab"));
                 UnityEngine.SceneManagement.SceneManager.MoveGameObjectToScene(native, scene);
                 native.transform.position = Vector3.zero;
-                Capture(native, "native-confirm-popup.png");
+                native.transform.rotation = Quaternion.identity;
+                Capture(native, "native-whats-new-panel.png");
             }
             finally
             {
