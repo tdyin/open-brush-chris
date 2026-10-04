@@ -1,8 +1,10 @@
 // Copyright 2026 The Open Brush Authors
 // Licensed under the Apache License, Version 2.0.
 using System;
+using System.Reflection;
 using TMPro;
 using UnityEngine;
+using UnityEngine.Events;
 
 namespace TiltBrush
 {
@@ -18,7 +20,75 @@ namespace TiltBrush
         public Mesh BorderMesh;
         public Shader IconShader;
         public GameObject PopupPrefab;
+        // Open Brush's own pop-up body and rim (the ConfirmPopupMesh subtree of
+        // PopUpWindow_Confirm), the Oswald UI font and the TextActionButton widget. Shared assets,
+        // copied by instantiation and never owned or destroyed by CHRIS.
+        public GameObject NativeWindowPrefab;
+        public TMP_FontAsset NativeFont;
+        public GameObject NativeTextButton;
         public static CHRISUIResources Load() => Resources.Load<CHRISUIResources>("CHRIS/UI");
+
+        // TextActionButton's native collider is 0.91 x 0.18 before its root scale; buttons scale
+        // uniformly so the native label is not stretched.
+        public const float NativeButtonWidth = 0.91f, NativeButtonHeight = 0.18f;
+        static readonly FieldInfo s_ButtonAction = typeof(ActionButton).GetField("m_Action",
+            BindingFlags.NonPublic | BindingFlags.Instance);
+
+        // Copies the native pop-up body and rim and fits their measured bounds to the panel size.
+        public GameObject NativeWindow(Transform parent, Vector2 size)
+        {
+            var obj = Instantiate(NativeWindowPrefab, parent, false);
+            obj.name = "Native popup window";
+            foreach (var t in obj.GetComponentsInChildren<Transform>(true)) t.gameObject.layer = parent.gameObject.layer;
+            obj.transform.localPosition = Vector3.zero;
+            obj.transform.localRotation = Quaternion.identity;
+            obj.transform.localScale = Vector3.one;
+            var renderers = obj.GetComponentsInChildren<Renderer>(true);
+            var bounds = new Bounds(obj.transform.InverseTransformPoint(renderers[0].bounds.center), Vector3.zero);
+            foreach (var r in renderers)
+            {
+                bounds.Encapsulate(obj.transform.InverseTransformPoint(r.bounds.min));
+                bounds.Encapsulate(obj.transform.InverseTransformPoint(r.bounds.max));
+            }
+            var scale = new Vector3(size.x / bounds.size.x, size.y / bounds.size.y, 1);
+            obj.transform.localScale = scale;
+            obj.transform.localPosition = -Vector3.Scale(new Vector3(bounds.center.x, bounds.center.y, 0), scale);
+            return obj;
+        }
+
+        public TextMeshPro NativeText(Transform parent, string name, Vector3 position, Vector2 size, string value,
+            float fontSize, TextAlignmentOptions alignment = TextAlignmentOptions.Center)
+        {
+            var text = Text(parent, name, position, size, value, fontSize, alignment);
+            text.font = NativeFont;
+            text.fontSharedMaterial = NativeFont.material;
+            return text;
+        }
+
+        // An Open Brush TextActionButton; its serialized UnityEvent is the click path, so input,
+        // hover and press feedback stay native.
+        public ActionButton NativeButton(Transform parent, string name, Vector3 position, float width, string label, Action click)
+        {
+            var obj = Instantiate(NativeTextButton, parent, false);
+            obj.name = name;
+            obj.layer = parent.gameObject.layer;
+            // The prefab root carries its own x scale; keep its proportions and scale them up.
+            var nativeScale = NativeTextButton.transform.localScale;
+            obj.transform.localPosition = position;
+            obj.transform.localScale = nativeScale * (width / (NativeButtonWidth * nativeScale.x));
+            var button = obj.GetComponent<ActionButton>();
+            ((UnityEvent)s_ButtonAction.GetValue(button)).AddListener(() => click());
+            // The native button hides its highlight on Awake; match that before Awake runs.
+            if (button is TextActionButton text && text.m_Highlight != null) text.m_Highlight.SetActive(false);
+            SetLabel(button, label);
+            return button;
+        }
+
+        public static void SetLabel(ActionButton button, string label)
+        {
+            var text = button.GetComponentInChildren<TextMeshPro>(true);
+            if (text != null && text.text != label) text.text = label;
+        }
         public GameObject Surface(Transform parent, string name, Vector3 position, Vector2 size, Color color)
         {
             var obj = GameObject.CreatePrimitive(PrimitiveType.Quad);

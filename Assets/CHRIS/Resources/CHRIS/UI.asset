@@ -22,3 +22,6 @@ MonoBehaviour:
   BorderMesh: {fileID: 4300000, guid: 16fad2a698203b44bb45a3844e1ad126, type: 3}
   IconShader: {fileID: 4800000, guid: 7fb0893df567da94f892460d9f603269, type: 3}
   PopupPrefab: {fileID: 100000, guid: b2fefc944710408b813c486c1c47c930, type: 3}
+  NativeWindowPrefab: {fileID: 1317819588899672, guid: 8ced6eb9a7ede9742b9b286df62170e0, type: 3}
+  NativeFont: {fileID: 11400000, guid: ec48085d8b1ed18499cf1411d42005a0, type: 2}
+  NativeTextButton: {fileID: 2630224399012238907, guid: bb51b0dc7d0840f4ca79f5cbee2db4f9, type: 3}

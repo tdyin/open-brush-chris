@@ -146,15 +146,20 @@ namespace TiltBrush
         }
 
         [Test]
-        public void StatusPanelHasOnlyDragAndStop()
+        public void StatusPanelHasOnlyMoveAndStop()
         {
             var popupObject = UnityEngine.Object.Instantiate(CHRISUIResources.Load().PopupPrefab);
             try
             {
                 popupObject.GetComponent<CHRISNativePopup>().BuildView();
-                var buttons = popupObject.GetComponentsInChildren<CHRISNativeButton>();
+                // Every control is Open Brush's own TextActionButton; no CHRIS-drawn buttons remain.
+                Assert.That(popupObject.GetComponentsInChildren<CHRISNativeButton>(true), Is.Empty);
+                Assert.That(popupObject.GetComponentsInChildren<ActionButton>(true).All(b => b is TextActionButton), Is.True);
+                var buttons = popupObject.GetComponentsInChildren<ActionButton>();
                 Assert.That(buttons.Select(button => button.name),
-                    Is.EquivalentTo(new[] { "Drag CHRIS status", "Local Stop" }));
+                    Is.EquivalentTo(new[] { "Move CHRIS panel", "Local Stop" }));
+                Assert.That(CHRISNativePopup.StatusLine("Mapping active", true),
+                    Is.EqualTo("Mapping active  ·  Brush: Right  ·  Wand: Left"));
                 Assert.That(CHRISNativePopup.ControlLabel("stopped", false, null, false, false, false),
                     Is.EqualTo("Mapping stopped"));
                 Assert.That(CHRISNativePopup.ControlLabel("stopped", false, null, true, false, false),
@@ -290,12 +295,11 @@ namespace TiltBrush
             {
                 var popupObject = UnityEngine.Object.Instantiate(CHRISUIResources.Load().PopupPrefab);
                 UnityEngine.SceneManagement.SceneManager.MoveGameObjectToScene(popupObject, scene);
-                popupObject.GetComponent<CHRISNativePopup>().BuildView();
+                var popup = popupObject.GetComponent<CHRISNativePopup>();
+                popup.BuildView();
                 Physics.SyncTransforms();
-                var buttons = popupObject.GetComponentsInChildren<CHRISNativeButton>();
-                Assert.That(buttons.Length, Is.EqualTo(2));
-                Assert.That(buttons[0].GetComponent<BoxCollider>().bounds.Intersects(
-                    buttons[1].GetComponent<BoxCollider>().bounds), Is.False);
+                var buttons = popupObject.GetComponentsInChildren<ActionButton>();
+                Assert.That(buttons.Select(b => b.name), Is.EquivalentTo(new[] { "Move CHRIS panel", "Local Stop" }));
                 var cameraObject = new GameObject("CHRIS status preview camera");
                 camera = cameraObject.AddComponent<Camera>();
                 UnityEngine.SceneManagement.SceneManager.MoveGameObjectToScene(cameraObject, scene);
@@ -308,29 +312,59 @@ namespace TiltBrush
                 camera.backgroundColor = new Color(0.08f, 0.08f, 0.08f);
                 camera.nearClipPlane = 0.01f;
                 camera.farClipPlane = 20;
-                texture = new RenderTexture(1100, 1060, 24);
+                texture = new RenderTexture(1100, (int)(1100 * (CHRISNativePopup.Height + 0.2f) / (CHRISNativePopup.Width + 0.2f)), 24);
                 texture.Create(); camera.targetTexture = texture;
                 image = new Texture2D(texture.width, texture.height, TextureFormat.RGB24, false);
-                foreach (var label in popupObject.GetComponentsInChildren<TextMeshPro>()) label.ForceMeshUpdate();
-                camera.Render(); RenderTexture.active = texture;
-                image.ReadPixels(new Rect(0, 0, texture.width, texture.height), 0, 0); image.Apply();
-                File.WriteAllBytes(output + "/status-panel.png", image.EncodeToPNG());
-
-                // The in-headset test area with a live approval, as the runner would show it.
-                try
+                void Capture(GameObject root, string file)
                 {
-                    CHRISTestDisplay.Instance.Show(new Newtonsoft.Json.Linq.JObject {
-                        ["lines"] = new Newtonsoft.Json.Linq.JArray("Case 1 Happy path: select Light",
-                            "Look at the palette, keep the brush trigger released", "Approve to start", "Last: case 4 PASS"),
-                        ["nonce"] = "preview", ["buttons"] = new Newtonsoft.Json.Linq.JArray("approve", "decline"),
-                        ["cases"] = new Newtonsoft.Json.Linq.JArray(), ["ttl_s"] = 60 }, Time.realtimeSinceStartup);
-                    popupObject.GetComponent<CHRISNativePopup>().RefreshTest();
-                    foreach (var label in popupObject.GetComponentsInChildren<TextMeshPro>()) label.ForceMeshUpdate();
+                    Physics.SyncTransforms();
+                    var visible = root.GetComponentsInChildren<ActionButton>().Select(b => b.GetComponent<BoxCollider>().bounds).ToArray();
+                    for (int a = 0; a < visible.Length; a++)
+                        for (int b = a + 1; b < visible.Length; b++)
+                            Assert.That(visible[a].Intersects(visible[b]), Is.False, file + ": buttons overlap");
+                    foreach (var label in root.GetComponentsInChildren<TextMeshPro>()) label.ForceMeshUpdate();
                     camera.Render(); RenderTexture.active = texture;
                     image.ReadPixels(new Rect(0, 0, texture.width, texture.height), 0, 0); image.Apply();
-                    File.WriteAllBytes(output + "/status-panel-test.png", image.EncodeToPNG());
+                    File.WriteAllBytes(output + "/" + file, image.EncodeToPNG());
+                }
+                Newtonsoft.Json.Linq.JObject Display(string[] lines, string nonce, params (int id, string title)[] cases) =>
+                    new Newtonsoft.Json.Linq.JObject {
+                        ["lines"] = new Newtonsoft.Json.Linq.JArray(lines), ["nonce"] = nonce,
+                        ["buttons"] = nonce == null ? new Newtonsoft.Json.Linq.JArray() : new Newtonsoft.Json.Linq.JArray("approve", "decline"),
+                        ["cases"] = new Newtonsoft.Json.Linq.JArray(cases.Select(c => new Newtonsoft.Json.Linq.JObject { ["id"] = c.id, ["title"] = c.title })),
+                        ["ttl_s"] = 60 };
+                Capture(popupObject, "status-panel.png");
+                try
+                {
+                    // The states the runner shows, rendered as the user sees them.
+                    CHRISTestDisplay.Instance.Show(Display(new[] { "CHRIS tests: click Start with the brush ray",
+                        "Next: case 4 - Request the current brush (no-op)" }, null,
+                        (4, "Request the current brush"), (1, "Select a brush"), (3, "Squeeze the real trigger"),
+                        (5, "Target not on the page"), (2, "Press Escape")), Time.realtimeSinceStartup);
+                    popup.RefreshTest();
+                    Capture(popupObject, "status-panel-idle.png");
+                    CHRISTestDisplay.Instance.Show(Display(new[] { "Case 1 Happy path: select Light",
+                        "Look at the palette, keep the brush trigger released", "Approve to start", "Last: case 4 PASS" },
+                        "preview"), Time.realtimeSinceStartup);
+                    popup.RefreshTest();
+                    Capture(popupObject, "status-panel-test.png");
+                    Assert.That(popupObject.GetComponentsInChildren<ActionButton>().Select(b => b.name),
+                        Is.EquivalentTo(new[] { "Move CHRIS panel", "Local Stop", "Test approve", "Test decline" }),
+                        "a live approval shows only Approve/Decline beside Move and Stop");
+                    CHRISTestDisplay.Instance.Tick(Time.realtimeSinceStartup + CHRISTestDisplay.StaleSeconds + 1);
+                    popup.RefreshTest();
+                    Capture(popupObject, "status-panel-stale.png");
+                    Assert.That(popupObject.GetComponentsInChildren<ActionButton>().Select(b => b.name),
+                        Is.EquivalentTo(new[] { "Move CHRIS panel", "Local Stop" }), "Stop stays available when stale");
                 }
                 finally { CHRISTestDisplay.ResetForPlay(); }
+                popupObject.SetActive(false);
+                // Open Brush's own confirm pop-up at the same scale, for side-by-side comparison.
+                var native = UnityEngine.Object.Instantiate(
+                    AssetDatabase.LoadAssetAtPath<GameObject>("Assets/Prefabs/PopUps/PopUpWindow_Confirm.prefab"));
+                UnityEngine.SceneManagement.SceneManager.MoveGameObjectToScene(native, scene);
+                native.transform.position = Vector3.zero;
+                Capture(native, "native-confirm-popup.png");
             }
             finally
             {
