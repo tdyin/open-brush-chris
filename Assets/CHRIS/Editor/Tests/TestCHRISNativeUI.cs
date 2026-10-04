@@ -302,19 +302,35 @@ namespace TiltBrush
                 camera.scene = scene;
                 cameraObject.AddComponent<UniversalAdditionalCameraData>();
                 camera.orthographic = true;
-                camera.orthographicSize = 1.15f;
+                camera.orthographicSize = CHRISNativePopup.Height / 2 + 0.1f;
                 camera.transform.position = new Vector3(0, 0, -10);
                 camera.clearFlags = CameraClearFlags.SolidColor;
                 camera.backgroundColor = new Color(0.08f, 0.08f, 0.08f);
                 camera.nearClipPlane = 0.01f;
                 camera.farClipPlane = 20;
-                texture = new RenderTexture(1100, 700, 24);
+                texture = new RenderTexture(1100, 1060, 24);
                 texture.Create(); camera.targetTexture = texture;
                 image = new Texture2D(texture.width, texture.height, TextureFormat.RGB24, false);
                 foreach (var label in popupObject.GetComponentsInChildren<TextMeshPro>()) label.ForceMeshUpdate();
                 camera.Render(); RenderTexture.active = texture;
                 image.ReadPixels(new Rect(0, 0, texture.width, texture.height), 0, 0); image.Apply();
                 File.WriteAllBytes(output + "/status-panel.png", image.EncodeToPNG());
+
+                // The in-headset test area with a live approval, as the runner would show it.
+                try
+                {
+                    CHRISTestDisplay.Instance.Show(new Newtonsoft.Json.Linq.JObject {
+                        ["lines"] = new Newtonsoft.Json.Linq.JArray("Case 1 Happy path: select Light",
+                            "Look at the palette, keep the brush trigger released", "Approve to start", "Last: case 4 PASS"),
+                        ["nonce"] = "preview", ["buttons"] = new Newtonsoft.Json.Linq.JArray("approve", "decline"),
+                        ["cases"] = new Newtonsoft.Json.Linq.JArray(), ["ttl_s"] = 60 }, Time.realtimeSinceStartup);
+                    popupObject.GetComponent<CHRISNativePopup>().RefreshTest();
+                    foreach (var label in popupObject.GetComponentsInChildren<TextMeshPro>()) label.ForceMeshUpdate();
+                    camera.Render(); RenderTexture.active = texture;
+                    image.ReadPixels(new Rect(0, 0, texture.width, texture.height), 0, 0); image.Apply();
+                    File.WriteAllBytes(output + "/status-panel-test.png", image.EncodeToPNG());
+                }
+                finally { CHRISTestDisplay.ResetForPlay(); }
             }
             finally
             {

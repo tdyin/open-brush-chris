@@ -92,6 +92,23 @@ namespace TiltBrush
                 ["page_count"] = count, ["targets"] = targets };
         }
 
+        // Open Brush lets a controller ray hit a panel only while the head roughly faces it
+        // (SketchControlsScript m_GazeMaxAngleFromFacing, 70 in Main.unity). Null when not reported.
+        static readonly FieldInfo s_FacingLimit = typeof(SketchControlsScript).GetField("m_GazeMaxAngleFromFacing", Private);
+
+        public static bool? InView()
+        {
+            var panel = BrushPanel();
+            var head = ViewpointScript.Head;
+            if (panel == null || head == null) return null;
+            var controls = SketchControlsScript.m_Instance;
+            float limit = controls != null && s_FacingLimit != null ? (float)s_FacingLimit.GetValue(controls) : 70f;
+            return FacesPanel(head.position, head.forward, panel.transform.position, limit);
+        }
+
+        internal static bool FacesPanel(Vector3 head, Vector3 forward, Vector3 panel, float limit) =>
+            Vector3.Angle(panel - head, forward) < limit;
+
         public static string HoverTargetId()
         {
             var hovered = Buttons(BrushPanel()).FirstOrDefault(b => b.IsHover() || b.IsPressed());

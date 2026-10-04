@@ -280,6 +280,17 @@ and step state machine; `CHRISPaletteObserver` reads the Brush palette without w
   (frames, ms, hover frames or trigger hold), revoke and release, and a failed palette read
   logs its exception once.
 
+In-headset test flow (D62, 2026-10-04): the floating CHRIS status panel (Labs) has a test
+area below the status rows: up to four instruction lines, up to eight case Start buttons and
+Approve/Decline. `chris test --session` (backend) pushes what to show with `POST
+/chris/test/display` and reads physical panel clicks with `GET /chris/test/events?after=N`
+(`CHRISTestDisplay`, ring of 32). Approve/Decline appear only while a display carries a live
+one-time nonce (ttl at most 60 s), and one click consumes it; the runner then approves through
+the service's existing review binding, so the panel adds no HTTP approval path. The last
+instruction lines stay visible between cases. `/chris/context` reports `palette_in_view`
+using Open Brush's own head-facing limit for panel rays (`m_GazeMaxAngleFromFacing`, 70).
+Escape and the panel Stop remain the local stops.
+
 Offline verification: 101 native regression methods pass (89 existing + 12 procedure),
 including 23 request/step cases of 51 in the shared procedure fixture, read in place from
 `../chris`; the 28 response-shape cases are validated in Python, and native checks its

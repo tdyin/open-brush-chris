@@ -21,7 +21,7 @@ namespace TiltBrush
     {
         private sealed class Request
         {
-            public string Method, Path, Body;
+            public string Method, Path, Query, Body;
             public JObject Reply;
             public bool Abandoned;
             public readonly object Gate = new object();
@@ -81,7 +81,7 @@ namespace TiltBrush
             else
             {
                 var request = new Request { Method = ctx.Request.HttpMethod,
-                    Path = ctx.Request.Url.AbsolutePath };
+                    Path = ctx.Request.Url.AbsolutePath, Query = ctx.Request.Url.Query };
                 using (var reader = new StreamReader(ctx.Request.InputStream, Encoding.UTF8))
                 {
                     var body = new char[bodyLimit + 1];
@@ -144,7 +144,7 @@ namespace TiltBrush
                 ["scene_position"] = null, ["scene_rotation"] = null, ["scene_scale"] = null,
                 ["active_task"] = m_ActiveTask == null ? JValue.CreateNull() : new JValue(m_ActiveTask),
                 ["unknown"] = new JArray("active_layer", "selected_model", "physical_scale", "generation"),
-                ["palette"] = null, ["hover_target_id"] = null,
+                ["palette"] = null, ["hover_target_id"] = null, ["palette_in_view"] = null,
                 ["grab_active"] = null, ["focus"] = null, ["buttons_neutral"] = null };
             if (!ready) return c;
             // Read-only procedure observations; not part of MateriallyChanged, so hover alone
@@ -154,10 +154,11 @@ namespace TiltBrush
             {
                 c["palette"] = CHRISPaletteObserver.Snapshot();
                 c["hover_target_id"] = CHRISPaletteObserver.HoverTargetId();
+                c["palette_in_view"] = CHRISPaletteObserver.InView();
             }
             catch (Exception error)
             {
-                c["palette"] = c["hover_target_id"] = null;
+                c["palette"] = c["hover_target_id"] = c["palette_in_view"] = null;
                 string message = error.GetType().Name + ": " + error.Message;
                 if (message != m_PaletteError) Debug.LogWarning("CHRIS palette read failed: " + message);
                 m_PaletteError = message;
@@ -388,7 +389,24 @@ namespace TiltBrush
             if (request.Method == "POST" && request.Path == "/chris/commands")
                 return Submit(Parse(request.Body));
             if (request.Path.StartsWith(ProcedureRoute)) return RouteProcedure(request);
+            if (request.Method == "POST" && request.Path == "/chris/test/display")
+            {
+                var display = Parse(request.Body);
+                string invalid = CHRISTestDisplay.Validate(display);
+                if (invalid != null) return Error(invalid);
+                long seq = CHRISTestDisplay.Instance.Show(display, Time.realtimeSinceStartup);
+                return new JObject { ["shown"] = true, ["seq"] = seq };
+            }
+            if (request.Method == "GET" && request.Path == "/chris/test/events")
+                return EventsAfter(request.Query) is long after ? CHRISTestDisplay.Instance.Events(after) : Error("Invalid after");
             return Error("Unknown route");
+        }
+
+        // "?after=N" with N a non-negative integer; nothing else is accepted.
+        internal static long? EventsAfter(string query)
+        {
+            var match = Regex.Match(query ?? "", "\\A\\?after=(0|[1-9][0-9]{0,17})\\z");
+            return match.Success ? long.Parse(match.Groups[1].Value) : (long?)null;
         }
 
         // ---- Controller procedure lease (Brush hand pose and trigger only) ----

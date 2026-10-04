@@ -57,7 +57,10 @@ namespace TiltBrush
                 string message = (string)c["message"], name = (string)c["name"];
                 var document = (JObject)c["document"];
                 string error = message == "acquire_request" ? CHRISCommandGateway.ValidateAcquire(document) :
-                    message == "step" ? CHRISProcedureExecutor.ValidateStep(document) : "skip";
+                    message == "step" ? CHRISProcedureExecutor.ValidateStep(document) :
+                    message == "test_display" ? CHRISTestDisplay.Validate(document) :
+                    message == "test_events_query" ? (document.Count == 1 && document["after"]?.Type == JTokenType.Integer &&
+                        CHRISCommandGateway.EventsAfter("?after=" + (long)document["after"]) != null ? null : "Invalid after") : "skip";
                 if (error == "skip") continue;
                 Assert.That(error == null, Is.EqualTo((string)c["expect"] == "valid"), name + ": " + error);
                 checkedCases++;
@@ -427,6 +430,94 @@ namespace TiltBrush
             }
             string authority = File.ReadAllText(Path.Combine(Application.dataPath, "CHRIS/Runtime/CHRISHandAuthority.cs"));
             Assert.That(authority, Does.Contain("return \"Mouse input during the lease\""));
+        }
+
+        static JObject Display(string nonce = null, int ttl = 30, params (int id, string title)[] cases) => new JObject {
+            ["lines"] = new JArray("Next: case 1 Happy path", "Click Start"), ["nonce"] = nonce,
+            ["buttons"] = nonce == null ? new JArray() : new JArray("approve", "decline"),
+            ["cases"] = new JArray(cases.Select(c => new JObject { ["id"] = c.id, ["title"] = c.title })), ["ttl_s"] = ttl };
+
+        [Test]
+        public void TestDisplayValidatesStrictlyAndApprovalsNeedALiveNonce()
+        {
+            Assert.That(CHRISTestDisplay.Validate(Display(null, 30, (1, "Happy path"), (3, "Trigger squeeze"))), Is.Null);
+            Assert.That(CHRISTestDisplay.Validate(Display("n1")), Is.Null);
+            var noNonce = Display(); noNonce["buttons"] = new JArray("approve", "decline");
+            var extra = Display(); extra["hold"] = 1;
+            var longLine = Display(); longLine["lines"] = new JArray(new string('x', 81));
+            var dupCase = Display(null, 30, (1, "a"), (1, "b"));
+            foreach (var bad in new[] { noNonce, extra, longLine, dupCase, Display(null, 0), Display(null, 61), Display("bad/nonce") })
+                Assert.That(CHRISTestDisplay.Validate(bad), Is.Not.Null, bad.ToString());
+
+            var display = new CHRISTestDisplay();
+            Assert.That(display.Decide(true, 0, 1000), Is.False, "no display: approve is inert");
+            Assert.That(display.Show(Display(null, 30, (1, "Happy path")), 0), Is.EqualTo(0));
+            Assert.That(display.Start(2, 1000), Is.False, "only listed cases start");
+            Assert.That(display.Start(1, 1000), Is.True);
+            Assert.That(display.Decide(true, 1, 1001), Is.False, "no nonce: approve is inert");
+            long seq = display.Show(Display("nonce_a", 30), 2);
+            Assert.That(seq, Is.EqualTo(1));
+            Assert.That(display.Decide(true, 3, 1003), Is.True);
+            Assert.That(display.Decide(false, 3, 1003), Is.False, "one decision per nonce");
+            var events = (JArray)display.Events(seq)["events"];
+            Assert.That(events.Count, Is.EqualTo(1));
+            Assert.That((string)events[0]["kind"], Is.EqualTo("approve"));
+            Assert.That((string)events[0]["nonce"], Is.EqualTo("nonce_a"));
+            Assert.That(events[0]["case"].Type, Is.EqualTo(JTokenType.Null));
+            Assert.That((string)display.Events(0)["events"][0]["kind"], Is.EqualTo("start"));
+
+            display.Show(Display("nonce_b", 5), 10);
+            display.Tick(15);
+            Assert.That(display.Nonce, Is.Null, "expired nonce is dropped");
+            Assert.That(display.Lines.Length, Is.EqualTo(2), "the last instruction stays visible");
+            Assert.That(display.Decide(true, 15, 1015), Is.False);
+
+            display.Show(Display(null, 30, (1, "a")), 20);
+            for (int i = 0; i < 40; i++) display.Start(1, 1020 + i);
+            var ring = display.Events(0);
+            Assert.That(((JArray)ring["events"]).Count, Is.EqualTo(CHRISTestDisplay.RingSize));
+            Assert.That((long)ring["latest"], Is.EqualTo(42));
+
+            Assert.That(CHRISCommandGateway.EventsAfter("?after=0"), Is.EqualTo(0));
+            Assert.That(CHRISCommandGateway.EventsAfter("?after=17"), Is.EqualTo(17));
+            foreach (string bad in new[] { "", "?after=-1", "?after=01", "?after=1&x=2", "?after=", "?before=1" })
+                Assert.That(CHRISCommandGateway.EventsAfter(bad), Is.Null, bad);
+
+            Assert.That(CHRISPaletteObserver.FacesPanel(Vector3.zero, Vector3.forward, new Vector3(0, 0, 3), 70), Is.True);
+            Assert.That(CHRISPaletteObserver.FacesPanel(Vector3.zero, Vector3.forward, new Vector3(3, 0, 0.5f), 70), Is.False);
+            Assert.That(CHRISNativePopup.CaseLabel(1, "Happy path"), Is.EqualTo("1 Happy path"));
+            Assert.That(CHRISNativePopup.CaseLabel(3, "Trigger squeeze stop").Length, Is.EqualTo(14));
+        }
+
+        [Test]
+        public void TestDisplayRoutesShowAndReportEvents()
+        {
+            CHRISTestDisplay.ResetForPlay();
+            var obj = new GameObject("CHRIS test display host");
+            try
+            {
+                var host = obj.AddComponent<CHRISGatewayTestHost>();
+                host.Initialize();
+                Assert.That(Route(host, "POST", "/chris/test/display", Display("nonce_x", 0))["error"], Is.Not.Null);
+                var shown = Route(host, "POST", "/chris/test/display", Display("nonce_x", 30));
+                Assert.That((bool)shown["shown"], Is.True);
+                Assert.That(shown.Properties().Select(p => p.Name).OrderBy(n => n), Is.EqualTo(ValidKeys("test_display_shown")));
+                Assert.That((long)shown["seq"], Is.EqualTo(0));
+                Assert.That(CHRISTestDisplay.Instance.Nonce, Is.EqualTo("nonce_x"));
+                Assert.That(Route(host, "GET", "/chris/test/events")["error"], Is.Not.Null, "after is required");
+                CHRISTestDisplay.Instance.Decide(true, Time.realtimeSinceStartup, CHRISCommandGateway.Now);
+                var events = CHRISTestDisplay.Instance.Events(0);
+                Assert.That(events.Properties().Select(p => p.Name).OrderBy(n => n), Is.EqualTo(ValidKeys("test_events")));
+                var validEvent = (JObject)SharedCases().First(c => (string)c["message"] == "test_events" &&
+                    (string)c["expect"] == "valid" && ((JArray)c["document"]["events"]).Count > 0)["document"]["events"][0];
+                Assert.That(((JObject)events["events"][0]).Properties().Select(p => p.Name).OrderBy(n => n),
+                    Is.EqualTo(validEvent.Properties().Select(p => p.Name).OrderBy(n => n)));
+            }
+            finally
+            {
+                UnityEngine.Object.DestroyImmediate(obj);
+                CHRISTestDisplay.ResetForPlay();
+            }
         }
 
         // A malformed palette would make the service reject every context, not only the procedure.
