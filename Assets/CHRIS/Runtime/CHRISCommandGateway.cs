@@ -394,7 +394,9 @@ namespace TiltBrush
                 var display = Parse(request.Body);
                 string invalid = CHRISTestDisplay.Validate(display);
                 if (invalid != null) return Error(invalid);
-                long seq = CHRISTestDisplay.Instance.Show(display, Time.realtimeSinceStartup);
+                long seq = CHRISTestDisplay.Instance.Show(display, Time.realtimeSinceStartup, out bool opened);
+                // A test session starting opens the status panel in front of the user, once.
+                if (opened && !(CHRISPanel.Instance?.Popup?.IsOpen() ?? false)) CHRISFloatingPanel.Show();
                 return new JObject { ["shown"] = true, ["seq"] = seq };
             }
             if (request.Method == "GET" && request.Path == "/chris/test/events")

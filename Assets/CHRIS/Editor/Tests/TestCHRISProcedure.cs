@@ -478,6 +478,26 @@ namespace TiltBrush
             Assert.That(((JArray)ring["events"]).Count, Is.EqualTo(CHRISTestDisplay.RingSize));
             Assert.That((long)ring["latest"], Is.EqualTo(42));
 
+            // A session start opens the panel once; refreshes do not reopen it.
+            var fresh = new CHRISTestDisplay();
+            fresh.Show(Display(null, 60, (4, "Already selected")), 100, out bool opened);
+            Assert.That(opened, Is.True);
+            fresh.Show(Display(null, 60, (4, "Already selected")), 130, out opened);
+            Assert.That(opened, Is.False);
+            // A runner that stops without clearing leaves no live buttons behind.
+            fresh.Show(Display("nonce_c", 60), 140);
+            fresh.Tick(199);
+            Assert.That(fresh.ButtonsLive(199), Is.True, "within the nonce ttl");
+            fresh.Tick(140 + CHRISTestDisplay.StaleSeconds - 1);
+            Assert.That(fresh.Lines, Is.Not.EqualTo(new[] { CHRISTestDisplay.NotConnected }), "not stale yet");
+            fresh.Tick(140 + CHRISTestDisplay.StaleSeconds);
+            Assert.That(fresh.Lines, Is.EqualTo(new[] { CHRISTestDisplay.NotConnected }));
+            Assert.That(fresh.Cases, Is.Empty);
+            Assert.That(fresh.Decide(true, 140 + CHRISTestDisplay.StaleSeconds, 2000), Is.False);
+            Assert.That(fresh.Start(4, 2000), Is.False);
+            fresh.Show(Display(null, 60, (4, "Already selected")), 300, out opened);
+            Assert.That(opened, Is.False, "reconnecting after a stale display does not reopen a panel the user may have closed");
+
             Assert.That(CHRISCommandGateway.EventsAfter("?after=0"), Is.EqualTo(0));
             Assert.That(CHRISCommandGateway.EventsAfter("?after=17"), Is.EqualTo(17));
             foreach (string bad in new[] { "", "?after=-1", "?after=01", "?after=1&x=2", "?after=", "?before=1" })

@@ -15,6 +15,9 @@ namespace TiltBrush
     public sealed class CHRISTestDisplay
     {
         public const int MaxLines = 4, MaxLineLength = 80, MaxCases = 8, MaxTitleLength = 60, MaxTtl = 60, RingSize = 32;
+        // The runner refreshes its idle display every 30 s; after this long it is presumed gone.
+        public const float StaleSeconds = 70;
+        public const string NotConnected = "CHRIS tests not connected";
         static readonly Regex s_Id = new Regex("\\A[A-Za-z0-9_-]{1,80}\\z");
 
         public static CHRISTestDisplay Instance { get; private set; } = new CHRISTestDisplay();
@@ -23,7 +26,7 @@ namespace TiltBrush
         internal static void ResetForPlay() => Instance = new CHRISTestDisplay();
 
         readonly Queue<JObject> m_Events = new Queue<JObject>();
-        float m_NonceExpiry;
+        float m_NonceExpiry, m_LastShow;
         long m_Seq;
 
         public string[] Lines { get; private set; } = new string[0];
@@ -34,6 +37,7 @@ namespace TiltBrush
         public int Version { get; private set; }
 
         public bool ButtonsLive(float now) => Nonce != null && now < m_NonceExpiry;
+        bool Empty => Lines.Length == 0 && Cases.Length == 0;
 
         static bool IsNull(JToken token) => token.Type == JTokenType.Null || (token is JValue v && v.Value == null);
 
@@ -64,21 +68,35 @@ namespace TiltBrush
             return null;
         }
 
-        // Replaces the whole display. Returns the latest event seq at display time.
-        public long Show(JObject d, float now)
+        // Replaces the whole display. Returns the latest event seq at display time. Opened is
+        // true when an empty display becomes non-empty, so the host can open the panel once.
+        public long Show(JObject d, float now) => Show(d, now, out _);
+
+        public long Show(JObject d, float now, out bool opened)
         {
+            bool wasEmpty = Empty;
+            m_LastShow = now;
             Lines = ((JArray)d["lines"]).Select(l => (string)l).ToArray();
             Nonce = IsNull(d["nonce"]) ? null : (string)d["nonce"];
             m_NonceExpiry = now + (long)d["ttl_s"];
             Cases = ((JArray)d["cases"]).Select(c => ((int)(long)c["id"], (string)c["title"])).ToArray();
             Version++;
+            opened = wasEmpty && !Empty;
             return m_Seq;
         }
 
-        // Expired buttons disappear; the lines stay as the last instruction.
+        // Expired buttons disappear; the lines stay as the last instruction. A runner that stopped
+        // without clearing (for example, killed) leaves no live Start or Approve behind.
         public void Tick(float now)
         {
             if (Nonce != null && now >= m_NonceExpiry) { Nonce = null; Version++; }
+            if (!Empty && now - m_LastShow >= StaleSeconds && !(Lines.Length == 1 && Lines[0] == NotConnected))
+            {
+                Lines = new[] { NotConnected };
+                Cases = new (int, string)[0];
+                Nonce = null;
+                Version++;
+            }
         }
 
         void Emit(string kind, int? caseId, string nonce, double at)
