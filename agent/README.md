@@ -323,6 +323,32 @@ off; every Play start focuses the Game view; the panel open is retried until it 
 gives the Brush driver back before the mapping runs. Not yet verified live: those fixes,
 both handedness settings and sleeping controllers.
 
+Panel look (D80, 2026-10-04): the status panel is drawn like the wand panels. Its frame is
+a copy of the Labs "Border" (the same mesh, outline material and `BakedMeshOutline` bake, at
+the Labs transform scale). The ring is resized like a nine-slice, so its line width and
+corners match Labs at 2.4 x 3.2. Controls are native icon buttons with hover descriptions:
+Stop `power`, Start case `play` (number below), Approve `approve`, Decline `decline`. They
+are set as constants in `CHRISNativePopup`. There is no Move button: four invisible
+`CHRISDragStrip` border strips start the drag ("Drag to move"). Offline: 109 methods pass
+(`agent/logs/native-ui-runs/`, previews including `status-panel-next-to-labs.png` in
+`agent/logs/native-ui/`). Hover text, gaze brightening, clicks and drag are not yet
+verified live.
+
+Overlapping wand panels (2026-10-04): the editor's saved advanced layout
+(`HKCU\Software\Unity\UnityEditor\Icosa Foundation\Open Brush`, value
+`AdvancedLayout_h3386665793`) stores ToolsAdvanced and ExtraPanel in the same slot (angle
+240, same offset). Open Brush therefore restores them on top of each other. CHRIS is not
+involved: the panel is unique, so it is never saved, and it is not fixed to the wand. The
+player's PlayerPrefs have no saved layout. Fix: use Open Brush's own reset panel layout.
+Do not delete the editor preference by hand.
+
+Meta XR Simulator v207 (D75, skipped in D81): extracted only (`msiexec /a`) to
+`C:/Users/Yin/Dev/xr-sim/MetaXRSimulator`, used per process via `XR_RUNTIME_JSON`, with no
+OpenXR registry changes. Its UI (`MetaXRSimulator.exe`) does not start: it needs Windows App
+Runtime 1.5, which the extract does not install (the packages sit in `v207.0/WindowsAppRuntime`).
+The player stalls at OpenXR loader start-up. Nothing was installed. Evidence:
+`agent/logs/xr-sim-setup/`.
+
 ## Upstream integration points
 
 CHRIS uses the existing TiltBrush namespace and compilation boundaries.

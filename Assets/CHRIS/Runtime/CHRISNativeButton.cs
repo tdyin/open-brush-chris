@@ -24,6 +24,16 @@ namespace TiltBrush
             Label.transform.localPosition = position;
         }
 
+        // Native hover text. Outside Play mode there is no App.Config to build the description
+        // object, so only the text is stored.
+        public void SetHover(string text)
+        {
+            if (App.Config != null) SetDescriptionText(text);
+            else m_DescriptionText = text;
+        }
+
+        public string Hover => m_DescriptionText;
+
         public void SetPrimary(bool primary)
         {
             Tint = primary ? new Color(0, 0.48f, 0.63f) : new Color(0.09f, 0.105f, 0.12f);
@@ -32,7 +42,7 @@ namespace TiltBrush
         public void Configure()
         {
             m_AtlasTexture = false;
-            m_HoverScale = 1.025f;
+            m_HoverScale = 1.1f;
             m_ButtonHasPressedAudio = true;
             m_ButtonRenderer = GetComponent<Renderer>();
             m_Collider = GetComponent<BoxCollider>();

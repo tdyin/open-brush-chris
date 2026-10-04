@@ -505,8 +505,7 @@ namespace TiltBrush
 
             Assert.That(CHRISPaletteObserver.FacesPanel(Vector3.zero, Vector3.forward, new Vector3(0, 0, 3), 70), Is.True);
             Assert.That(CHRISPaletteObserver.FacesPanel(Vector3.zero, Vector3.forward, new Vector3(3, 0, 0.5f), 70), Is.False);
-            Assert.That(CHRISNativePopup.CaseLabel(1, "Happy path"), Is.EqualTo("1 Happy path"));
-            Assert.That(CHRISNativePopup.CaseLabel(3, "Trigger squeeze stop").Length, Is.EqualTo(16));
+            Assert.That(CHRISNativePopup.CaseHover(3, "Trigger squeeze stop"), Is.EqualTo("Start case 3: Trigger squeeze stop"));
         }
 
         [Test]

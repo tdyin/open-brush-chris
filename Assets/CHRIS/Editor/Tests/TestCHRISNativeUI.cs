@@ -145,21 +145,51 @@ namespace TiltBrush
             Assert.That(menuCollider.center, Is.EqualTo(new Vector3(0, 0, -0.0125f)));
         }
 
+        static readonly string[] DragStrips = { "Drag border top", "Drag border bottom", "Drag border left", "Drag border right" };
+
+        internal static string[] Icons(GameObject root) => root.GetComponentsInChildren<CHRISNativeButton>()
+            .Select(b => b.name).ToArray();
+
         [Test]
-        public void StatusPanelHasOnlyMoveAndStop()
+        public void StatusPanelHasStopAndBorderDragOnly()
         {
-            var popupObject = UnityEngine.Object.Instantiate(CHRISUIResources.Load().PopupPrefab);
+            var resources = CHRISUIResources.Load();
+            var popupObject = UnityEngine.Object.Instantiate(resources.PopupPrefab);
             try
             {
                 popupObject.GetComponent<CHRISNativePopup>().BuildView();
-                // Every control is a copy of Open Brush's outlined What's-new button (its native
-                // outline border child) driven by CHRISNativeButton; none keeps the URL action.
-                var all = popupObject.GetComponentsInChildren<CHRISNativeButton>(true);
-                Assert.That(all, Is.Not.Empty);
-                Assert.That(all.All(b => b.transform.Find("Border") != null && b.GetComponent<OpenBrowserButton>() == null), Is.True);
-                var buttons = popupObject.GetComponentsInChildren<CHRISNativeButton>();
-                Assert.That(buttons.Select(button => button.name),
-                    Is.EquivalentTo(new[] { "Move CHRIS panel", "Local Stop" }));
+                // The frame is a copy of the wand panels' wireframe border with its outline baked.
+                var border = popupObject.transform.Find("Native panel border");
+                Assert.That(border.GetComponent<BakedMeshOutline>(), Is.Not.Null);
+                Assert.That(border.GetComponent<MeshRenderer>().sharedMaterial.shader,
+                    Is.EqualTo(resources.NativeBorder.GetComponent<MeshRenderer>().sharedMaterial.shader));
+                Assert.That(border.GetComponent<MeshFilter>().sharedMesh.vertexCount,
+                    Is.EqualTo(2 * resources.NativeBorder.GetComponent<MeshFilter>().sharedMesh.vertexCount), "outline baked");
+                // Same transform as the Labs border, so lines and corners are not stretched.
+                Assert.That(border.localScale, Is.EqualTo(resources.NativeBorder.transform.localScale));
+                Physics.SyncTransforms();
+                var size = border.GetComponent<MeshRenderer>().bounds.size;
+                Assert.That(Mathf.Abs(size.x - CHRISNativePopup.Width), Is.LessThan(0.1f));
+                Assert.That(Mathf.Abs(size.y - CHRISNativePopup.Height), Is.LessThan(0.1f));
+                // Every visible control is a native icon button with an icon and a hover description.
+                var icons = popupObject.GetComponentsInChildren<CHRISNativeButton>(true);
+                Assert.That(icons.All(b => b.GetComponent<MeshFilter>().sharedMesh == resources.RoundedMesh &&
+                    b.GetComponent<Renderer>().sharedMaterial.shader == resources.NativeIconMaterial.shader &&
+                    b.GetComponent<Renderer>().sharedMaterial.mainTexture != null), Is.True);
+                Assert.That(icons.Where(b => !b.name.StartsWith("Test case")).All(b => !string.IsNullOrEmpty(b.Hover)), Is.True);
+                var stop = icons.Single(b => b.name == "Local Stop");
+                Assert.That(stop.GetComponent<Renderer>().sharedMaterial.mainTexture.name, Is.EqualTo(CHRISNativePopup.StopIcon));
+                Assert.That(stop.Hover, Is.EqualTo("Stop: CHRIS releases control now"));
+                Assert.That(icons.Single(b => b.name == "Test approve").GetComponent<Renderer>().sharedMaterial.mainTexture.name, Is.EqualTo(CHRISNativePopup.ApproveIcon));
+                Assert.That(icons.Single(b => b.name == "Test decline").GetComponent<Renderer>().sharedMaterial.mainTexture.name, Is.EqualTo(CHRISNativePopup.DeclineIcon));
+                Assert.That(icons.Where(b => b.name.StartsWith("Test case")).All(b =>
+                    b.GetComponent<Renderer>().sharedMaterial.mainTexture.name == CHRISNativePopup.StartIcon && b.Label != null), Is.True);
+                // No Move button: the four border strips move the panel and say so on hover.
+                var strips = popupObject.GetComponentsInChildren<CHRISDragStrip>();
+                Assert.That(strips.Select(b => b.name), Is.EquivalentTo(DragStrips));
+                Assert.That(strips.All(b => b.Hover == "Drag to move" && b.GetComponent<Renderer>() == null), Is.True);
+                Assert.That(popupObject.GetComponentsInChildren<UIComponent>(true).Any(b => b.name.Contains("Move")), Is.False);
+                Assert.That(Icons(popupObject), Is.EquivalentTo(new[] { "Local Stop" }));
                 Assert.That(CHRISNativePopup.StatusLine("Mapping active", true),
                     Is.EqualTo("Mapping active  ·  Brush: Right  ·  Wand: Left"));
                 Assert.That(CHRISNativePopup.ControlLabel("stopped", false, null, false, false, false),
@@ -300,8 +330,7 @@ namespace TiltBrush
                 var popup = popupObject.GetComponent<CHRISNativePopup>();
                 popup.BuildView();
                 Physics.SyncTransforms();
-                var buttons = popupObject.GetComponentsInChildren<CHRISNativeButton>();
-                Assert.That(buttons.Select(b => b.name), Is.EquivalentTo(new[] { "Move CHRIS panel", "Local Stop" }));
+                Assert.That(Icons(popupObject), Is.EquivalentTo(new[] { "Local Stop" }));
                 var cameraObject = new GameObject("CHRIS status preview camera");
                 camera = cameraObject.AddComponent<Camera>();
                 UnityEngine.SceneManagement.SceneManager.MoveGameObjectToScene(cameraObject, scene);
@@ -320,7 +349,8 @@ namespace TiltBrush
                 void Capture(GameObject root, string file)
                 {
                     Physics.SyncTransforms();
-                    var visible = root.GetComponentsInChildren<CHRISNativeButton>().Select(b => b.GetComponent<BoxCollider>().bounds).ToArray();
+                    var visible = root.GetComponentsInChildren<UIComponent>().Where(b => b is CHRISNativeButton || b is CHRISDragStrip)
+                        .Select(b => b.GetComponent<BoxCollider>().bounds).ToArray();
                     for (int a = 0; a < visible.Length; a++)
                         for (int b = a + 1; b < visible.Length; b++)
                             Assert.That(visible[a].Intersects(visible[b]), Is.False, file + ": buttons overlap");
@@ -345,29 +375,74 @@ namespace TiltBrush
                         (5, "Target not on the page"), (2, "Press Escape")), Time.realtimeSinceStartup);
                     popup.RefreshTest();
                     Capture(popupObject, "status-panel-idle.png");
+                    Assert.That(Icons(popupObject).Count(n => n.StartsWith("Test case")), Is.EqualTo(5));
+                    var first = popupObject.GetComponentsInChildren<CHRISNativeButton>().Single(b => b.name == "Test case 1");
+                    Assert.That(first.Label.text, Is.EqualTo("4"));
+                    Assert.That(first.Hover, Is.EqualTo("Start case 4: Request the current brush"));
                     CHRISTestDisplay.Instance.Show(Display(new[] { "Case 1 Happy path: select Light",
                         "Look at the palette, keep the brush trigger released", "Approve to start", "Last: case 4 PASS" },
                         "preview"), Time.realtimeSinceStartup);
                     popup.RefreshTest();
                     Capture(popupObject, "status-panel-test.png");
-                    Assert.That(popupObject.GetComponentsInChildren<CHRISNativeButton>().Select(b => b.name),
-                        Is.EquivalentTo(new[] { "Move CHRIS panel", "Local Stop", "Test approve", "Test decline" }),
-                        "a live approval shows only Approve/Decline beside Move and Stop");
+                    Assert.That(Icons(popupObject), Is.EquivalentTo(new[] { "Local Stop", "Test approve", "Test decline" }),
+                        "a live approval shows only Approve/Decline beside Stop");
                     CHRISTestDisplay.Instance.Tick(Time.realtimeSinceStartup + CHRISTestDisplay.StaleSeconds + 1);
                     popup.RefreshTest();
                     Capture(popupObject, "status-panel-stale.png");
-                    Assert.That(popupObject.GetComponentsInChildren<CHRISNativeButton>().Select(b => b.name),
-                        Is.EquivalentTo(new[] { "Move CHRIS panel", "Local Stop" }), "Stop stays available when stale");
+                    Assert.That(Icons(popupObject), Is.EquivalentTo(new[] { "Local Stop" }), "Stop stays available when stale");
                 }
                 finally { CHRISTestDisplay.ResetForPlay(); }
-                popupObject.SetActive(false);
-                // Open Brush's own What's-new panel at the same scale, for side-by-side comparison.
+                // Open Brush's own Labs panel at the same scale, beside the idle CHRIS panel. Its
+                // border and icons are set up here the way BasePanel.InitPanel and BaseButton do
+                // at runtime, on copies, so the shared assets stay untouched.
                 var native = UnityEngine.Object.Instantiate(
-                    AssetDatabase.LoadAssetAtPath<GameObject>("Assets/Prefabs/Panels/WhatsNewPanel.prefab"));
+                    AssetDatabase.LoadAssetAtPath<GameObject>("Assets/Prefabs/Panels/LabsPanel.prefab"));
                 UnityEngine.SceneManagement.SceneManager.MoveGameObjectToScene(native, scene);
-                native.transform.position = Vector3.zero;
                 native.transform.rotation = Quaternion.identity;
-                Capture(native, "native-whats-new-panel.png");
+                var generated = new System.Collections.Generic.List<UnityEngine.Object>();
+                foreach (var bakery in native.GetComponentsInChildren<BakedMeshOutline>(true))
+                {
+                    var filter = bakery.GetComponent<MeshFilter>();
+                    var copy = UnityEngine.Object.Instantiate(filter.sharedMesh);
+                    generated.Add(copy);
+                    filter.sharedMesh = copy;
+                    bakery.Bake(Color.white, Color.black, 0.02f);
+                    generated.Add(filter.sharedMesh);
+                }
+                foreach (var button in native.GetComponentsInChildren<BaseButton>(true))
+                {
+                    var renderer = button.GetComponent<Renderer>();
+                    var icon = typeof(BaseButton).GetField("m_ButtonTexture", BindingFlags.NonPublic | BindingFlags.Instance).GetValue(button) as Texture2D;
+                    if (renderer == null || icon == null) continue;
+                    var material = new Material(renderer.sharedMaterial) { mainTexture = icon };
+                    generated.Add(material);
+                    renderer.sharedMaterial = material;
+                }
+                try
+                {
+                    Physics.SyncTransforms();
+                    var labBounds = native.GetComponentsInChildren<Renderer>(true).First(r => r.name == "Border").bounds;
+                    File.WriteAllText(output + "/d80-layout.txt", "Labs border world size " + labBounds.size.x.ToString("F3") + " x " +
+                        labBounds.size.y.ToString("F3") + "; CHRIS panel " + CHRISNativePopup.Width + " x " + CHRISNativePopup.Height + "\n");
+                    popupObject.SetActive(false);
+                    native.transform.position = Vector3.zero;
+                    Capture(native, "native-labs-panel.png");
+                    // Side by side: the two captures above, taken with one camera at one scale.
+                    var labs = new Texture2D(2, 2); var chris = new Texture2D(2, 2);
+                    try
+                    {
+                        labs.LoadImage(File.ReadAllBytes(output + "/native-labs-panel.png"));
+                        chris.LoadImage(File.ReadAllBytes(output + "/status-panel-idle.png"));
+                        var pair = new Texture2D(labs.width + chris.width, labs.height, TextureFormat.RGB24, false);
+                        pair.SetPixels32(0, 0, labs.width, labs.height, labs.GetPixels32());
+                        pair.SetPixels32(labs.width, 0, chris.width, chris.height, chris.GetPixels32());
+                        pair.Apply();
+                        File.WriteAllBytes(output + "/status-panel-next-to-labs.png", pair.EncodeToPNG());
+                        UnityEngine.Object.DestroyImmediate(pair);
+                    }
+                    finally { UnityEngine.Object.DestroyImmediate(labs); UnityEngine.Object.DestroyImmediate(chris); }
+                }
+                finally { foreach (var item in generated) if (item != null) UnityEngine.Object.DestroyImmediate(item); }
             }
             finally
             {

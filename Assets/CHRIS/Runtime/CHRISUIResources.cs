@@ -18,42 +18,58 @@ namespace TiltBrush
         public Mesh BorderMesh;
         public Shader IconShader;
         public GameObject PopupPrefab;
-        // Open Brush's own "What's new" panel frame (its stretchable border and background
-        // pieces), the Oswald title font, the What's-new body font and the outlined button used
-        // for "Find out more" (OpenBrowserButton). Shared assets, copied by instantiation and
-        // never owned or destroyed by CHRIS.
-        public GameObject[] NativeFrameParts;
+        // The wireframe border of Open Brush's wand panels (the Labs panel "Border": its rounded
+        // mesh, outline material and BakedMeshOutline), the native icon-button material, the
+        // Oswald title font and the What's-new body font. Shared assets, copied by instantiation
+        // and never owned or destroyed by CHRIS.
+        public GameObject NativeBorder;
+        public Material NativeIconMaterial;
         public TMP_FontAsset NativeFont;
         public TMP_FontAsset NativeBodyFont;
-        public GameObject NativeButtonPrefab;
         public static CHRISUIResources Load() => Resources.Load<CHRISUIResources>("CHRIS/UI");
 
-        // Copies the What's-new frame pieces with their native arrangement and fits their
-        // measured bounds to the panel size.
-        public GameObject NativeWindow(Transform parent, Vector2 size)
+        // Copies the wand-panel border at the Labs panel's own scale, so its line width and corner
+        // radius match Tools and Labs, and bakes its outline the way BasePanel.InitPanel does.
+        public Renderer NativeWindow(Transform parent, Vector2 size, bool advanced)
         {
-            var obj = new GameObject("Native panel frame");
-            obj.transform.SetParent(parent, false);
-            foreach (var part in NativeFrameParts)
-            {
-                var copy = Instantiate(part, obj.transform, false);
-                copy.name = part.name;
-            }
-            foreach (var t in obj.GetComponentsInChildren<Transform>(true)) t.gameObject.layer = parent.gameObject.layer;
-            obj.transform.localPosition = Vector3.zero;
+            var obj = Instantiate(NativeBorder, parent, false);
+            obj.name = "Native panel border";
+            obj.layer = parent.gameObject.layer;
             obj.transform.localRotation = Quaternion.identity;
-            obj.transform.localScale = Vector3.one;
-            var renderers = obj.GetComponentsInChildren<Renderer>(true);
-            var bounds = new Bounds(obj.transform.InverseTransformPoint(renderers[0].bounds.center), Vector3.zero);
-            foreach (var r in renderers)
+            obj.transform.localPosition = Vector3.zero;
+            var filter = obj.GetComponent<MeshFilter>();
+            // BakedMeshOutline bakes into the filter's own mesh instance, never the shared asset.
+            // Outside Play mode a CHRIS copy stands in for that instance.
+            var instance = Application.isPlaying ? filter.mesh : (filter.sharedMesh = Instantiate(filter.sharedMesh));
+            CHRISMaterialOwner.Own(obj, instance);
+            var scale = obj.transform.localScale;
+            FitBorder(instance, new Vector2(size.x / scale.x, size.y / scale.y));
+            var pm = PanelManager.m_Instance;
+            Color line = pm != null ? pm.PanelBorderMeshBaseColor : Color.white;
+            Color shadow = pm != null ? pm.PanelBorderMeshOutlineColor : Color.black;
+            obj.GetComponent<BakedMeshOutline>().Bake(advanced ? line : shadow, advanced ? shadow : line,
+                advanced ? 0.02f : 0.01f);
+            CHRISMaterialOwner.Own(obj, filter.sharedMesh);
+            var renderer = obj.GetComponent<Renderer>();
+            CHRISMaterialOwner.Assign(renderer, new Material(renderer.sharedMaterial));
+            return renderer;
+        }
+
+        // Resizes the rounded border ring like a nine-slice: each vertex moves outward by half the
+        // size change on each axis, so the band width and corners keep their native shape.
+        internal static void FitBorder(Mesh mesh, Vector2 size)
+        {
+            var bounds = mesh.bounds;
+            var grow = new Vector2(size.x - bounds.size.x, size.y - bounds.size.y) / 2;
+            var vertices = mesh.vertices;
+            for (int i = 0; i < vertices.Length; i++)
             {
-                bounds.Encapsulate(obj.transform.InverseTransformPoint(r.bounds.min));
-                bounds.Encapsulate(obj.transform.InverseTransformPoint(r.bounds.max));
+                var v = vertices[i] - bounds.center;
+                vertices[i] = new Vector3(Mathf.Sign(v.x) * (Mathf.Abs(v.x) + grow.x),
+                    Mathf.Sign(v.y) * (Mathf.Abs(v.y) + grow.y), v.z);
             }
-            var scale = new Vector3(size.x / bounds.size.x, size.y / bounds.size.y, 1);
-            obj.transform.localScale = scale;
-            obj.transform.localPosition = -Vector3.Scale(new Vector3(bounds.center.x, bounds.center.y, 0), scale);
-            return obj;
+            mesh.vertices = vertices;
+            mesh.RecalculateBounds();
         }
 
         // Title text as on the What's-new panel: Oswald, centred.
@@ -75,25 +91,48 @@ namespace TiltBrush
             return text;
         }
 
-        // A copy of the What's-new outlined button. Its own script opens a web page, so the copy
-        // gets CHRISNativeButton instead: the same native BaseButton hover, press and input path,
-        // with no URL action. Scaled uniformly so the native label is not stretched.
-        public CHRISNativeButton NativeButton(Transform parent, string name, Vector3 position, float width, string label, Action click)
+        // A native wand-panel icon button: the PanelButton mesh and material with an icon from
+        // Resources/Icons, driven by CHRISNativeButton (native BaseButton hover, press and input).
+        // The hover text is the native button description.
+        public CHRISNativeButton NativeIconButton(Transform parent, string name, Vector3 position, float size,
+            string icon, string hover, Action click)
         {
-            var obj = Instantiate(NativeButtonPrefab, parent, false);
-            obj.name = name;
-            foreach (var t in obj.GetComponentsInChildren<Transform>(true)) t.gameObject.layer = parent.gameObject.layer;
-            foreach (var original in obj.GetComponents<BaseButton>()) DestroyImmediate(original);
-            var nativeScale = NativeButtonPrefab.transform.localScale;
-            var nativeWidth = NativeButtonPrefab.GetComponent<BoxCollider>().size.x * nativeScale.x;
+            var obj = new GameObject(name);
+            obj.SetActive(false);
+            obj.layer = parent.gameObject.layer;
+            obj.transform.SetParent(parent, false);
             obj.transform.localPosition = position;
-            obj.transform.localScale = nativeScale * (width / nativeWidth);
+            obj.transform.localScale = Vector3.one * size;
+            obj.AddComponent<MeshFilter>().sharedMesh = RoundedMesh;
+            var renderer = obj.AddComponent<MeshRenderer>();
+            var material = new Material(NativeIconMaterial);
+            material.mainTexture = Resources.Load<Texture2D>("Icons/" + icon);
+            CHRISMaterialOwner.Assign(renderer, material);
+            obj.AddComponent<BoxCollider>().size = new Vector3(1, 1, 0.1f);
             var button = obj.AddComponent<CHRISNativeButton>();
-            button.Label = obj.GetComponentInChildren<TextMeshPro>(true);
             button.Tint = Color.white;
             button.Click = click;
-            SetLabel(button, label);
+            obj.SetActive(true);
+            // In Play mode BaseButton.Awake replaces the material with its own instance; own that too.
+            if (renderer.sharedMaterial != material) CHRISMaterialOwner.Own(obj, renderer.sharedMaterial);
+            button.SetHover(hover);
             return button;
+        }
+
+        // An invisible strip along the panel border: pressing the trigger on it starts a drag.
+        public CHRISDragStrip DragStrip(Transform parent, string name, Vector3 position, Vector2 size, Action begin)
+        {
+            var obj = new GameObject(name);
+            obj.SetActive(false);
+            obj.layer = parent.gameObject.layer;
+            obj.transform.SetParent(parent, false);
+            obj.transform.localPosition = position;
+            obj.AddComponent<BoxCollider>().size = new Vector3(size.x, size.y, 0.1f);
+            var strip = obj.AddComponent<CHRISDragStrip>();
+            strip.Begin = begin;
+            obj.SetActive(true);
+            strip.SetHover("Drag to move");
+            return strip;
         }
 
         public static void SetLabel(CHRISNativeButton button, string label)

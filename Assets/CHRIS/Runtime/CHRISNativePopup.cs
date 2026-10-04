@@ -7,16 +7,23 @@ using UnityEngine;
 
 namespace TiltBrush
 {
-    // A small, nonmodal status surface styled like Open Brush's "What's new" panel: its frame,
-    // title and body fonts and its outlined native buttons. Mapping review and voice
-    // commands live outside the headset.
+    // A small, nonmodal status surface drawn like Open Brush's wand panels: their wireframe
+    // border and native icon buttons with hover descriptions. The border strips move the panel.
+    // Mapping review and voice commands live outside the headset.
     public class CHRISNativePopup : PopUpWindow
     {
-        public const float Width = 2.6f;
-        public const float Height = 2.8f;
-        public const float ButtonWidth = 0.7f;
+        public const float Width = 2.4f;
+        public const float Height = 3.2f;
+        public const float IconSize = 0.34f;
+        const float DragBand = 0.16f;
+        // Icons from Assets/Resources/Icons; one line each to swap.
+        public const string StopIcon = "power";
+        public const string StartIcon = "play";
+        public const string ApproveIcon = "approve";
+        public const string DeclineIcon = "decline";
 
         CHRISPanel m_Model;
+        Renderer m_Border;
         TextMeshPro m_Status;
         // Test runner area: instructions and buttons come from CHRISTestDisplay.
         readonly TextMeshPro[] m_TestLines = new TextMeshPro[CHRISTestDisplay.MaxLines];
@@ -38,47 +45,65 @@ namespace TiltBrush
             m_TransitionDuration = 0.1f;
             m_ReticleBounds = new Vector3(Width, Height, -0.35f);
             m_PopUpForwardOffset = -0.4f;
-            BuildView();
+            var manager = PanelManager.m_Instance;
+            BuildView(manager == null || manager.AdvancedModeActive());
             base.Init(parent, "");
             m_Model?.Opened(this);
             RefreshStatus();
         }
 
-        public void BuildView()
+        public void BuildView(bool advanced = true)
         {
             var resources = CHRISUIResources.Load();
-            resources.NativeWindow(transform, new Vector2(Width, Height));
-            resources.NativeButton(transform, "Move CHRIS panel", new Vector3(-0.85f, 1.1f, -0.06f), ButtonWidth,
-                "Move", () => (m_ParentPanel as CHRISFloatingPanel)?.BeginDrag());
-            resources.NativeText(transform, "Title", new Vector3(0, 1.1f, -0.04f), new Vector2(0.8f, 0.3f), "CHRIS", 1.1f);
+            m_Border = resources.NativeWindow(transform, new Vector2(Width, Height), advanced);
+            BuildDragStrips(resources);
+            resources.NativeText(transform, "Title", new Vector3(0, 1.22f, -0.04f), new Vector2(1.2f, 0.34f), "CHRIS", 1.2f);
             // Stop is always shown.
-            resources.NativeButton(transform, "Local Stop", new Vector3(0.85f, 1.1f, -0.06f), ButtonWidth, "STOP", LocalStop);
-            m_Status = resources.NativeBody(transform, "Status", new Vector3(0, 0.8f, -0.04f),
-                new Vector2(2.3f, 0.24f), "Physical controllers", 0.58f);
+            resources.NativeIconButton(transform, "Local Stop", new Vector3(0.86f, 1.22f, -0.06f), IconSize,
+                StopIcon, "Stop: CHRIS releases control now", LocalStop);
+            m_Status = resources.NativeBody(transform, "Status", new Vector3(0, 0.86f, -0.04f),
+                new Vector2(2.0f, 0.42f), "Physical controllers", 0.72f);
             BuildTestArea(resources);
         }
 
-        // Up to four instruction lines, eight case Start buttons (three per row) and
-        // Approve/Decline. Buttons stay hidden until the runner shows cases or a live nonce.
+        // Invisible strips along the four border edges start the native drag; the content area
+        // is not a handle, so it never steals a button press.
+        void BuildDragStrips(CHRISUIResources resources)
+        {
+            System.Action drag = () => (m_ParentPanel as CHRISFloatingPanel)?.BeginDrag();
+            float x = (Width - DragBand) / 2, y = (Height - DragBand) / 2;
+            resources.DragStrip(transform, "Drag border top", new Vector3(0, y, -0.06f), new Vector2(Width, DragBand), drag);
+            resources.DragStrip(transform, "Drag border bottom", new Vector3(0, -y, -0.06f), new Vector2(Width, DragBand), drag);
+            resources.DragStrip(transform, "Drag border left", new Vector3(-x, 0, -0.06f),
+                new Vector2(DragBand, Height - 2 * DragBand - 0.01f), drag);
+            resources.DragStrip(transform, "Drag border right", new Vector3(x, 0, -0.06f),
+                new Vector2(DragBand, Height - 2 * DragBand - 0.01f), drag);
+        }
+
+        // Up to four instruction lines, eight case Start icons (two rows of four, each with its
+        // case number) and Approve/Decline. Buttons stay hidden until the runner shows cases or
+        // a live nonce.
         void BuildTestArea(CHRISUIResources resources)
         {
             for (int i = 0; i < m_TestLines.Length; i++)
                 m_TestLines[i] = resources.NativeBody(transform, "Test line " + (i + 1),
-                    new Vector3(0, 0.5f - i * 0.24f, -0.04f), new Vector2(2.3f, 0.24f), "", 0.62f);
+                    new Vector3(0, 0.5f - i * 0.27f, -0.04f), new Vector2(2.0f, 0.27f), "", 0.8f);
             for (int i = 0; i < m_CaseButtons.Length; i++)
             {
                 int slot = i;
-                m_CaseButtons[i] = resources.NativeButton(transform, "Test case " + (i + 1),
-                    new Vector3(-0.8f + (i % 3) * 0.8f, -0.55f - (i / 3) * 0.3f, -0.06f), ButtonWidth * 1.07f, "",
+                var button = resources.NativeIconButton(transform, "Test case " + (i + 1),
+                    new Vector3(-0.69f + (i % 4) * 0.46f, -0.66f - (i / 4) * 0.46f, -0.06f), IconSize, StartIcon, "",
                     () => StartCase(slot));
-                // Case titles are longer than "Find out more"; keep them inside the native outline.
-                m_CaseButtons[i].Label.fontSize *= 0.8f;
-                m_CaseButtons[i].gameObject.SetActive(false);
+                // The case number sits under the icon, sized in panel units despite the icon scale.
+                button.Label = resources.NativeText(button.transform, "Case number", new Vector3(0, -0.66f, 0),
+                    new Vector2(1.4f, 0.4f), "", 0.62f / IconSize);
+                button.gameObject.SetActive(false);
+                m_CaseButtons[i] = button;
             }
-            m_Approve = resources.NativeButton(transform, "Test approve", new Vector3(-0.55f, -0.75f, -0.06f),
-                ButtonWidth * 1.3f, "Approve", () => Decide(true));
-            m_Decline = resources.NativeButton(transform, "Test decline", new Vector3(0.55f, -0.75f, -0.06f),
-                ButtonWidth * 1.3f, "Decline", () => Decide(false));
+            m_Approve = resources.NativeIconButton(transform, "Test approve", new Vector3(-0.4f, -0.85f, -0.06f),
+                IconSize * 1.25f, ApproveIcon, "Approve this case", () => Decide(true));
+            m_Decline = resources.NativeIconButton(transform, "Test decline", new Vector3(0.4f, -0.85f, -0.06f),
+                IconSize * 1.25f, DeclineIcon, "Decline", () => Decide(false));
             m_Approve.gameObject.SetActive(false);
             m_Decline.gameObject.SetActive(false);
         }
@@ -92,11 +117,7 @@ namespace TiltBrush
         void Decide(bool approve) =>
             CHRISTestDisplay.Instance.Decide(approve, Time.realtimeSinceStartup, CHRISCommandGateway.Now);
 
-        internal static string CaseLabel(int id, string title)
-        {
-            string label = id + " " + title;
-            return label.Length > 16 ? label.Substring(0, 14) + ".." : label;
-        }
+        internal static string CaseHover(int id, string title) => "Start case " + id + ": " + title;
 
         internal void RefreshTest()
         {
@@ -113,7 +134,9 @@ namespace TiltBrush
             {
                 bool shown = !live && i < display.Cases.Length;
                 m_CaseButtons[i].gameObject.SetActive(shown);
-                if (shown) CHRISUIResources.SetLabel(m_CaseButtons[i], CaseLabel(display.Cases[i].id, display.Cases[i].title));
+                if (!shown) continue;
+                CHRISUIResources.SetLabel(m_CaseButtons[i], display.Cases[i].id.ToString());
+                m_CaseButtons[i].SetHover(CaseHover(display.Cases[i].id, display.Cases[i].title));
             }
             m_Approve.gameObject.SetActive(live);
             m_Decline.gameObject.SetActive(live);
@@ -186,6 +209,9 @@ namespace TiltBrush
         protected override void BaseUpdate()
         {
             base.BaseUpdate();
+            // Brighten the border under gaze exactly like a native panel border.
+            if (m_Border != null && m_ParentPanel != null && PanelManager.m_Instance != null)
+                m_Border.sharedMaterial.SetColor("_Color", m_ParentPanel.GetGazeColorFromActiveGazePercent());
             RefreshStatus();
         }
 
