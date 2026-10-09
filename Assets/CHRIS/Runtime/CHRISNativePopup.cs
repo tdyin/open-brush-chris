@@ -31,6 +31,9 @@ namespace TiltBrush
         readonly TextMeshPro[] m_TestLines = new TextMeshPro[CHRISTestDisplay.MaxLines];
         readonly CHRISNativeButton[] m_CaseButtons = new CHRISNativeButton[CHRISTestDisplay.MaxCases];
         CHRISNativeButton m_Approve, m_Decline;
+        // The agent's reasoning shares the button area: Approve/Decline first, then reasoning,
+        // then the case Start buttons.
+        TextMeshPro m_ReasoningHeading, m_Reasoning;
         int m_TestVersion = -1;
         bool m_ButtonsLive;
         float m_NextStatusPoll;
@@ -97,6 +100,12 @@ namespace TiltBrush
                 IconSize * 1.25f, DeclineIcon, "Decline", () => Decide(false));
             m_Approve.gameObject.SetActive(false);
             m_Decline.gameObject.SetActive(false);
+            m_ReasoningHeading = resources.NativeText(transform, "Reasoning heading", new Vector3(0, -0.5f, -0.04f),
+                new Vector2(2.0f, 0.2f), "Reasoning", 0.7f, TextAlignmentOptions.Left);
+            m_Reasoning = resources.NativeBody(transform, "Reasoning", new Vector3(0, -1.04f, -0.04f), new Vector2(2.0f, 0.86f),
+                "", 0.8f, TextAlignmentOptions.TopLeft);
+            m_ReasoningHeading.gameObject.SetActive(false);
+            m_Reasoning.gameObject.SetActive(false);
         }
 
         void StartCase(int slot)
@@ -120,10 +129,15 @@ namespace TiltBrush
             m_ButtonsLive = live;
             for (int i = 0; i < m_TestLines.Length; i++)
                 SetText(m_TestLines[i], i < display.Lines.Length ? display.Lines[i] : "");
-            // While an approval is live, only Approve/Decline can be pressed.
+            // While an approval is live, only Approve/Decline can be pressed. Otherwise reasoning,
+            // while an agent case sends it, takes the area of the Start buttons.
+            bool reasoning = !live && display.Reasoning != null;
+            m_ReasoningHeading.gameObject.SetActive(reasoning);
+            m_Reasoning.gameObject.SetActive(reasoning);
+            if (reasoning) SetText(m_Reasoning, display.Reasoning);
             for (int i = 0; i < m_CaseButtons.Length; i++)
             {
-                bool shown = !live && i < display.Cases.Length;
+                bool shown = !live && !reasoning && i < display.Cases.Length;
                 m_CaseButtons[i].gameObject.SetActive(shown);
                 if (!shown) continue;
                 CHRISUIResources.SetLabel(m_CaseButtons[i], display.Cases[i].id.ToString());

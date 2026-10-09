@@ -106,9 +106,10 @@ namespace TiltBrush
 
         // Body text in the What's-new body font, left aligned, in full white (the font's default
         // material is translucent grey).
-        public TextMeshPro NativeBody(Transform parent, string name, Vector3 position, Vector2 size, string value, float fontSize)
+        public TextMeshPro NativeBody(Transform parent, string name, Vector3 position, Vector2 size, string value, float fontSize,
+            TextAlignmentOptions alignment = TextAlignmentOptions.Left)
         {
-            var text = Text(parent, name, position, size, value, fontSize, TextAlignmentOptions.Left);
+            var text = Text(parent, name, position, size, value, fontSize, alignment);
             text.font = NativeBodyFont;
             text.fontSharedMaterial = BodyMaterial;
             return text;

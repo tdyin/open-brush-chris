@@ -400,9 +400,38 @@ namespace TiltBrush
                     Capture(popupObject, "status-panel-test.png");
                     Assert.That(Icons(popupObject), Is.EquivalentTo(new[] { "Local Stop", "Test approve", "Test decline" }),
                         "a live approval shows only Approve/Decline beside Stop");
+                    // An agent case running: its reasoning takes the Start buttons' area (D89).
+                    var agent = Display(new[] { "Case 7: Agent: ink-like brush", "Agent: select Velvet Ink - name suggests ink",
+                        "Agent: aiming at Velvet Ink", "Step 3 of 16" }, null, (6, "Agent: warm brush"), (7, "Agent: ink-like brush"));
+                    agent["reasoning"] = "The goal asks for an ink-like brush. The palette page shows Velvet Ink, Ink and " +
+                        "Marker; Velvet Ink is the closest name and is interactable, so I aim at it first, check the hover, " +
+                        "then press once. If the hover differs I re-aim instead of pressing.";
+                    CHRISTestDisplay.Instance.Show(agent, Time.realtimeSinceStartup);
+                    popup.RefreshTest();
+                    Capture(popupObject, "status-panel-reasoning.png");
+                    Assert.That(Icons(popupObject), Is.EquivalentTo(new[] { "Local Stop" }), "reasoning replaces the Start buttons");
+                    Assert.That(popupObject.transform.Find("Reasoning").gameObject.activeSelf, Is.True);
+                    var reasoningText = popupObject.transform.Find("Reasoning").GetComponent<TextMeshPro>();
+                    reasoningText.ForceMeshUpdate();
+                    Assert.That(reasoningText.isTextTruncated, Is.False);
+                    // Worst case: a full-length summary of ordinary words still fits without truncation.
+                    var full = string.Concat(Enumerable.Repeat("Velvet Ink is the closest ink-like brush on this page. ", 8))
+                        .Substring(0, CHRISTestDisplay.MaxReasoningLength);
+                    agent["reasoning"] = full;
+                    CHRISTestDisplay.Instance.Show(agent, Time.realtimeSinceStartup);
+                    popup.RefreshTest();
+                    reasoningText.ForceMeshUpdate();
+                    Assert.That(reasoningText.isTextTruncated, Is.False, "a 400-char summary fits");
+                    Capture(popupObject, "status-panel-reasoning-full.png");
+                    agent["nonce"] = "preview2"; agent["buttons"] = new Newtonsoft.Json.Linq.JArray("approve", "decline");
+                    CHRISTestDisplay.Instance.Show(agent, Time.realtimeSinceStartup);
+                    popup.RefreshTest();
+                    Assert.That(Icons(popupObject), Is.EquivalentTo(new[] { "Local Stop", "Test approve", "Test decline" }));
+                    Assert.That(popupObject.transform.Find("Reasoning").gameObject.activeSelf, Is.False, "a live approval takes the area");
                     CHRISTestDisplay.Instance.Tick(Time.realtimeSinceStartup + CHRISTestDisplay.StaleSeconds + 1);
                     popup.RefreshTest();
                     Capture(popupObject, "status-panel-stale.png");
+                    Assert.That(popupObject.transform.Find("Reasoning").gameObject.activeSelf, Is.False);
                     Assert.That(Icons(popupObject), Is.EquivalentTo(new[] { "Local Stop" }), "Stop stays available when stale");
                 }
                 finally { CHRISTestDisplay.ResetForPlay(); }

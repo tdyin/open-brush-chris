@@ -15,6 +15,9 @@ namespace TiltBrush
     public sealed class CHRISTestDisplay
     {
         public const int MaxLines = 4, MaxLineLength = 80, MaxCases = 8, MaxTitleLength = 60, MaxTtl = 60, RingSize = 32;
+        // The agent's latest reasoning, wrapped in its own panel area (D89). Optional: absent and
+        // null are the same.
+        public const int MaxReasoningLength = 400;
         // The runner refreshes its idle display every 30 s; after this long it is presumed gone.
         public const float StaleSeconds = 70;
         public const string NotConnected = "CHRIS tests not connected";
@@ -30,6 +33,7 @@ namespace TiltBrush
         long m_Seq;
 
         public string[] Lines { get; private set; } = new string[0];
+        public string Reasoning { get; private set; }
         public string Nonce { get; private set; }
         public (int id, string title)[] Cases { get; private set; } = new (int, string)[0];
         public long Latest => m_Seq;
@@ -47,8 +51,12 @@ namespace TiltBrush
         public static string Validate(JObject d)
         {
             var fields = new[] { "lines", "nonce", "buttons", "cases", "ttl_s" };
-            if (d == null || !d.Properties().All(p => fields.Contains(p.Name)) || !fields.All(f => d[f] != null))
+            if (d == null || !d.Properties().All(p => fields.Contains(p.Name) || p.Name == "reasoning") || !fields.All(f => d[f] != null))
                 return "Invalid display fields";
+            var reasoning = d["reasoning"];
+            if (reasoning != null && !IsNull(reasoning) && (reasoning.Type != JTokenType.String ||
+                ((string)reasoning).Length > MaxReasoningLength || ((string)reasoning).Any(char.IsControl)))
+                return "Invalid reasoning";
             if (!(d["lines"] is JArray lines) || lines.Count > MaxLines ||
                 lines.Any(l => l.Type != JTokenType.String || ((string)l).Length > MaxLineLength))
                 return "Invalid lines";
@@ -80,6 +88,7 @@ namespace TiltBrush
             bool wasEmpty = Empty;
             m_LastShow = now;
             Lines = ((JArray)d["lines"]).Select(l => (string)l).ToArray();
+            Reasoning = d["reasoning"] == null || IsNull(d["reasoning"]) ? null : (string)d["reasoning"];
             Nonce = IsNull(d["nonce"]) ? null : (string)d["nonce"];
             m_NonceExpiry = now + (long)d["ttl_s"];
             Cases = ((JArray)d["cases"]).Select(c => ((int)(long)c["id"], (string)c["title"])).ToArray();
@@ -98,6 +107,7 @@ namespace TiltBrush
             if (!Empty && now - m_LastShow >= StaleSeconds && !(Lines.Length == 1 && Lines[0] == NotConnected))
             {
                 Lines = new[] { NotConnected };
+                Reasoning = null;
                 Cases = new (int, string)[0];
                 Nonce = null;
                 OpenPending = false;

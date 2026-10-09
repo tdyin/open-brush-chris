@@ -448,6 +448,20 @@ namespace TiltBrush
             var dupCase = Display(null, 30, (1, "a"), (1, "b"));
             foreach (var bad in new[] { noNonce, extra, longLine, dupCase, Display(null, 0), Display(null, 61), Display("bad/nonce") })
                 Assert.That(CHRISTestDisplay.Validate(bad), Is.Not.Null, bad.ToString());
+            // D89 reasoning: optional; absent and null are equal; at most 400 chars, no control characters.
+            JObject WithReasoning(JToken value, string nonce = null) { var d = Display(nonce); d["reasoning"] = value; return d; }
+            foreach (var good in new[] { WithReasoning(JValue.CreateNull()), WithReasoning(new string('r', 400)), WithReasoning("Fire looks hot", "n1") })
+                Assert.That(CHRISTestDisplay.Validate(good), Is.Null, good.ToString());
+            foreach (var bad in new[] { WithReasoning(new string('r', 401)), WithReasoning(3), WithReasoning("two\nlines"), WithReasoning("tab\t") })
+                Assert.That(CHRISTestDisplay.Validate(bad), Is.EqualTo("Invalid reasoning"), bad.ToString());
+            var shown = new CHRISTestDisplay();
+            shown.Show(WithReasoning("Velvet Ink: the name suggests ink"), 0);
+            Assert.That(shown.Reasoning, Is.EqualTo("Velvet Ink: the name suggests ink"));
+            shown.Show(Display(), 1);
+            Assert.That(shown.Reasoning, Is.Null, "a display without reasoning clears it");
+            shown.Show(WithReasoning("stale"), 2);
+            shown.Tick(2 + CHRISTestDisplay.StaleSeconds + 1);
+            Assert.That(shown.Reasoning, Is.Null, "a stale display clears reasoning");
 
             var display = new CHRISTestDisplay();
             Assert.That(display.Decide(true, 0, 1000), Is.False, "no display: approve is inert");
