@@ -191,10 +191,16 @@ namespace TiltBrush
                 Assert.That(popupObject.GetComponentsInChildren<UIComponent>(true).Any(b => b.name.Contains("Move")), Is.False);
                 var title = popupObject.transform.Find("Title");
                 Assert.That(Vector3.Distance(strips[0].transform.localPosition, title.localPosition), Is.LessThan(0.03f));
-                // The What's-new black background sits inside the frame, behind the content.
+                // One What's-new black background piece fills the frame without a join, behind the content.
                 var background = popupObject.transform.Find("Native panel background");
-                Assert.That(background.childCount, Is.EqualTo(resources.NativeBackgroundParts.Length));
+                Assert.That(background.GetComponent<MeshRenderer>().sharedMaterial,
+                    Is.EqualTo(resources.NativeBackgroundPiece.GetComponent<MeshRenderer>().sharedMaterial));
                 Assert.That(background.localPosition.z, Is.GreaterThan(border.localPosition.z));
+                Assert.That(popupObject.GetComponentsInChildren<MeshRenderer>(true)
+                    .Count(r => r.sharedMaterial == background.GetComponent<MeshRenderer>().sharedMaterial), Is.EqualTo(1));
+                var fill = background.GetComponent<MeshRenderer>().bounds.size;
+                Assert.That(Mathf.Abs(fill.x - (CHRISNativePopup.Width - 0.12f)), Is.LessThan(0.05f));
+                Assert.That(Mathf.Abs(fill.y - (CHRISNativePopup.Height - 0.12f)), Is.LessThan(0.05f));
                 Assert.That(popupObject.GetComponentsInChildren<TextMeshPro>(true).Where(t => t.font == resources.NativeBodyFont)
                     .All(t => t.fontSharedMaterial == resources.BodyMaterial), Is.True, "Body text is full white");
                 Assert.That(Icons(popupObject), Is.EquivalentTo(new[] { "Local Stop" }));

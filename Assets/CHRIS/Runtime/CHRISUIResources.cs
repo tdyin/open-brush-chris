@@ -19,11 +19,11 @@ namespace TiltBrush
         public Shader IconShader;
         public GameObject PopupPrefab;
         // The wireframe border of Open Brush's wand panels (the Labs panel "Border": its rounded
-        // mesh, outline material and BakedMeshOutline), the What's-new panel's black background
-        // pieces, the native icon-button material, the Oswald title font and the What's-new body
+        // mesh, outline material and BakedMeshOutline), a What's-new panel black background
+        // piece, the native icon-button material, the Oswald title font and the What's-new body
         // font. Shared assets, copied by instantiation and never owned or destroyed by CHRIS.
         public GameObject NativeBorder;
-        public GameObject[] NativeBackgroundParts;
+        public GameObject NativeBackgroundPiece;
         public Material NativeIconMaterial;
         public TMP_FontAsset NativeFont;
         public TMP_FontAsset NativeBodyFont;
@@ -56,34 +56,28 @@ namespace TiltBrush
             return renderer;
         }
 
-        // Copies the What's-new background pieces in their native arrangement and fits their
-        // measured bounds to the given size, behind the content and border.
+        // One What's-new background piece, resized like a nine-slice to the given size so it is a
+        // single rounded fill with native corners (the native panel joins two halves under its
+        // border; one piece has no join). Sits behind the content and border.
         public GameObject NativeBackground(Transform parent, Vector2 size)
         {
-            var obj = new GameObject("Native panel background");
+            var obj = Instantiate(NativeBackgroundPiece, parent, false);
+            obj.name = "Native panel background";
             obj.layer = parent.gameObject.layer;
-            obj.transform.SetParent(parent, false);
-            foreach (var part in NativeBackgroundParts)
-            {
-                var copy = Instantiate(part, obj.transform, false);
-                copy.name = part.name;
-                copy.layer = obj.layer;
-            }
-            var renderers = obj.GetComponentsInChildren<Renderer>(true);
-            var bounds = new Bounds(obj.transform.InverseTransformPoint(renderers[0].bounds.center), Vector3.zero);
-            foreach (var r in renderers)
-            {
-                bounds.Encapsulate(obj.transform.InverseTransformPoint(r.bounds.min));
-                bounds.Encapsulate(obj.transform.InverseTransformPoint(r.bounds.max));
-            }
-            var scale = new Vector3(size.x / bounds.size.x, size.y / bounds.size.y, 1);
-            obj.transform.localScale = scale;
-            obj.transform.localPosition = new Vector3(-bounds.center.x * scale.x, -bounds.center.y * scale.y, 0.03f);
+            obj.transform.localRotation = Quaternion.identity;
+            obj.transform.localPosition = new Vector3(0, 0, 0.03f);
+            var scale = obj.transform.localScale;
+            var filter = obj.GetComponent<MeshFilter>();
+            var copy = Instantiate(filter.sharedMesh);
+            CHRISMaterialOwner.Own(obj, copy);
+            filter.sharedMesh = copy;
+            FitBorder(copy, new Vector2(size.x / scale.x, size.y / scale.y));
             return obj;
         }
 
-        // Resizes the rounded border ring like a nine-slice: each vertex moves outward by half the
-        // size change on each axis, so the band width and corners keep their native shape.
+        // Resizes a rounded mesh like a nine-slice: each vertex moves outward by half the size
+        // change on each axis, so band widths and corners keep their native shape. Vertices on a
+        // centre line stay on it.
         internal static void FitBorder(Mesh mesh, Vector2 size)
         {
             var bounds = mesh.bounds;
@@ -92,12 +86,13 @@ namespace TiltBrush
             for (int i = 0; i < vertices.Length; i++)
             {
                 var v = vertices[i] - bounds.center;
-                vertices[i] = new Vector3(Mathf.Sign(v.x) * (Mathf.Abs(v.x) + grow.x),
-                    Mathf.Sign(v.y) * (Mathf.Abs(v.y) + grow.y), v.z);
+                vertices[i] = new Vector3(Grow(v.x, grow.x), Grow(v.y, grow.y), v.z);
             }
             mesh.vertices = vertices;
             mesh.RecalculateBounds();
         }
+
+        static float Grow(float v, float grow) => Mathf.Abs(v) < 1e-5f ? v : Mathf.Sign(v) * (Mathf.Abs(v) + grow);
 
         // Title text as on the What's-new panel: Oswald, centred.
         public TextMeshPro NativeText(Transform parent, string name, Vector3 position, Vector2 size, string value,
