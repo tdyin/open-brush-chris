@@ -347,9 +347,25 @@ the first attempt, with editor foreground True, XR FOCUSED and "CHRIS test panel
 - XR focus dropped several times (headset off, Meta overlay) and recovered without a
   relaunch.
 
-The snapshot check after Unity closed found zero source differences. Requested next (D83,
-not implemented): a black background with white text inside the frame, and dragging by the
-"CHRIS" title.
+The snapshot check after Unity closed found zero source differences. Requested next (D83)
+was a black background with white text inside the frame and dragging by the "CHRIS" title;
+both were then built (`816fb6a5`, with a seamless single background piece in `5611bfac`).
+
+Headset session 2026-10-09 evening (session 6, D84/D86, Link, Unity Play mode at
+`5611bfac`, evidence in `agent/logs/headset-20261009b/`): Bac's remote-model agent (preset
+cases 6 and 7, started and approved from the panel) chose its own steps with the existing
+lease tools; no native change was needed. Four leases were acquired and four released
+("return physical"), with no revokes, expiries or lost heartbeats and no exceptions:
+- Lease 1: three aims timed out (target not hovered within 2 s, hover frames 0), then two
+  aims succeeded (873 and 808 ms, 3 hover frames) and one press succeeded (trigger held
+  111 ms). The run took about 8 s of its 30 s.
+- Leases 2 and 3: one aim (387 and 379 ms) and one press (held 106 and 111 ms) each.
+- Lease 4: one aim (248 ms), then a press that native refused ("Hover target differs from
+  expected target", trigger held 0 ms, nothing clicked), a second aim (40 ms) and a press
+  (held 112 ms).
+That is 4 successful presses, 6 successful aims, 3 aim timeouts and 1 refused press. XR focus
+dropped and recovered repeatedly (headset or Meta overlay) without a relaunch. Per-run
+before/after brush verdicts are in Bac's logs. `procedure-summary.txt` lists every step.
 
 Overlapping wand panels (2026-10-04): the editor's saved advanced layout
 (`HKCU\Software\Unity\UnityEditor\Icosa Foundation\Open Brush`, value
