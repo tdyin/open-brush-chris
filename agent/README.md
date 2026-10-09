@@ -331,8 +331,25 @@ Stop `power`, Start case `play` (number below), Approve `approve`, Decline `decl
 are set as constants in `CHRISNativePopup`. There is no Move button: four invisible
 `CHRISDragStrip` border strips start the drag ("Drag to move"). Offline: 109 methods pass
 (`agent/logs/native-ui-runs/`, previews including `status-panel-next-to-labs.png` in
-`agent/logs/native-ui/`). Hover text, gaze brightening, clicks and drag are not yet
-verified live.
+`agent/logs/native-ui/`).
+
+Headset session 2026-10-09 (session 5, Link, Unity Play mode at `d16d19b5`, Bac's `chris
+test --session`, evidence in `agent/logs/headset-20261009/`): the launcher entered Play on
+the first attempt, with editor foreground True, XR FOCUSED and "CHRIS test panel opened".
+- Reset Panels fixed the overlapping wand panels. It is under More Options... on the main
+  wand panel, then Reset Panels, two clicks.
+- The user confirmed live that the wand-style panel's icon buttons, hover text and border
+  drag work.
+- Six case 1 runs were started and approved by physical clicks on the panel's icon buttons
+  (one further Start was declined). Each acquired a lease, aimed (345-364 ms, 3 hover
+  frames), pressed (trigger held 105-111 ms) and released, returning physical, alternating
+  Fire and Light. No exceptions were logged.
+- XR focus dropped several times (headset off, Meta overlay) and recovered without a
+  relaunch.
+
+The snapshot check after Unity closed found zero source differences. Requested next (D83,
+not implemented): a black background with white text inside the frame, and dragging by the
+"CHRIS" title.
 
 Overlapping wand panels (2026-10-04): the editor's saved advanced layout
 (`HKCU\Software\Unity\UnityEditor\Icosa Foundation\Open Brush`, value
