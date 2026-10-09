@@ -8,14 +8,16 @@ using UnityEngine;
 namespace TiltBrush
 {
     // A small, nonmodal status surface drawn like Open Brush's wand panels: their wireframe
-    // border and native icon buttons with hover descriptions. The border strips move the panel.
+    // border around the What's-new black background, and native icon buttons with hover
+    // descriptions. The "CHRIS" title moves the panel.
     // Mapping review and voice commands live outside the headset.
     public class CHRISNativePopup : PopUpWindow
     {
         public const float Width = 2.4f;
         public const float Height = 3.2f;
         public const float IconSize = 0.34f;
-        const float DragBand = 0.16f;
+        // Inset of the black background inside the wire border.
+        const float BackgroundInset = 0.06f;
         // Icons from Assets/Resources/Icons; one line each to swap.
         public const string StopIcon = "power";
         public const string StartIcon = "play";
@@ -55,29 +57,18 @@ namespace TiltBrush
         public void BuildView(bool advanced = true)
         {
             var resources = CHRISUIResources.Load();
+            resources.NativeBackground(transform, new Vector2(Width - 2 * BackgroundInset, Height - 2 * BackgroundInset));
             m_Border = resources.NativeWindow(transform, new Vector2(Width, Height), advanced);
-            BuildDragStrips(resources);
             resources.NativeText(transform, "Title", new Vector3(0, 1.22f, -0.04f), new Vector2(1.2f, 0.34f), "CHRIS", 1.2f);
+            // The title is the drag handle; the content and border are not.
+            resources.DragStrip(transform, "Drag title", new Vector3(0, 1.22f, -0.06f), new Vector2(1.2f, 0.34f),
+                () => (m_ParentPanel as CHRISFloatingPanel)?.BeginDrag());
             // Stop is always shown.
             resources.NativeIconButton(transform, "Local Stop", new Vector3(0.86f, 1.22f, -0.06f), IconSize,
                 StopIcon, "Stop: CHRIS releases control now", LocalStop);
             m_Status = resources.NativeBody(transform, "Status", new Vector3(0, 0.86f, -0.04f),
                 new Vector2(2.0f, 0.42f), "Physical controllers", 0.72f);
             BuildTestArea(resources);
-        }
-
-        // Invisible strips along the four border edges start the native drag; the content area
-        // is not a handle, so it never steals a button press.
-        void BuildDragStrips(CHRISUIResources resources)
-        {
-            System.Action drag = () => (m_ParentPanel as CHRISFloatingPanel)?.BeginDrag();
-            float x = (Width - DragBand) / 2, y = (Height - DragBand) / 2;
-            resources.DragStrip(transform, "Drag border top", new Vector3(0, y, -0.06f), new Vector2(Width, DragBand), drag);
-            resources.DragStrip(transform, "Drag border bottom", new Vector3(0, -y, -0.06f), new Vector2(Width, DragBand), drag);
-            resources.DragStrip(transform, "Drag border left", new Vector3(-x, 0, -0.06f),
-                new Vector2(DragBand, Height - 2 * DragBand - 0.01f), drag);
-            resources.DragStrip(transform, "Drag border right", new Vector3(x, 0, -0.06f),
-                new Vector2(DragBand, Height - 2 * DragBand - 0.01f), drag);
         }
 
         // Up to four instruction lines, eight case Start icons (two rows of four, each with its

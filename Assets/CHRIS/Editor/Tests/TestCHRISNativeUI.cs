@@ -145,7 +145,7 @@ namespace TiltBrush
             Assert.That(menuCollider.center, Is.EqualTo(new Vector3(0, 0, -0.0125f)));
         }
 
-        static readonly string[] DragStrips = { "Drag border top", "Drag border bottom", "Drag border left", "Drag border right" };
+        static readonly string[] DragStrips = { "Drag title" };
 
         internal static string[] Icons(GameObject root) => root.GetComponentsInChildren<CHRISNativeButton>()
             .Select(b => b.name).ToArray();
@@ -184,11 +184,19 @@ namespace TiltBrush
                 Assert.That(icons.Single(b => b.name == "Test decline").GetComponent<Renderer>().sharedMaterial.mainTexture.name, Is.EqualTo(CHRISNativePopup.DeclineIcon));
                 Assert.That(icons.Where(b => b.name.StartsWith("Test case")).All(b =>
                     b.GetComponent<Renderer>().sharedMaterial.mainTexture.name == CHRISNativePopup.StartIcon && b.Label != null), Is.True);
-                // No Move button: the four border strips move the panel and say so on hover.
+                // No Move button: the "CHRIS" title moves the panel and says so on hover.
                 var strips = popupObject.GetComponentsInChildren<CHRISDragStrip>();
                 Assert.That(strips.Select(b => b.name), Is.EquivalentTo(DragStrips));
                 Assert.That(strips.All(b => b.Hover == "Drag to move" && b.GetComponent<Renderer>() == null), Is.True);
                 Assert.That(popupObject.GetComponentsInChildren<UIComponent>(true).Any(b => b.name.Contains("Move")), Is.False);
+                var title = popupObject.transform.Find("Title");
+                Assert.That(Vector3.Distance(strips[0].transform.localPosition, title.localPosition), Is.LessThan(0.03f));
+                // The What's-new black background sits inside the frame, behind the content.
+                var background = popupObject.transform.Find("Native panel background");
+                Assert.That(background.childCount, Is.EqualTo(resources.NativeBackgroundParts.Length));
+                Assert.That(background.localPosition.z, Is.GreaterThan(border.localPosition.z));
+                Assert.That(popupObject.GetComponentsInChildren<TextMeshPro>(true).Where(t => t.font == resources.NativeBodyFont)
+                    .All(t => t.fontSharedMaterial == resources.BodyMaterial), Is.True, "Body text is full white");
                 Assert.That(Icons(popupObject), Is.EquivalentTo(new[] { "Local Stop" }));
                 Assert.That(CHRISNativePopup.StatusLine("Mapping active", true),
                     Is.EqualTo("Mapping active  ·  Brush: Right  ·  Wand: Left"));

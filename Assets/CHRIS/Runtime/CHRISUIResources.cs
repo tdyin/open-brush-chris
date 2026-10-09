@@ -19,10 +19,11 @@ namespace TiltBrush
         public Shader IconShader;
         public GameObject PopupPrefab;
         // The wireframe border of Open Brush's wand panels (the Labs panel "Border": its rounded
-        // mesh, outline material and BakedMeshOutline), the native icon-button material, the
-        // Oswald title font and the What's-new body font. Shared assets, copied by instantiation
-        // and never owned or destroyed by CHRIS.
+        // mesh, outline material and BakedMeshOutline), the What's-new panel's black background
+        // pieces, the native icon-button material, the Oswald title font and the What's-new body
+        // font. Shared assets, copied by instantiation and never owned or destroyed by CHRIS.
         public GameObject NativeBorder;
+        public GameObject[] NativeBackgroundParts;
         public Material NativeIconMaterial;
         public TMP_FontAsset NativeFont;
         public TMP_FontAsset NativeBodyFont;
@@ -55,6 +56,32 @@ namespace TiltBrush
             return renderer;
         }
 
+        // Copies the What's-new background pieces in their native arrangement and fits their
+        // measured bounds to the given size, behind the content and border.
+        public GameObject NativeBackground(Transform parent, Vector2 size)
+        {
+            var obj = new GameObject("Native panel background");
+            obj.layer = parent.gameObject.layer;
+            obj.transform.SetParent(parent, false);
+            foreach (var part in NativeBackgroundParts)
+            {
+                var copy = Instantiate(part, obj.transform, false);
+                copy.name = part.name;
+                copy.layer = obj.layer;
+            }
+            var renderers = obj.GetComponentsInChildren<Renderer>(true);
+            var bounds = new Bounds(obj.transform.InverseTransformPoint(renderers[0].bounds.center), Vector3.zero);
+            foreach (var r in renderers)
+            {
+                bounds.Encapsulate(obj.transform.InverseTransformPoint(r.bounds.min));
+                bounds.Encapsulate(obj.transform.InverseTransformPoint(r.bounds.max));
+            }
+            var scale = new Vector3(size.x / bounds.size.x, size.y / bounds.size.y, 1);
+            obj.transform.localScale = scale;
+            obj.transform.localPosition = new Vector3(-bounds.center.x * scale.x, -bounds.center.y * scale.y, 0.03f);
+            return obj;
+        }
+
         // Resizes the rounded border ring like a nine-slice: each vertex moves outward by half the
         // size change on each axis, so the band width and corners keep their native shape.
         internal static void FitBorder(Mesh mesh, Vector2 size)
@@ -82,12 +109,13 @@ namespace TiltBrush
             return text;
         }
 
-        // Body text as on the What's-new panel: its body font, left aligned.
+        // Body text in the What's-new body font, left aligned, in full white (the font's default
+        // material is translucent grey).
         public TextMeshPro NativeBody(Transform parent, string name, Vector3 position, Vector2 size, string value, float fontSize)
         {
             var text = Text(parent, name, position, size, value, fontSize, TextAlignmentOptions.Left);
             text.font = NativeBodyFont;
-            text.fontSharedMaterial = NativeBodyFont.material;
+            text.fontSharedMaterial = BodyMaterial;
             return text;
         }
 
