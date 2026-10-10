@@ -21,6 +21,8 @@ namespace TiltBrush
         // The runner refreshes its idle display every 30 s; after this long it is presumed gone.
         public const float StaleSeconds = 70;
         public const string NotConnected = "CHRIS tests not connected";
+        // Shown when an empty display (the runner's exit clear) replaces a live one (D105).
+        public const string SessionEnded = "CHRIS test session ended";
         static readonly Regex s_Id = new Regex("\\A[A-Za-z0-9_-]{1,80}\\z");
 
         public static CHRISTestDisplay Instance { get; private set; } = new CHRISTestDisplay();
@@ -45,6 +47,8 @@ namespace TiltBrush
 
         public bool ButtonsLive(float now) => Nonce != null && now < m_NonceExpiry;
         bool Empty => Lines.Length == 0 && Cases.Length == 0;
+        // A native status line in place of a runner display; a new session starts fresh after it.
+        bool Placeholder => Cases.Length == 0 && Lines.Length == 1 && (Lines[0] == NotConnected || Lines[0] == SessionEnded);
 
         static bool IsNull(JToken token) => token.Type == JTokenType.Null || (token is JValue v && v.Value == null);
 
@@ -85,17 +89,24 @@ namespace TiltBrush
 
         public long Show(JObject d, float now, out bool opened)
         {
-            bool wasEmpty = Empty;
+            // "Session ended" reopens like a blank display did before it existed; "not connected"
+            // never reopens a panel the user may have closed while the runner was gone.
+            bool wasBlank = Empty, wasPlaceholder = Placeholder;
+            bool wasEmpty = wasBlank || wasPlaceholder && Lines[0] == SessionEnded;
+            var previous = Lines;
             m_LastShow = now;
             Lines = ((JArray)d["lines"]).Select(l => (string)l).ToArray();
             Reasoning = d["reasoning"] == null || IsNull(d["reasoning"]) ? null : (string)d["reasoning"];
             Nonce = IsNull(d["nonce"]) ? null : (string)d["nonce"];
             m_NonceExpiry = now + (long)d["ttl_s"];
             Cases = ((JArray)d["cases"]).Select(c => ((int)(long)c["id"], (string)c["title"])).ToArray();
+            // The runner clears the display only when its session exits; say so rather than blank.
+            // A clear over a native status line keeps that line.
+            if (Empty && !wasBlank) Lines = wasPlaceholder ? previous : new[] { SessionEnded };
             Version++;
-            opened = wasEmpty && !Empty;
+            opened = wasEmpty && !Empty && !Placeholder;
             if (opened) OpenPending = true;
-            if (Empty) OpenPending = false;
+            if (Empty || Placeholder) OpenPending = false;
             return m_Seq;
         }
 
@@ -104,7 +115,7 @@ namespace TiltBrush
         public void Tick(float now)
         {
             if (Nonce != null && now >= m_NonceExpiry) { Nonce = null; Version++; }
-            if (!Empty && now - m_LastShow >= StaleSeconds && !(Lines.Length == 1 && Lines[0] == NotConnected))
+            if (!Empty && !Placeholder && now - m_LastShow >= StaleSeconds)
             {
                 Lines = new[] { NotConnected };
                 Reasoning = null;

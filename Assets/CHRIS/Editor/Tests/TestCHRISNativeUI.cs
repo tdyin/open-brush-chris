@@ -461,6 +461,24 @@ namespace TiltBrush
                     Capture(popupObject, "status-panel-test.png");
                     Assert.That(Icons(popupObject), Is.EquivalentTo(new[] { "Local Stop", "Test approve", "Test decline" }),
                         "a live approval shows only Approve/Decline beside Stop");
+                    // Long instruction lines (D105): 80 characters of ordinary words wrap onto two
+                    // rows inside each line box without the "..." cut.
+                    var longLines = Display(new[] {
+                        "Case 8: Agent: draw an owl - large round eyes, ear tufts and soft chest feathers",
+                        "Why: Add a clear beak and a few soft feather marks so the owl reads as finished.",
+                        "Agent: drawing 5 strokes (15/40); each stroke follows the frame at 0.4 m/s, ok..",
+                        "Step 4 of 20; Escape stops it, and Stop on this panel ends the drawing at once!!" }, null);
+                    foreach (var line in ((Newtonsoft.Json.Linq.JArray)longLines["lines"]).Select(l => (string)l))
+                        Assert.That(line.Length, Is.EqualTo(CHRISTestDisplay.MaxLineLength), line);
+                    CHRISTestDisplay.Instance.Show(longLines, Time.realtimeSinceStartup);
+                    popup.RefreshTest();
+                    Capture(popupObject, "status-panel-long-lines.png");
+                    for (int i = 0; i < CHRISTestDisplay.MaxLines; i++)
+                    {
+                        var text = popupObject.transform.Find("Test line " + (i + 1)).GetComponent<TextMeshPro>();
+                        text.ForceMeshUpdate();
+                        Assert.That(text.isTextTruncated, Is.False, "line " + (i + 1) + " fits in two rows");
+                    }
                     // An agent case running: its reasoning takes the Start buttons' area (D89).
                     var agent = Display(new[] { "Case 7: Agent: ink-like brush", "Agent: select Velvet Ink - name suggests ink",
                         "Agent: aiming at Velvet Ink", "Step 3 of 16" }, null, (6, "Agent: warm brush"), (7, "Agent: ink-like brush"));

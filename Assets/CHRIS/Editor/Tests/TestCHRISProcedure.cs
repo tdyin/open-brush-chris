@@ -456,6 +456,30 @@ namespace TiltBrush
                 Assert.That(CHRISTestDisplay.Validate(good), Is.Null, good.ToString());
             foreach (var bad in new[] { WithReasoning(new string('r', 401)), WithReasoning(3), WithReasoning("two\nlines"), WithReasoning("tab\t") })
                 Assert.That(CHRISTestDisplay.Validate(bad), Is.EqualTo("Invalid reasoning"), bad.ToString());
+            // D105: an exit clear after a live display says the session ended; staleness leaves
+            // that line alone, and the next session's first display opens the panel again.
+            var ending = new CHRISTestDisplay();
+            Assert.That(ending.Show(Display(null, 30, (1, "a")), 0, out bool firstOpened) >= 0 && firstOpened, Is.True);
+            ending.PanelOpened();
+            var clear = Display(); clear["lines"] = new JArray();
+            ending.Show(clear, 1, out bool clearOpened);
+            Assert.That(ending.Lines, Is.EqualTo(new[] { CHRISTestDisplay.SessionEnded }));
+            Assert.That(clearOpened || ending.OpenPending, Is.False);
+            ending.Tick(1 + CHRISTestDisplay.StaleSeconds + 1);
+            Assert.That(ending.Lines, Is.EqualTo(new[] { CHRISTestDisplay.SessionEnded }), "staleness keeps the ended line");
+            ending.Show(clear, 200, out _);
+            Assert.That(ending.Lines, Is.EqualTo(new[] { CHRISTestDisplay.SessionEnded }), "a second clear changes nothing");
+            ending.Show(Display(null, 30, (1, "a")), 201, out bool reopened);
+            Assert.That(reopened && ending.OpenPending, Is.True, "a new session after the ended line reopens the panel");
+            var lost = Display(); lost["lines"] = new JArray("CHRIS session lost", "The drawing may continue. Escape stops it");
+            ending.Show(lost, 202, out _);
+            ending.Tick(202 + CHRISTestDisplay.StaleSeconds + 1);
+            Assert.That(ending.Lines, Is.EqualTo(new[] { CHRISTestDisplay.NotConnected }), "a lost-session display goes stale as before");
+            var unused = new CHRISTestDisplay();
+            unused.Show(clear, 0, out bool unusedOpened);
+            Assert.That(unused.Lines, Is.Empty, "a clear with nothing before it stays empty");
+            Assert.That(unusedOpened, Is.False);
+
             var shown = new CHRISTestDisplay();
             shown.Show(WithReasoning("Velvet Ink: the name suggests ink"), 0);
             Assert.That(shown.Reasoning, Is.EqualTo("Velvet Ink: the name suggests ink"));
