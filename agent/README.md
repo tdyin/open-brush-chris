@@ -413,7 +413,10 @@ before any stroke):
 - 2 runs, 14 draw3d leases, all released. 66/66 stroke3d steps reported success, 15 grid
   snapshots ok (54-119 KB, 19-30 ms), 0 refusals, revokes or exceptions. The box and
   re-leasing on one box worked. Run 2 (task `dc2da528`) drew 60 strokes over 13 leases and
-  stopped at the 60-stroke cap.
+  stopped at the 60-stroke cap. The user judged the result "hardly a recognizable owl".
+- The empty-sketch guard held: the user ran New Sketch between run 1's snapshot and run 2's
+  first lease ("Sketch Cleared"), and run 2's snapshots counted only its own strokes (6, 11,
+  ... 60). A lease line's "N strokes so far" is the run's own count, not the sketch's.
 - Run 1 (task `5533927a`): 6 steps succeeded, but only 4 strokes exist (stroke_count and the
   snapshot both say 4), so 2 strokes did not paint. A step succeeds on pen movement; native
   does not check that Open Brush started a stroke. The cause is unconfirmed: no stroke points
@@ -426,7 +429,8 @@ before any stroke):
   Tube) do not have this problem.
 - The user ended 3D exploration (D111: drawing in 3D space is not the goal). The three
   follow-ups (keep the panel out of the box, report "not painted" steps with point bounds,
-  constant-width centreline overlays in the snapshot tiles) are on hold, not built.
+  constant-width centreline overlays in the snapshot tiles) were proposed and are on hold;
+  none is built.
 
 Overlapping wand panels (2026-10-04): the editor's saved advanced layout
 (`HKCU\Software\Unity\UnityEditor\Icosa Foundation\Open Brush`, value
