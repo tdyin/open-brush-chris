@@ -40,9 +40,16 @@ namespace TiltBrush
                 {
                     popupObject = UnityEngine.Object.Instantiate(resources.PopupPrefab);
                     popupObject.GetComponent<CHRISNativePopup>().BuildView();
-                    var generatedMaterials = popupObject.GetComponentsInChildren<MeshRenderer>(true)
+                    var materials = popupObject.GetComponentsInChildren<MeshRenderer>(true)
                         .Where(renderer => renderer.GetComponent<TMPro.TextMeshPro>() == null)
-                        .Select(renderer => renderer.sharedMaterial).Distinct().ToArray();
+                        .Select(renderer => renderer.sharedMaterial).Where(material => material != null).Distinct().ToArray();
+                    // Open Brush's own pop-up and button materials are shared assets and must survive;
+                    // only materials CHRIS generated are released.
+                    var nativeMaterials = materials.Where(EditorUtility.IsPersistent).ToArray();
+                    var generatedMaterials = materials.Where(material => !EditorUtility.IsPersistent(material)).ToArray();
+                    var generatedMeshes = popupObject.GetComponentsInChildren<MeshFilter>(true).Select(filter => filter.sharedMesh)
+                        .Where(mesh => mesh != null && !EditorUtility.IsPersistent(mesh)).ToArray();
+                    Assert.That(generatedMeshes, Is.Not.Empty, "The border outline is baked on a CHRIS-owned mesh");
                     // UIComponent.Awake creates this same native description under each live button.
                     var button = popupObject.GetComponentInChildren<CHRISNativeButton>();
                     var buttonTooltip = UnityEngine.Object.Instantiate(tooltipPrefab, button.transform);
@@ -56,6 +63,15 @@ namespace TiltBrush
                         "Closing CHRIS must preserve materials shared with ordinary native tooltips.");
                     Assert.That(nativeTooltip.GetComponentsInChildren<MeshRenderer>(true)
                         .All(renderer => renderer.sharedMaterial != null), Is.True);
+                    Assert.That(nativeMaterials.All(material => material != null), Is.True,
+                        "Closing CHRIS must keep Open Brush's shared pop-up and button materials.");
+                    Assert.That(resources.NativeIconMaterial != null && resources.NativeIconMaterial.mainTexture == null, Is.True,
+                        "Icon copies must never write their icon into the shared PanelButton material.");
+                    Assert.That(resources.NativeBorder.GetComponent<MeshFilter>().sharedMesh != null &&
+                        resources.NativeBorder.GetComponent<Renderer>().sharedMaterial != null, Is.True,
+                        "Closing CHRIS must keep the native border mesh and outline material.");
+                    Assert.That(generatedMeshes.All(mesh => mesh == null), Is.True,
+                        "Closing CHRIS must release its baked border meshes.");
                     Assert.That(generatedMaterials.All(material => material == null), Is.True,
                         "Closing CHRIS must release its generated surface and icon materials: " +
                         string.Join(", ", generatedMaterials.Where(material => material != null).Select(material => material.name)));

@@ -145,16 +145,67 @@ namespace TiltBrush
             Assert.That(menuCollider.center, Is.EqualTo(new Vector3(0, 0, -0.0125f)));
         }
 
+        static readonly string[] DragStrips = { "Drag title" };
+
+        internal static string[] Icons(GameObject root) => root.GetComponentsInChildren<CHRISNativeButton>()
+            .Select(b => b.name).ToArray();
+
         [Test]
-        public void StatusPanelHasOnlyDragAndStop()
+        public void StatusPanelHasStopAndBorderDragOnly()
         {
-            var popupObject = UnityEngine.Object.Instantiate(CHRISUIResources.Load().PopupPrefab);
+            var resources = CHRISUIResources.Load();
+            var popupObject = UnityEngine.Object.Instantiate(resources.PopupPrefab);
             try
             {
                 popupObject.GetComponent<CHRISNativePopup>().BuildView();
-                var buttons = popupObject.GetComponentsInChildren<CHRISNativeButton>();
-                Assert.That(buttons.Select(button => button.name),
-                    Is.EquivalentTo(new[] { "Drag CHRIS status", "Local Stop" }));
+                // The frame is a copy of the wand panels' wireframe border with its outline baked.
+                var border = popupObject.transform.Find("Native panel border");
+                Assert.That(border.GetComponent<BakedMeshOutline>(), Is.Not.Null);
+                Assert.That(border.GetComponent<MeshRenderer>().sharedMaterial.shader,
+                    Is.EqualTo(resources.NativeBorder.GetComponent<MeshRenderer>().sharedMaterial.shader));
+                Assert.That(border.GetComponent<MeshFilter>().sharedMesh.vertexCount,
+                    Is.EqualTo(2 * resources.NativeBorder.GetComponent<MeshFilter>().sharedMesh.vertexCount), "outline baked");
+                // Same transform as the Labs border, so lines and corners are not stretched.
+                Assert.That(border.localScale, Is.EqualTo(resources.NativeBorder.transform.localScale));
+                Physics.SyncTransforms();
+                var size = border.GetComponent<MeshRenderer>().bounds.size;
+                Assert.That(Mathf.Abs(size.x - CHRISNativePopup.Width), Is.LessThan(0.1f));
+                Assert.That(Mathf.Abs(size.y - CHRISNativePopup.Height), Is.LessThan(0.1f));
+                // Every visible control is a native icon button with an icon and a hover description.
+                var icons = popupObject.GetComponentsInChildren<CHRISNativeButton>(true);
+                Assert.That(icons.All(b => b.GetComponent<MeshFilter>().sharedMesh == resources.RoundedMesh &&
+                    b.GetComponent<Renderer>().sharedMaterial.shader == resources.NativeIconMaterial.shader &&
+                    b.GetComponent<Renderer>().sharedMaterial.mainTexture != null), Is.True);
+                Assert.That(icons.Where(b => !b.name.StartsWith("Test case")).All(b => !string.IsNullOrEmpty(b.Hover)), Is.True);
+                var stop = icons.Single(b => b.name == "Local Stop");
+                Assert.That(stop.GetComponent<Renderer>().sharedMaterial.mainTexture.name, Is.EqualTo(CHRISNativePopup.StopIcon));
+                Assert.That(stop.Hover, Is.EqualTo("Stop: CHRIS releases control now"));
+                Assert.That(icons.Single(b => b.name == "Test approve").GetComponent<Renderer>().sharedMaterial.mainTexture.name, Is.EqualTo(CHRISNativePopup.ApproveIcon));
+                Assert.That(icons.Single(b => b.name == "Test decline").GetComponent<Renderer>().sharedMaterial.mainTexture.name, Is.EqualTo(CHRISNativePopup.DeclineIcon));
+                Assert.That(icons.Where(b => b.name.StartsWith("Test case")).All(b =>
+                    b.GetComponent<Renderer>().sharedMaterial.mainTexture.name == CHRISNativePopup.StartIcon && b.Label != null), Is.True);
+                // No Move button: the "CHRIS" title moves the panel and says so on hover.
+                var strips = popupObject.GetComponentsInChildren<CHRISDragStrip>();
+                Assert.That(strips.Select(b => b.name), Is.EquivalentTo(DragStrips));
+                Assert.That(strips.All(b => b.Hover == "Drag to move" && b.GetComponent<Renderer>() == null), Is.True);
+                Assert.That(popupObject.GetComponentsInChildren<UIComponent>(true).Any(b => b.name.Contains("Move")), Is.False);
+                var title = popupObject.transform.Find("Title");
+                Assert.That(Vector3.Distance(strips[0].transform.localPosition, title.localPosition), Is.LessThan(0.03f));
+                // One What's-new black background piece fills the frame without a join, behind the content.
+                var background = popupObject.transform.Find("Native panel background");
+                Assert.That(background.GetComponent<MeshRenderer>().sharedMaterial,
+                    Is.EqualTo(resources.NativeBackgroundPiece.GetComponent<MeshRenderer>().sharedMaterial));
+                Assert.That(background.localPosition.z, Is.GreaterThan(border.localPosition.z));
+                Assert.That(popupObject.GetComponentsInChildren<MeshRenderer>(true)
+                    .Count(r => r.sharedMaterial == background.GetComponent<MeshRenderer>().sharedMaterial), Is.EqualTo(1));
+                var fill = background.GetComponent<MeshRenderer>().bounds.size;
+                Assert.That(Mathf.Abs(fill.x - (CHRISNativePopup.Width - 0.12f)), Is.LessThan(0.05f));
+                Assert.That(Mathf.Abs(fill.y - (CHRISNativePopup.Height - 0.12f)), Is.LessThan(0.05f));
+                Assert.That(popupObject.GetComponentsInChildren<TextMeshPro>(true).Where(t => t.font == resources.NativeBodyFont)
+                    .All(t => t.fontSharedMaterial == resources.BodyMaterial), Is.True, "Body text is full white");
+                Assert.That(Icons(popupObject), Is.EquivalentTo(new[] { "Local Stop" }));
+                Assert.That(CHRISNativePopup.StatusLine("Mapping active", true),
+                    Is.EqualTo("Mapping active  ·  Brush: Right  ·  Wand: Left"));
                 Assert.That(CHRISNativePopup.ControlLabel("stopped", false, null, false, false, false),
                     Is.EqualTo("Mapping stopped"));
                 Assert.That(CHRISNativePopup.ControlLabel("stopped", false, null, true, false, false),
@@ -256,17 +307,19 @@ namespace TiltBrush
             {
             TestCHRISAssistance.Exported.Clear();
             int tests = 0;
-            foreach (var suite in new object[] { new TestCHRISNativeUI(), new TestCHRISAssistance(), new TestCHRISCloudVoice(), new TestCHRISCompanion(), new TestCHRISInputMapping(), new TestCHRISInputRemap(), new TestCHRISBimanualInput(), new TestCHRISMappingAuthority(), new TestCHRISPerfProbe() })
+            foreach (var suite in new object[] { new TestCHRISNativeUI(), new TestCHRISAssistance(), new TestCHRISCloudVoice(), new TestCHRISCompanion(), new TestCHRISInputMapping(), new TestCHRISInputRemap(), new TestCHRISBimanualInput(), new TestCHRISMappingAuthority(), new TestCHRISPerfProbe(), new TestCHRISProcedure(), new TestCHRISDrawing() })
                 foreach (var method in suite.GetType().GetMethods().Where(m => m.GetCustomAttributes(typeof(TestAttribute), false).Length > 0))
                 {
                     method.Invoke(suite, null);
                     tests++;
                 }
             Render(output);
+            RenderDrawingSnapshot(output);
+            RenderDrawingGrid(output);
             File.WriteAllText(output + "/protocol-fixtures.json", TestCHRISAssistance.Exported.ToString());
             File.WriteAllText(output + "/companion-profiling.json", TestCHRISCompanion.Measurements.ToString());
             File.WriteAllText(output + "/mapping-cases.txt", TestCHRISInputMapping.Verdicts.ToString());
-            File.WriteAllText(output + "/checks.txt", "PASS: " + tests + " native regression methods; voice and companion contracts, compact status UI, v0.1.1 and v0.1.2 mapping cases, byte-matched bundled preset, and two-hand state transitions. No Play mode, HTTP, microphone recording, speech/model inference or sketch changes.");
+            File.WriteAllText(output + "/checks.txt", "PASS: " + tests + " native regression methods; voice and companion contracts, compact status UI, v0.1.1 and v0.1.2 mapping cases, byte-matched bundled preset, two-hand state transitions, and the controller-procedure lease (" + TestCHRISProcedure.SharedCasesChecked + " shared procedure message cases). No Play mode, HTTP, microphone recording, speech/model inference or sketch changes.");
             }
             finally
             {
@@ -280,6 +333,152 @@ namespace TiltBrush
             }
         }
 
+        // The agent's view (D95): test strokes on the canvas layer inside a drawing frame, captured
+        // by the same snapshot camera path, with a panel-layer object that must not appear.
+        static void RenderDrawingSnapshot(string output)
+        {
+            var scene = EditorSceneManager.NewPreviewScene();
+            Texture2D image = null;
+            try
+            {
+                var frame = CHRISDrawFrame.Facing(Vector3.zero, Vector3.forward, "preview");
+                var resources = CHRISUIResources.Load();
+                var strokes = new GameObject("Test strokes");
+                UnityEngine.SceneManagement.SceneManager.MoveGameObjectToScene(strokes, scene);
+                strokes.layer = LayerMask.NameToLayer("MainCanvas");
+                strokes.transform.SetPositionAndRotation(frame.Center, frame.PenRotation);
+                Vector3 Local(float x, float y) => new Vector3((x - 0.5f) * frame.Size, (0.5f - y) * frame.Size, 0);
+                void Polyline(Color color, params float[] xy)
+                {
+                    for (int i = 2; i < xy.Length; i += 2)
+                    {
+                        Vector3 a = Local(xy[i - 2], xy[i - 1]), b = Local(xy[i], xy[i + 1]);
+                        var bar = resources.Surface(strokes.transform, "Segment", (a + b) / 2,
+                            new Vector2(Vector3.Distance(a, b) + 0.06f, 0.06f), color);
+                        bar.transform.localRotation = Quaternion.Euler(0, 0, Mathf.Atan2(b.y - a.y, b.x - a.x) * Mathf.Rad2Deg);
+                    }
+                }
+                float[] Ellipse(float cx, float cy, float rx, float ry, int n = 24) =>
+                    Enumerable.Range(0, n + 1).SelectMany(i => new[] {
+                        cx + rx * Mathf.Cos(i * 2 * Mathf.PI / n), cy + ry * Mathf.Sin(i * 2 * Mathf.PI / n) }).ToArray();
+                var ink = new Color(0.95f, 0.85f, 0.6f);
+                Polyline(ink, Ellipse(0.5f, 0.62f, 0.22f, 0.26f));                       // body
+                Polyline(ink, Ellipse(0.5f, 0.32f, 0.18f, 0.15f));                       // head
+                Polyline(ink, 0.36f, 0.22f, 0.33f, 0.1f, 0.42f, 0.18f);                   // left ear
+                Polyline(ink, 0.64f, 0.22f, 0.67f, 0.1f, 0.58f, 0.18f);                   // right ear
+                Polyline(Color.white, Ellipse(0.43f, 0.31f, 0.05f, 0.05f, 12));           // eyes
+                Polyline(Color.white, Ellipse(0.57f, 0.31f, 0.05f, 0.05f, 12));
+                Polyline(new Color(1, 0.6f, 0.2f), 0.47f, 0.38f, 0.5f, 0.44f, 0.53f, 0.38f); // beak
+                Polyline(ink, 0.42f, 0.88f, 0.42f, 0.95f, 0.58f, 0.88f, 0.58f, 0.95f);    // feet
+                Polyline(Color.white, 0.04f, 0.04f, 0.14f, 0.04f, 0.14f, 0.14f, 0.04f, 0.14f, 0.04f, 0.04f); // top-left marker
+                // A panel in front of the frame: the snapshot must not see it.
+                var panel = resources.Surface(strokes.transform, "Panel (must not render)", new Vector3(0, 0, -1), new Vector2(2, 2), Color.red);
+                panel.layer = LayerMask.NameToLayer("Panels");
+                foreach (var t in strokes.GetComponentsInChildren<Transform>()) if (t.gameObject != panel) t.gameObject.layer = strokes.layer;
+
+                int mask = 1 << LayerMask.NameToLayer("MainCanvas");
+                image = CHRISDrawingRuns.RenderFrame(frame, mask, CHRISDrawingRuns.SnapshotPixels, scene);
+                File.WriteAllBytes(output + "/drawing-snapshot.jpg", image.EncodeToJPG(CHRISDrawingRuns.SnapshotQuality));
+                int n = CHRISDrawingRuns.SnapshotPixels;
+                // Texture rows start at the bottom: frame (x, y) is pixel (x * n, (1 - y) * n).
+                Color Pixel(float x, float y) => image.GetPixel((int)(x * n), (int)((1 - y) * n));
+                Assert.That(Pixel(0.04f, 0.09f).grayscale, Is.GreaterThan(0.5f), "the top-left marker is at the image's top left");
+                Assert.That(Pixel(0.04f, 0.91f).grayscale, Is.LessThan(0.3f), "and not at the bottom left");
+                Assert.That(Pixel(0.15f, 0.6f).r, Is.LessThan(0.3f), "the panel layer is not rendered");
+            }
+            finally
+            {
+                if (image != null) UnityEngine.Object.DestroyImmediate(image);
+                EditorSceneManager.ClosePreviewScene(scene);
+            }
+        }
+
+        // The 3D view (D106): a test owl made of strokes in the box, captured by the same grid
+        // path as the live snapshot. A marker near the box's top-left-near corner proves each
+        // tile's (u, v) mapping.
+        static void RenderDrawingGrid(string output)
+        {
+            var scene = EditorSceneManager.NewPreviewScene();
+            Texture2D image = null;
+            try
+            {
+                var box = CHRISDrawFrame.Boxed(Vector3.zero, Vector3.forward, "preview");
+                var resources = CHRISUIResources.Load();
+                int canvas = LayerMask.NameToLayer("MainCanvas");
+                var strokes = new GameObject("Test 3D strokes") { layer = canvas };
+                UnityEngine.SceneManagement.SceneManager.MoveGameObjectToScene(strokes, scene);
+                GameObject Bar(Vector3 a, Vector3 b, Color color, float thickness = 0.06f)
+                {
+                    var bar = GameObject.CreatePrimitive(PrimitiveType.Cube);
+                    bar.layer = canvas;
+                    UnityEngine.Object.DestroyImmediate(bar.GetComponent<Collider>());
+                    bar.transform.SetParent(strokes.transform, true);
+                    bar.transform.position = (a + b) / 2;
+                    bar.transform.rotation = Quaternion.LookRotation(b - a);
+                    bar.transform.localScale = new Vector3(thickness, thickness, Vector3.Distance(a, b) + thickness);
+                    var material = new Material(resources.SurfaceShader);
+                    material.SetColor("_Color", color); material.SetColor("_SecondaryColor", color);
+                    bar.GetComponent<Renderer>().sharedMaterial = material;
+                    return bar;
+                }
+                void Ring(Func<float, Vector3> at, Color color, int n = 32)
+                {
+                    for (int i = 0; i < n; i++) Bar(at(i / (float)n), at((i + 1) / (float)n), color);
+                }
+                var ink = new Color(0.95f, 0.85f, 0.6f);
+                // Body: three orthogonal ellipses around (0.5, 0.62, 0.5); head: two around (0.5, 0.3, 0.45).
+                Ring(t => box.Point3(0.5f + 0.2f * Mathf.Cos(t * 6.283f), 0.62f + 0.24f * Mathf.Sin(t * 6.283f), 0.5f), ink);
+                Ring(t => box.Point3(0.5f, 0.62f + 0.24f * Mathf.Sin(t * 6.283f), 0.5f + 0.2f * Mathf.Cos(t * 6.283f)), ink);
+                Ring(t => box.Point3(0.5f + 0.2f * Mathf.Cos(t * 6.283f), 0.62f, 0.5f + 0.2f * Mathf.Sin(t * 6.283f)), ink);
+                Ring(t => box.Point3(0.5f + 0.16f * Mathf.Cos(t * 6.283f), 0.3f + 0.14f * Mathf.Sin(t * 6.283f), 0.45f), ink);
+                Ring(t => box.Point3(0.5f, 0.3f + 0.14f * Mathf.Sin(t * 6.283f), 0.45f + 0.15f * Mathf.Cos(t * 6.283f)), ink);
+                // Eyes on the near side of the head, a beak pointing at the user, ear tufts.
+                Ring(t => box.Point3(0.44f + 0.04f * Mathf.Cos(t * 6.283f), 0.29f + 0.04f * Mathf.Sin(t * 6.283f), 0.3f), Color.white, 12);
+                Ring(t => box.Point3(0.56f + 0.04f * Mathf.Cos(t * 6.283f), 0.29f + 0.04f * Mathf.Sin(t * 6.283f), 0.3f), Color.white, 12);
+                Bar(box.Point3(0.5f, 0.34f, 0.3f), box.Point3(0.5f, 0.38f, 0.22f), new Color(1, 0.6f, 0.2f));
+                Bar(box.Point3(0.38f, 0.19f, 0.45f), box.Point3(0.34f, 0.08f, 0.45f), ink);
+                Bar(box.Point3(0.62f, 0.19f, 0.45f), box.Point3(0.66f, 0.08f, 0.45f), ink);
+                // Marker: a small bright cube at (0.1, 0.1, 0.1).
+                var marker = Bar(box.Point3(0.07f, 0.1f, 0.1f), box.Point3(0.13f, 0.1f, 0.1f), Color.white, 0.25f);
+
+                image = CHRISDrawingRuns.RenderGrid(box, 1 << canvas, CHRISDrawingRuns.SnapshotPixels, scene);
+                File.WriteAllBytes(output + "/drawing-snapshot-3d.jpg", image.EncodeToJPG(CHRISDrawingRuns.SnapshotQuality));
+                Assert.That(image.width, Is.EqualTo(CHRISDrawingRuns.GridPixels));
+                int tile = CHRISDrawingRuns.SnapshotPixels;
+                // Tile (column, row from the top) and its (u, v): texture rows start at the bottom.
+                Color At(int column, int rowFromTop, float u, float v) =>
+                    image.GetPixel(column * tile + (int)(u * tile), (1 - rowFromTop) * tile + (int)((1 - v) * tile));
+                Assert.That(At(0, 0, 0.1f, 0.1f).grayscale, Is.GreaterThan(0.5f), "front (x, y): marker at the top left");
+                Assert.That(At(1, 0, 0.1f, 0.1f).grayscale, Is.GreaterThan(0.5f), "side (z, y): marker near-left, top");
+                Assert.That(At(0, 1, 0.1f, 0.9f).grayscale, Is.GreaterThan(0.5f), "top (x, 1 - z): marker left, near at the bottom");
+                Assert.That(At(0, 1, 0.1f, 0.1f).grayscale, Is.LessThan(0.3f), "top view is not mirrored");
+                Assert.That(At(0, 0, 0.9f, 0.1f).grayscale, Is.LessThan(0.3f), "front view is not mirrored");
+                // The perspective tile (bottom right) frames what was drawn, so the shape fills it.
+                int minX = tile, maxX = -1, minY = tile, maxY = -1;
+                for (int y = 0; y < tile; y++)
+                for (int x = 0; x < tile; x++)
+                    if (image.GetPixel(tile + x, y).grayscale > 0.4f)
+                    { minX = Math.Min(minX, x); maxX = Math.Max(maxX, x); minY = Math.Min(minY, y); maxY = Math.Max(maxY, y); }
+                Assert.That(Math.Max(maxX - minX, maxY - minY), Is.GreaterThan(tile * 0.5f), "the drawing fills the perspective tile");
+                // Without the corner marker the owl alone is framed and still fills the tile.
+                marker.SetActive(false);
+                UnityEngine.Object.DestroyImmediate(image);
+                image = CHRISDrawingRuns.RenderGrid(box, 1 << canvas, CHRISDrawingRuns.SnapshotPixels, scene);
+                File.WriteAllBytes(output + "/drawing-snapshot-3d-owl.jpg", image.EncodeToJPG(CHRISDrawingRuns.SnapshotQuality));
+                minX = tile; maxX = -1; minY = tile; maxY = -1;
+                for (int y = 0; y < tile; y++)
+                for (int x = 0; x < tile; x++)
+                    if (image.GetPixel(tile + x, y).grayscale > 0.4f)
+                    { minX = Math.Min(minX, x); maxX = Math.Max(maxX, x); minY = Math.Min(minY, y); maxY = Math.Max(maxY, y); }
+                Assert.That(Math.Max(maxX - minX, maxY - minY), Is.GreaterThan(tile * 0.5f), "the owl alone fills the perspective tile");
+            }
+            finally
+            {
+                if (image != null) UnityEngine.Object.DestroyImmediate(image);
+                EditorSceneManager.ClosePreviewScene(scene);
+            }
+        }
+
         static void Render(string output)
         {
             var scene = EditorSceneManager.NewPreviewScene();
@@ -290,31 +489,169 @@ namespace TiltBrush
             {
                 var popupObject = UnityEngine.Object.Instantiate(CHRISUIResources.Load().PopupPrefab);
                 UnityEngine.SceneManagement.SceneManager.MoveGameObjectToScene(popupObject, scene);
-                popupObject.GetComponent<CHRISNativePopup>().BuildView();
+                var popup = popupObject.GetComponent<CHRISNativePopup>();
+                popup.BuildView();
                 Physics.SyncTransforms();
-                var buttons = popupObject.GetComponentsInChildren<CHRISNativeButton>();
-                Assert.That(buttons.Length, Is.EqualTo(2));
-                Assert.That(buttons[0].GetComponent<BoxCollider>().bounds.Intersects(
-                    buttons[1].GetComponent<BoxCollider>().bounds), Is.False);
+                Assert.That(Icons(popupObject), Is.EquivalentTo(new[] { "Local Stop" }));
                 var cameraObject = new GameObject("CHRIS status preview camera");
                 camera = cameraObject.AddComponent<Camera>();
                 UnityEngine.SceneManagement.SceneManager.MoveGameObjectToScene(cameraObject, scene);
                 camera.scene = scene;
                 cameraObject.AddComponent<UniversalAdditionalCameraData>();
                 camera.orthographic = true;
-                camera.orthographicSize = 1.15f;
+                camera.orthographicSize = CHRISNativePopup.Height / 2 + 0.1f;
                 camera.transform.position = new Vector3(0, 0, -10);
                 camera.clearFlags = CameraClearFlags.SolidColor;
                 camera.backgroundColor = new Color(0.08f, 0.08f, 0.08f);
                 camera.nearClipPlane = 0.01f;
                 camera.farClipPlane = 20;
-                texture = new RenderTexture(1100, 700, 24);
+                texture = new RenderTexture(1100, (int)(1100 * (CHRISNativePopup.Height + 0.2f) / (CHRISNativePopup.Width + 0.2f)), 24);
                 texture.Create(); camera.targetTexture = texture;
                 image = new Texture2D(texture.width, texture.height, TextureFormat.RGB24, false);
-                foreach (var label in popupObject.GetComponentsInChildren<TextMeshPro>()) label.ForceMeshUpdate();
-                camera.Render(); RenderTexture.active = texture;
-                image.ReadPixels(new Rect(0, 0, texture.width, texture.height), 0, 0); image.Apply();
-                File.WriteAllBytes(output + "/status-panel.png", image.EncodeToPNG());
+                void Capture(GameObject root, string file)
+                {
+                    Physics.SyncTransforms();
+                    var visible = root.GetComponentsInChildren<UIComponent>().Where(b => b is CHRISNativeButton || b is CHRISDragStrip)
+                        .Select(b => b.GetComponent<BoxCollider>().bounds).ToArray();
+                    for (int a = 0; a < visible.Length; a++)
+                        for (int b = a + 1; b < visible.Length; b++)
+                            Assert.That(visible[a].Intersects(visible[b]), Is.False, file + ": buttons overlap");
+                    foreach (var label in root.GetComponentsInChildren<TextMeshPro>()) label.ForceMeshUpdate();
+                    camera.Render(); RenderTexture.active = texture;
+                    image.ReadPixels(new Rect(0, 0, texture.width, texture.height), 0, 0); image.Apply();
+                    File.WriteAllBytes(output + "/" + file, image.EncodeToPNG());
+                }
+                Newtonsoft.Json.Linq.JObject Display(string[] lines, string nonce, params (int id, string title)[] cases) =>
+                    new Newtonsoft.Json.Linq.JObject {
+                        ["lines"] = new Newtonsoft.Json.Linq.JArray(lines), ["nonce"] = nonce,
+                        ["buttons"] = nonce == null ? new Newtonsoft.Json.Linq.JArray() : new Newtonsoft.Json.Linq.JArray("approve", "decline"),
+                        ["cases"] = new Newtonsoft.Json.Linq.JArray(cases.Select(c => new Newtonsoft.Json.Linq.JObject { ["id"] = c.id, ["title"] = c.title })),
+                        ["ttl_s"] = 60 };
+                Capture(popupObject, "status-panel.png");
+                try
+                {
+                    // The states the runner shows, rendered as the user sees them.
+                    CHRISTestDisplay.Instance.Show(Display(new[] { "CHRIS tests: click Start with the brush ray",
+                        "Next: case 4 - Request the current brush (no-op)" }, null,
+                        (4, "Request the current brush"), (1, "Select a brush"), (3, "Squeeze the real trigger"),
+                        (5, "Target not on the page"), (2, "Press Escape")), Time.realtimeSinceStartup);
+                    popup.RefreshTest();
+                    Capture(popupObject, "status-panel-idle.png");
+                    Assert.That(Icons(popupObject).Count(n => n.StartsWith("Test case")), Is.EqualTo(5));
+                    var first = popupObject.GetComponentsInChildren<CHRISNativeButton>().Single(b => b.name == "Test case 1");
+                    Assert.That(first.Label.text, Is.EqualTo("4"));
+                    Assert.That(first.Hover, Is.EqualTo("Start case 4: Request the current brush"));
+                    CHRISTestDisplay.Instance.Show(Display(new[] { "Case 1 Happy path: select Light",
+                        "Look at the palette, keep the brush trigger released", "Approve to start", "Last: case 4 PASS" },
+                        "preview"), Time.realtimeSinceStartup);
+                    popup.RefreshTest();
+                    Capture(popupObject, "status-panel-test.png");
+                    Assert.That(Icons(popupObject), Is.EquivalentTo(new[] { "Local Stop", "Test approve", "Test decline" }),
+                        "a live approval shows only Approve/Decline beside Stop");
+                    // Long instruction lines (D105): 80 characters of ordinary words wrap onto two
+                    // rows inside each line box without the "..." cut.
+                    var longLines = Display(new[] {
+                        "Case 8: Agent: draw an owl - large round eyes, ear tufts and soft chest feathers",
+                        "Why: Add a clear beak and a few soft feather marks so the owl reads as finished.",
+                        "Agent: drawing 5 strokes (15/40); each stroke follows the frame at 0.4 m/s, ok..",
+                        "Step 4 of 20; Escape stops it, and Stop on this panel ends the drawing at once!!" }, null);
+                    foreach (var line in ((Newtonsoft.Json.Linq.JArray)longLines["lines"]).Select(l => (string)l))
+                        Assert.That(line.Length, Is.EqualTo(CHRISTestDisplay.MaxLineLength), line);
+                    CHRISTestDisplay.Instance.Show(longLines, Time.realtimeSinceStartup);
+                    popup.RefreshTest();
+                    Capture(popupObject, "status-panel-long-lines.png");
+                    for (int i = 0; i < CHRISTestDisplay.MaxLines; i++)
+                    {
+                        var text = popupObject.transform.Find("Test line " + (i + 1)).GetComponent<TextMeshPro>();
+                        text.ForceMeshUpdate();
+                        Assert.That(text.isTextTruncated, Is.False, "line " + (i + 1) + " fits in two rows");
+                    }
+                    // An agent case running: its reasoning takes the Start buttons' area (D89).
+                    var agent = Display(new[] { "Case 7: Agent: ink-like brush", "Agent: select Velvet Ink - name suggests ink",
+                        "Agent: aiming at Velvet Ink", "Step 3 of 16" }, null, (6, "Agent: warm brush"), (7, "Agent: ink-like brush"));
+                    agent["reasoning"] = "The goal asks for an ink-like brush. The palette page shows Velvet Ink, Ink and " +
+                        "Marker; Velvet Ink is the closest name and is interactable, so I aim at it first, check the hover, " +
+                        "then press once. If the hover differs I re-aim instead of pressing.";
+                    CHRISTestDisplay.Instance.Show(agent, Time.realtimeSinceStartup);
+                    popup.RefreshTest();
+                    Capture(popupObject, "status-panel-reasoning.png");
+                    Assert.That(Icons(popupObject), Is.EquivalentTo(new[] { "Local Stop" }), "reasoning replaces the Start buttons");
+                    Assert.That(popupObject.transform.Find("Reasoning").gameObject.activeSelf, Is.True);
+                    var reasoningText = popupObject.transform.Find("Reasoning").GetComponent<TextMeshPro>();
+                    reasoningText.ForceMeshUpdate();
+                    Assert.That(reasoningText.isTextTruncated, Is.False);
+                    // Worst case: a full-length summary of ordinary words still fits without truncation.
+                    var full = string.Concat(Enumerable.Repeat("Velvet Ink is the closest ink-like brush on this page. ", 8))
+                        .Substring(0, CHRISTestDisplay.MaxReasoningLength);
+                    agent["reasoning"] = full;
+                    CHRISTestDisplay.Instance.Show(agent, Time.realtimeSinceStartup);
+                    popup.RefreshTest();
+                    reasoningText.ForceMeshUpdate();
+                    Assert.That(reasoningText.isTextTruncated, Is.False, "a 400-char summary fits");
+                    Capture(popupObject, "status-panel-reasoning-full.png");
+                    agent["nonce"] = "preview2"; agent["buttons"] = new Newtonsoft.Json.Linq.JArray("approve", "decline");
+                    CHRISTestDisplay.Instance.Show(agent, Time.realtimeSinceStartup);
+                    popup.RefreshTest();
+                    Assert.That(Icons(popupObject), Is.EquivalentTo(new[] { "Local Stop", "Test approve", "Test decline" }));
+                    Assert.That(popupObject.transform.Find("Reasoning").gameObject.activeSelf, Is.False, "a live approval takes the area");
+                    CHRISTestDisplay.Instance.Tick(Time.realtimeSinceStartup + CHRISTestDisplay.StaleSeconds + 1);
+                    popup.RefreshTest();
+                    Capture(popupObject, "status-panel-stale.png");
+                    Assert.That(popupObject.transform.Find("Reasoning").gameObject.activeSelf, Is.False);
+                    Assert.That(Icons(popupObject), Is.EquivalentTo(new[] { "Local Stop" }), "Stop stays available when stale");
+                }
+                finally { CHRISTestDisplay.ResetForPlay(); }
+                // Open Brush's own Labs panel at the same scale, beside the idle CHRIS panel. Its
+                // border and icons are set up here the way BasePanel.InitPanel and BaseButton do
+                // at runtime, on copies, so the shared assets stay untouched.
+                var native = UnityEngine.Object.Instantiate(
+                    AssetDatabase.LoadAssetAtPath<GameObject>("Assets/Prefabs/Panels/LabsPanel.prefab"));
+                UnityEngine.SceneManagement.SceneManager.MoveGameObjectToScene(native, scene);
+                native.transform.rotation = Quaternion.identity;
+                var generated = new System.Collections.Generic.List<UnityEngine.Object>();
+                foreach (var bakery in native.GetComponentsInChildren<BakedMeshOutline>(true))
+                {
+                    var filter = bakery.GetComponent<MeshFilter>();
+                    var copy = UnityEngine.Object.Instantiate(filter.sharedMesh);
+                    generated.Add(copy);
+                    filter.sharedMesh = copy;
+                    bakery.Bake(Color.white, Color.black, 0.02f);
+                    generated.Add(filter.sharedMesh);
+                }
+                foreach (var button in native.GetComponentsInChildren<BaseButton>(true))
+                {
+                    var renderer = button.GetComponent<Renderer>();
+                    var icon = typeof(BaseButton).GetField("m_ButtonTexture", BindingFlags.NonPublic | BindingFlags.Instance).GetValue(button) as Texture2D;
+                    if (renderer == null || icon == null) continue;
+                    var material = new Material(renderer.sharedMaterial) { mainTexture = icon };
+                    generated.Add(material);
+                    renderer.sharedMaterial = material;
+                }
+                try
+                {
+                    Physics.SyncTransforms();
+                    var labBounds = native.GetComponentsInChildren<Renderer>(true).First(r => r.name == "Border").bounds;
+                    File.WriteAllText(output + "/d80-layout.txt", "Labs border world size " + labBounds.size.x.ToString("F3") + " x " +
+                        labBounds.size.y.ToString("F3") + "; CHRIS panel " + CHRISNativePopup.Width + " x " + CHRISNativePopup.Height + "\n");
+                    popupObject.SetActive(false);
+                    native.transform.position = Vector3.zero;
+                    Capture(native, "native-labs-panel.png");
+                    // Side by side: the two captures above, taken with one camera at one scale.
+                    var labs = new Texture2D(2, 2); var chris = new Texture2D(2, 2);
+                    try
+                    {
+                        labs.LoadImage(File.ReadAllBytes(output + "/native-labs-panel.png"));
+                        chris.LoadImage(File.ReadAllBytes(output + "/status-panel-idle.png"));
+                        var pair = new Texture2D(labs.width + chris.width, labs.height, TextureFormat.RGB24, false);
+                        pair.SetPixels32(0, 0, labs.width, labs.height, labs.GetPixels32());
+                        pair.SetPixels32(labs.width, 0, chris.width, chris.height, chris.GetPixels32());
+                        pair.Apply();
+                        File.WriteAllBytes(output + "/status-panel-next-to-labs.png", pair.EncodeToPNG());
+                        UnityEngine.Object.DestroyImmediate(pair);
+                    }
+                    finally { UnityEngine.Object.DestroyImmediate(labs); UnityEngine.Object.DestroyImmediate(chris); }
+                }
+                finally { foreach (var item in generated) if (item != null) UnityEngine.Object.DestroyImmediate(item); }
             }
             finally
             {

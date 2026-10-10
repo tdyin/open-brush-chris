@@ -862,7 +862,8 @@ namespace TiltBrush
         /// presses when you fiddle with the joystick.
         public bool GetMouseButton(int button)
         {
-            if (App.Config.IsMobileHardware || Mouse.current == null || CHRISBimanualHost.RecoveryUI)
+            if (App.Config.IsMobileHardware || Mouse.current == null || CHRISBimanualHost.RecoveryUI ||
+                CHRISHandAuthority.OwnsBrush)
             {
                 return false;
             }
@@ -882,7 +883,8 @@ namespace TiltBrush
         /// presses when you fiddle with the joystick.
         public bool GetMouseButtonDown(int button)
         {
-            if (App.Config.IsMobileHardware || Mouse.current == null || CHRISBimanualHost.RecoveryUI)
+            if (App.Config.IsMobileHardware || Mouse.current == null || CHRISBimanualHost.RecoveryUI ||
+                CHRISHandAuthority.OwnsBrush)
             {
                 return false;
             }

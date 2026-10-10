@@ -364,6 +364,7 @@ namespace TiltBrush
         public static CHRISInputRemap Remap { get; private set; } = new CHRISInputRemap();
         // Cheap (no status object): called per frame by controller infos.
         internal static bool MappingInUse => Remap.Active != null || Remap.HasPending || s_Authority.HasPending;
+        internal static bool MappingChangePending => Remap.HasPending || s_Authority.HasPending;
         public static CHRISViewHeading Heading { get; private set; } = new CHRISViewHeading();
         public static bool DesktopControlsOwned => CHRISBimanualHost.OwnsDesktopControl ||
             CHRISBimanualHost.RecoveryUI;
@@ -437,6 +438,7 @@ namespace TiltBrush
             Remap.Tick(CHRISDeviceInput.Instance, focused, interactionBusy);
             if (Remap.StoppedThisFrame)
             {
+                CHRISHandAuthority.Revoke("Stopped locally");
                 s_Authority.Stop();
                 CHRISBimanualHost.ReleaseKeyboardUI();
             }
@@ -446,9 +448,15 @@ namespace TiltBrush
             if (wasActive && Remap.Active == null) Debug.Log("CHRIS mapping stopped: shortcuts restored; reload to use it again");
             if (!Remap.StoppedThisFrame && focused && Keyboard.current != null &&
                 Keyboard.current.f1Key.wasPressedThisFrame)
+            {
+                CHRISHandAuthority.Revoke("Manual takeover");
                 CHRISBimanualHost.RequestKeyboardUI();
+            }
             if (focused && Keyboard.current != null && Keyboard.current.f6Key.wasPressedThisFrame)
+            {
+                CHRISHandAuthority.Revoke("Manual takeover");
                 CHRISBimanualHost.ReleaseKeyboardUI();
+            }
             // Legacy move_brush relinquishes its driver before two-hand control can take it.
             UpdateBrushOwnership(ViewpointScript.Head);
             CHRISBimanualHost.Tick(Remap.Active, CHRISDeviceInput.Instance, focused, stroke);
@@ -490,6 +498,7 @@ namespace TiltBrush
         internal static JObject ActivateMapping(JObject request)
         {
             Start();
+            CHRISHandAuthority.Revoke("Mapping activation requested");
             return s_Authority.Apply(request);
         }
 
@@ -502,6 +511,7 @@ namespace TiltBrush
         internal static void StopMapping()
         {
             Start();
+            CHRISHandAuthority.Revoke("Mapping stopped");
             Remap.Stop();
             s_Authority.Stop();
             CHRISBimanualHost.ReleaseKeyboardUI();
@@ -720,6 +730,7 @@ namespace TiltBrush
 
         static void Reload()
         {
+            CHRISHandAuthority.Revoke("Mapping reloaded");
             string path = Path.GetFullPath(CHRISInputMappingStore.PathUnder(Application.persistentDataPath));
             bool loaded = s_Store.Reload(path);
             if (loaded) s_Authority.OfferLoaded(s_Store.Current, s_Store.CurrentBytes);

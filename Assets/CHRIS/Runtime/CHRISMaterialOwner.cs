@@ -5,33 +5,38 @@ using UnityEngine;
 
 namespace TiltBrush
 {
-    // A CHRIS window owns its generated materials, including controls never made visible.
+    // A CHRIS window owns its generated materials and meshes, including controls never made visible.
     // Native tooltip materials, fonts and textures are shared assets and are not registered.
     [ExecuteAlways]
     public sealed class CHRISMaterialOwner : MonoBehaviour
     {
-        readonly List<Material> m_Materials = new List<Material>();
+        readonly List<Object> m_Owned = new List<Object>();
 
         public static void Assign(Renderer renderer, Material material)
         {
-            var popup = renderer.GetComponentInParent<CHRISNativePopup>(true);
-            var panel = renderer.GetComponentInParent<CHRISFloatingPanel>(true);
-            var root = popup != null ? popup.gameObject : panel != null ? panel.gameObject : renderer.gameObject;
+            Own(renderer.gameObject, material);
+            renderer.sharedMaterial = material;
+        }
+
+        public static void Own(GameObject user, Object generated)
+        {
+            var popup = user.GetComponentInParent<CHRISNativePopup>(true);
+            var panel = user.GetComponentInParent<CHRISFloatingPanel>(true);
+            var root = popup != null ? popup.gameObject : panel != null ? panel.gameObject : user;
             var owner = root.GetComponent<CHRISMaterialOwner>();
             if (owner == null) owner = root.AddComponent<CHRISMaterialOwner>();
-            owner.m_Materials.Add(material);
-            renderer.sharedMaterial = material;
+            if (!owner.m_Owned.Contains(generated)) owner.m_Owned.Add(generated);
         }
 
         public void Release()
         {
-            foreach (var material in m_Materials)
+            foreach (var generated in m_Owned)
             {
-                if (material == null) continue;
-                if (Application.isPlaying) Destroy(material);
-                else DestroyImmediate(material);
+                if (generated == null) continue;
+                if (Application.isPlaying) Destroy(generated);
+                else DestroyImmediate(generated);
             }
-            m_Materials.Clear();
+            m_Owned.Clear();
         }
 
         void OnDestroy() => Release();

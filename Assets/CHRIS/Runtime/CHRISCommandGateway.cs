@@ -21,7 +21,7 @@ namespace TiltBrush
     {
         private sealed class Request
         {
-            public string Method, Path, Body;
+            public string Method, Path, Query, Body;
             public JObject Reply;
             public bool Abandoned;
             public readonly object Gate = new object();
@@ -48,6 +48,8 @@ namespace TiltBrush
         private bool m_Closed, m_Registered;
         private HttpServer m_Server;
         private CHRISBrushNames m_BrushNames;
+        private string m_PaletteError;
+        private float m_NextPanelOpen;
         public string Status { get; private set; } = "Waiting for native host";
         public double LastStopMilliseconds { get; private set; }
         public long StopCount { get; private set; }
@@ -80,7 +82,7 @@ namespace TiltBrush
             else
             {
                 var request = new Request { Method = ctx.Request.HttpMethod,
-                    Path = ctx.Request.Url.AbsolutePath };
+                    Path = ctx.Request.Url.AbsolutePath, Query = ctx.Request.Url.Query };
                 using (var reader = new StreamReader(ctx.Request.InputStream, Encoding.UTF8))
                 {
                     var body = new char[bodyLimit + 1];
@@ -142,8 +144,30 @@ namespace TiltBrush
                 ["brushes"] = new JObject(), ["panels"] = new JObject(),
                 ["scene_position"] = null, ["scene_rotation"] = null, ["scene_scale"] = null,
                 ["active_task"] = m_ActiveTask == null ? JValue.CreateNull() : new JValue(m_ActiveTask),
-                ["unknown"] = new JArray("active_layer", "selected_model", "physical_scale", "generation") };
+                ["unknown"] = new JArray("active_layer", "selected_model", "physical_scale", "generation"),
+                ["palette"] = null, ["hover_target_id"] = null, ["palette_in_view"] = null,
+                ["grab_active"] = null, ["focus"] = null, ["buttons_neutral"] = null, ["stroke_count"] = null };
             if (!ready) return c;
+            c["stroke_count"] = SketchStrokeCount();
+            // Read-only procedure observations; not part of MateriallyChanged, so hover alone
+            // never advances the revision.
+            // A failed palette read reports null; it must never fail the context for one-shot tasks.
+            try
+            {
+                c["palette"] = CHRISPaletteObserver.Snapshot();
+                c["hover_target_id"] = CHRISPaletteObserver.HoverTargetId();
+                c["palette_in_view"] = CHRISPaletteObserver.InView();
+            }
+            catch (Exception error)
+            {
+                c["palette"] = c["hover_target_id"] = c["palette_in_view"] = null;
+                string message = error.GetType().Name + ": " + error.Message;
+                if (message != m_PaletteError) Debug.LogWarning("CHRIS palette read failed: " + message);
+                m_PaletteError = message;
+            }
+            c["grab_active"] = SketchControlsScript.m_Instance.IsUserGrabbingWorld();
+            c["focus"] = CHRISInputMappingHost.InputFocusedNow;
+            c["buttons_neutral"] = CHRISHandAuthority.BrushButtonsNeutral;
             c["brush_id"] = pointer.CurrentBrush.m_Guid.ToString();
             c["brush_size"] = pointer.BrushSize01;
             c["brush_color"] = "#" + ColorUtility.ToHtmlStringRGB(pointer.GetCurrentColor());
@@ -161,14 +185,14 @@ namespace TiltBrush
             return c;
         }
 
-        static BasePanel FindPanel(string name)
+        internal static BasePanel FindPanel(string name)
         {
             if (PanelManager.m_Instance == null) return null;
             return PanelManager.m_Instance.GetAllPanels().Select(p => p.m_Panel)
                 .FirstOrDefault(p => p != null && p.Type.ToString() == name &&
                     PanelManager.m_Instance.IsPanelAvailable(p));
         }
-        static bool PanelVisible(BasePanel panel) => panel.gameObject.activeInHierarchy &&
+        internal static bool PanelVisible(BasePanel panel) => panel.gameObject.activeInHierarchy &&
             (panel.WidgetSibling == null || panel.WidgetSibling.Showing);
 
         public static bool NativeInteractionBusy()
@@ -236,8 +260,9 @@ namespace TiltBrush
             else if (MateriallyChanged(m_ObservedContext, context))
             {
                 m_Revision++;
+                // A procedure's own brush change must not revoke it; its lease has local triggers.
                 if (manual && !(m_Pending != null && ExpectedPendingChange(m_Pending, context)))
-                    Stop("Manual state changed; pending work cancelled", announce: m_Pending != null);
+                    Stop("Manual state changed; pending work cancelled", announce: m_Pending != null, revokeLease: false);
                 m_ObservedContext = (JObject)context.DeepClone();
             }
             else if (!manual) m_ObservedContext = (JObject)context.DeepClone();
@@ -252,6 +277,8 @@ namespace TiltBrush
             if (m_Closed) return;
             Observe(true);
             if (m_Pending != null && IsNativeInteractionBusy()) Stop("Native interaction took control");
+            OpenTestPanel();
+            CHRISDrawingRuns.Tick(Time.realtimeSinceStartup, CHRISHandAuthority.ActiveTaskId);
             AdvanceSegment();
             // Bound request work per frame so an HTTP caller cannot starve native controls.
             for (int i = 0; i < 4; ++i)
@@ -264,7 +291,11 @@ namespace TiltBrush
                     if (!request.Abandoned)
                     {
                         try { request.Reply = Route(request); }
-                        catch (Exception) { request.Reply = Error("Rejected invalid or unavailable operation"); }
+                        catch (Exception error)
+                        {
+                            Debug.LogWarning($"CHRIS route exception for {request.Method} {request.Path}: {error}");
+                            request.Reply = Error("Rejected invalid or unavailable operation");
+                        }
                     }
                     request.Done.Set();
                 }
@@ -323,8 +354,9 @@ namespace TiltBrush
                 record.Deadline = Time.realtimeSinceStartup + 3;
                 record.Result = Result(record, "queued", "Awaiting native readback", null);
             }
-            catch (Exception)
+            catch (Exception error)
             {
+                Debug.LogWarning("CHRIS action adapter exception: " + error);
                 FinishSegment(record, "unverified", "Operation failed; inspect native state before further work");
             }
         }
@@ -360,12 +392,172 @@ namespace TiltBrush
                 Require(m_InvalidTasks.Contains(task) || m_InvalidTasks.Count < 4096, "Session ledger full; restart host");
                 Invalidate(task);
                 if (m_ActiveTask == task) Stop("Task cancelled");
+                if (CHRISHandAuthority.ActiveTaskId == task) CHRISHandAuthority.Revoke("Task cancelled");
+                // Between batches no lease is active; the run must still end so the task cannot
+                // lease again. Strokes already drawn stay in the sketch.
+                CHRISDrawingRuns.EndRun(task);
                 return new JObject { ["cancelled"] = true, ["host_session"] = m_Session };
             }
             if (request.Method == "POST" && request.Path == "/chris/commands")
                 return Submit(Parse(request.Body));
+            if (request.Path.StartsWith(ProcedureRoute)) return RouteProcedure(request);
+            if (request.Method == "GET" && request.Path == "/chris/drawing/snapshot")
+            {
+                string task = SnapshotTask(request.Query);
+                if (task == null) return Error("Invalid task_id");
+                var snapshot = CHRISDrawingRuns.Snapshot(task, Time.realtimeSinceStartup, SketchStrokeCount(), Now, out string error);
+                return snapshot ?? Error(error);
+            }
+            if (request.Method == "POST" && request.Path == "/chris/test/display")
+            {
+                var display = Parse(request.Body);
+                string invalid = CHRISTestDisplay.Validate(display);
+                if (invalid != null) return Error(invalid);
+                long seq = CHRISTestDisplay.Instance.Show(display, Time.realtimeSinceStartup);
+                OpenTestPanel();
+                return new JObject { ["shown"] = true, ["seq"] = seq };
+            }
+            if (request.Method == "GET" && request.Path == "/chris/test/events")
+                return EventsAfter(request.Query) is long after ? CHRISTestDisplay.Instance.Events(after) : Error("Invalid after");
             return Error("Unknown route");
         }
+
+        // A test session starting opens the status panel in front of the user once. Open Brush
+        // may still be loading when the first display arrives, so retry until it is open.
+        void OpenTestPanel()
+        {
+            var display = CHRISTestDisplay.Instance;
+            if (!display.OpenPending || Time.realtimeSinceStartup < m_NextPanelOpen) return;
+            m_NextPanelOpen = Time.realtimeSinceStartup + 1;
+            bool open = CHRISPanel.Instance?.Popup?.IsOpen() ?? false;
+            if (!open && !CHRISFloatingPanel.Show()) return;
+            display.PanelOpened();
+            Debug.Log(open ? "CHRIS test panel already open" : "CHRIS test panel opened");
+        }
+
+        // "?task_id=<id>" and nothing else.
+        internal static string SnapshotTask(string query)
+        {
+            var match = Regex.Match(query ?? "", "\\A\\?task_id=([A-Za-z0-9_-]{1,80})\\z");
+            return match.Success ? match.Groups[1].Value : null;
+        }
+
+        // Strokes in the sketch, including any the user made; the drawing guard compares it.
+        protected virtual int SketchStrokeCount() => SketchMemoryScript.m_Instance != null ? SketchMemoryScript.m_Instance.StrokeCount : 0;
+
+        // "?after=N" with N a non-negative integer; nothing else is accepted.
+        internal static long? EventsAfter(string query)
+        {
+            var match = Regex.Match(query ?? "", "\\A\\?after=(0|[1-9][0-9]{0,17})\\z");
+            return match.Success ? long.Parse(match.Groups[1].Value) : (long?)null;
+        }
+
+        // ---- Controller procedure lease (Brush hand pose and trigger only) ----
+        const string ProcedureRoute = "/chris/procedure/";
+        static readonly Regex s_LeaseId = new Regex("\\A[0-9a-f]{32}\\z");
+
+        JObject RouteProcedure(Request request)
+        {
+            string rest = request.Path.Substring(ProcedureRoute.Length);
+            if (request.Method == "POST" && rest == "acquire") return AcquireLease(Parse(request.Body));
+            string[] parts = rest.Split('/');
+            if (parts.Length > 2 || !s_LeaseId.IsMatch(parts[0])) return Error("Unknown route");
+            var lease = CHRISHandAuthority.Find(parts[0]);
+            if (lease == null) return Error("Unknown lease");
+            float now = Time.realtimeSinceStartup;
+            if (request.Method == "GET" && parts.Length == 1)
+            {
+                lease.Heartbeat(now);
+                var status = lease.Status();
+                status["host_session"] = m_Session;
+                status["captured_at"] = Now;
+                status["pointer"] = CHRISHandAuthority.Pointer(lease);
+                return status;
+            }
+            if (request.Method != "POST" || parts.Length != 2) return Error("Unknown route");
+            var body = Parse(request.Body);
+            if (parts[1] == "steps")
+            {
+                string error = lease.Submit(body, now);
+                return error != null ? Error(error) :
+                    new JObject { ["lease_id"] = lease.LeaseId, ["step_id"] = body["step_id"], ["accepted"] = true };
+            }
+            if (parts[1] == "release")
+            {
+                Fields(body);
+                // Idempotent: a revoked, expired or released lease reports its current state.
+                CHRISHandAuthority.Release(lease);
+                return new JObject { ["lease_id"] = lease.LeaseId, ["released"] = true,
+                    ["buttons_neutral"] = lease.ButtonsNeutral,
+                    ["restored_mode"] = CHRISHandAuthority.RestoredMode(lease),
+                    ["hand_back_pending"] = CHRISHandAuthority.HandBackPending(lease) };
+            }
+            return Error("Unknown route");
+        }
+
+        // Message shape only, as the shared procedure cases describe (stateless).
+        internal static string ValidateAcquire(JObject data)
+        {
+            var fields = new[] { "task_id", "host_session", "authority_epoch", "revision", "hand", "channels" };
+            if (data == null || !data.Properties().All(p => fields.Contains(p.Name) || p.Name == "scope" || p.Name == "task_deadline") ||
+                !fields.All(f => data[f] != null))
+                return "Invalid lease request fields";
+            if (data["task_deadline"] != null && (!NumberValue(data["task_deadline"]) || (double)data["task_deadline"] < 0))
+                return "Invalid task_deadline";
+            if (data["scope"] != null && (!StringValue(data["scope"]) || (string)data["scope"] != CHRISProcedureExecutor.PaletteScope &&
+                (string)data["scope"] != CHRISProcedureExecutor.DrawScope && (string)data["scope"] != CHRISProcedureExecutor.Draw3dScope))
+                return "Invalid scope";
+            if (!StringValue(data["task_id"]) || !StringValue(data["host_session"]) || !StringValue(data["hand"]) ||
+                data["authority_epoch"].Type != JTokenType.Integer || data["revision"].Type != JTokenType.Integer ||
+                (long)data["authority_epoch"] < 0 || (long)data["revision"] < 0) return "Invalid lease request types";
+            if (!Id((string)data["task_id"])) return "Invalid task_id";
+            if ((string)data["hand"] != "brush") return "Only the brush hand can be leased";
+            if (!JToken.DeepEquals(data["channels"], new JArray("pose", "trigger"))) return "Channels must be pose and trigger";
+            return null;
+        }
+
+        JObject AcquireLease(JObject data)
+        {
+            Require(!m_Closed && m_Registered, "Host closed or unavailable");
+            string invalid = ValidateAcquire(data);
+            if (invalid != null) return Error(invalid);
+            string task = (string)data["task_id"];
+            string scope = data["scope"] != null ? (string)data["scope"] : CHRISProcedureExecutor.PaletteScope;
+            bool box = scope == CHRISProcedureExecutor.Draw3dScope, draw = box || scope == CHRISProcedureExecutor.DrawScope;
+            Observe(true);
+            var context = ReadContext();
+            // A drawing run leases once per stroke batch under one task; any other task leases once.
+            if (m_InvalidTasks.Contains(task) && !(draw && CHRISDrawingRuns.Find(task) != null))
+                return Error("Task authority invalidated");
+            if (m_Pending != null) return Error("A one-shot command is active");
+            if ((string)data["host_session"] != m_Session || (long)data["authority_epoch"] != m_Epoch ||
+                (long)data["revision"] != m_Revision) return Error("Stale context or host session");
+            if (!(bool)context["ready"] || (bool)context["stroke_active"]) return Error("Host busy or unavailable");
+            Require(m_InvalidTasks.Count < 4096, "Session ledger full; restart host");
+            if (draw && CHRISDrawingRuns.AcquireRefusal(task, SketchStrokeCount(), box) is string guard) return Error(guard);
+            // The approved task deadline caps the lease; a deadline about to pass grants nothing.
+            double? deadline = data["task_deadline"] != null ? (double)data["task_deadline"] : (double?)null;
+            if (deadline.HasValue && deadline.Value <= AuthorityTime + 1) return Error("Task deadline already reached");
+            var lease = AcquireHand(task, scope, out string refusal);
+            if (lease == null) return Error(refusal);
+            double seconds = CHRISProcedureExecutor.MaxLeaseSeconds;
+            if (deadline.HasValue)
+            {
+                double remaining = deadline.Value - AuthorityTime;
+                CHRISHandAuthority.Find((string)lease["lease_id"])?.LimitTo(Time.realtimeSinceStartup + (float)remaining);
+                seconds = Math.Min(seconds, remaining);
+            }
+            // One lease per task: the task cannot lease again or run one-shot commands.
+            Invalidate(task);
+            double granted = Now;
+            lease["host_session"] = m_Session;
+            lease["granted_at"] = granted;
+            lease["expires_at"] = granted + seconds;
+            return lease;
+        }
+
+        protected virtual JObject AcquireHand(string task, string scope, out string refusal) =>
+            CHRISHandAuthority.Acquire(task, IsNativeInteractionBusy(), scope, out refusal);
 
         static JObject Parse(string json)
         {
@@ -418,6 +610,7 @@ namespace TiltBrush
             string rejection = null;
             if (m_InvalidTasks.Contains(task)) rejection = "Task authority invalidated";
             else if (m_Pending != null) rejection = "Another command is active";
+            else if (CHRISHandAuthority.OwnsBrush) rejection = "A controller procedure is active";
             else if ((string)approval["host_session"] != m_Session ||
                 (long)approval["authority_epoch"] != m_Epoch || (long)approval["revision"] != m_Revision)
                 rejection = "Stale context or host session";
@@ -552,9 +745,17 @@ namespace TiltBrush
         {
             if (task != null && m_InvalidTasks.Count < 4096) m_InvalidTasks.Add(task);
         }
-        public void Stop(string reason = "Stopped locally", bool announce = true)
+        public void Stop(string reason = "Stopped locally", bool announce = true, bool revokeLease = true)
         {
             var timer = System.Diagnostics.Stopwatch.StartNew();
+            // Observe() also stops on every material context change without revoking the lease
+            // (a drawing lease changes stroke_active with each stroke); only a revoking Stop
+            // ends drawing runs.
+            if (revokeLease)
+            {
+                CHRISHandAuthority.Revoke(reason);
+                CHRISDrawingRuns.EndAll();
+            }
             m_Epoch++;
             Invalidate(m_ActiveTask);
             m_ActiveTask = null;

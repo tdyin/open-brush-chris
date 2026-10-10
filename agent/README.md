@@ -182,6 +182,271 @@ A Windows/OpenXR player and the bounded Simulator
 gate are separate from edit-mode checks; headset comfort and physical timing
 still require user acceptance.
 
+## Controller-driven brush selection
+
+The plan is `C:\Users\Yin\Dev\agents\_common\chris\Sage-Implementation-Plan.md`
+(D48). Uni is the native writer for this job; Bac owns the Python side.
+
+### Phase 0 baseline (2026-10-03)
+
+Recorded read-only by Uni. No Unity, player or build was launched, and no OpenXR
+setting or saved mapping changed.
+
+1. Native commit: `main-chris` @ `25729a182f8ebc4a8eab1cfb9d92f51b2f43a070`, clean
+   and equal to `origin/main-chris`.
+2. Player: `Build/CHRIS-current` is a junction to
+   `Build/CHRIS-v013-pixel-20261002-223950`. Its Assembly-CSharp.dll SHA256
+   `8f3c5d3ada6c21ac785ae76773193433a2622605247e7219d41b5275289c9f5c` matches
+   the v0.1.3 record above. The banner reads `Open Brush 2.0.0 build
+   chris-v013-pixel-20261002-223950`.
+3. Unity: `6000.6.0f1 (f7f8ed4d1e24)` in `ProjectSettings/ProjectVersion.txt`,
+   installed at the path `verify-native-ui.ps1` expects. 6000.6.4f1 is also
+   installed but unused.
+4. OpenXR active runtime (`HKLM\SOFTWARE\Khronos\OpenXR\1`, read only):
+   `C:\Program Files\Meta Horizon\Support\oculus-runtime\oculus_openxr_64.json`
+   ("Oculus OpenXR"). There is no HKCU override.
+5. Meta runtime: Meta Horizon Link 1.115.0 (installed programs). The player log
+   reports OpenXR runtime `Oculus` version `1.208.0` and system `Meta Quest 3`.
+6. Interaction profile: Standalone OpenXR settings enable Oculus Touch, HTC Vive,
+   Valve Index, Microsoft Motion, HP Reverb G2 and SteamFrame. Meta Quest Touch
+   Plus and Touch Pro are disabled. The player requests the Oculus Touch
+   Controller Profile, and both hands report `Oculus, Oculus Touch Controller
+   OpenXR`. Quest 3 controllers therefore use
+   `/interaction_profiles/oculus/touch_controller`.
+7. Source facts the plan relies on still hold at this commit (files last changed
+   in `e2e8f4e1`):
+   - `CHRISBimanualHost` disables a hand's `TrackedPoseDriver` while CHRIS owns
+     its pose and restores the previous enabled state on release.
+     `OwnsBrushPose`/`OwnsWandPose` report that ownership.
+   - `BrushTypeButton.OnButtonPressed` calls
+     `BrushController.m_Instance.SetActiveBrush(m_Brush)`.
+   - The `CHRISCommandGateway` context reports `brush_id` (current brush GUID),
+     size, colour, the brush catalog, Brush/Color panel visibility,
+     `stroke_active` and the scene pose.
+   - `App.METERS_TO_UNITS` is 10.
+
+Items 5 and 6 come from the last player log for this build on this PC
+(`LocalLow\Icosa Foundation\Open Brush\Player.log`, 2026-10-02 23:21), not from
+a fresh run. The saved mapping is the v0.1.3 default preset (2,875 bytes, SHA256
+`4726b6f09d872c04f894542611eb404384a01e9e148608322d4f47deff65d77a`); it was
+recorded, not replaced.
+
+Manual comparison (brush change with the normal controller palette, then v0.1.3
+keyboard control): **NOT RUN**, deferred by the user (D51). The user has the
+checklist. Simulator gates: **NOT RUN** (D40). Phase 1 (Operator feasibility) was
+skipped by the user's choice of the native route (D50): no Operator install, and
+the first procedure uses the native controller path with CHRISBimanualHost-style
+ownership.
+
+### Phase 2 native procedure path (2026-10-03, branch `chris/phase2-procedure`)
+
+One bounded procedure lease can own the logical Brush hand's pose and trigger. The Wand
+stays with its current owner (physical or mapped). `CHRISHandAuthority` answers who owns
+each hand; `CHRISBimanualHost` remains the only code that disables/restores the
+TrackedPoseDrivers and supplies virtual hands. `CHRISProcedureExecutor` is the pure lease
+and step state machine; `CHRISPaletteObserver` reads the Brush palette without writing it.
+
+- Routes: `POST /chris/procedure/acquire`, `GET /chris/procedure/{lease_id}` (heartbeat),
+  `POST /chris/procedure/{lease_id}/steps`, `POST /chris/procedure/{lease_id}/release`
+  (idempotent). Wire shapes match the backend's `schemas/procedure/v0.1/` cases.
+  `/chris/context` adds `palette`, `hover_target_id`, `grab_active`, `focus` and
+  `buttons_neutral`; these do not advance the revision. The palette is built with the
+  service's limits (unique lowercase `brush:<guid>` targets, at most 64, labels of at most
+  80 characters, finite centres or null, `0 <= page < page_count`), and a failed palette
+  read reports null instead of failing the context.
+- Acquire requires focus, no stroke/grab/widget, no F1 UI pointer, no pending mapping
+  change, no legacy move_brush ownership, no held physical or mapped Brush input and no
+  one-shot command. One lease per task; one-shot commands are refused while a lease owns
+  the hand.
+- `aim` keeps every Brush button released and the stick at zero; it turns the pointer
+  attach point onto the re-resolved target and moves position only when the target is
+  beyond 3.5 units (panel rays reach 4) or at a grazing angle, inside the 20-unit clamp.
+  It succeeds after 3 hover frames. `press` requires the expected hover, holds the trigger
+  0.1 s (cap 0.25 s) with the pose fixed, then presents one release edge.
+- Local revocation: Escape, focus loss, 1 s without a heartbeat, the 30 s limit, a
+  handedness change, a mapping change/reload/activation, F1/F6 or another mode/recenter/
+  hand-back key, mapped or physical trigger/grip on the Brush hand, a stroke or grab, the
+  gateway Stop and `/chris/cancel` for the task. A gateway revision change caused by the
+  procedure's own brush change does not revoke it.
+- Hand-back: the released hand is shown for one more frame, physical input then needs a
+  fresh press, and mapped keys held through the lease are latched. `hand_back_pending`
+  stays true while CHRIS still owns the pose or the physical controller is untracked.
+- The agent path never calls `SetActiveBrush`, button callbacks or panel/page setters; an
+  editor check fails if the new files or the procedure routes reference them.
+- Headset findings fixed 2026-10-03: mapped Mode/HandBackPending/RecenterPending count as a
+  takeover only when they change during the lease (focus loss sets HandBackPending, which
+  revoked every lease on its first tick); a held mouse button refuses acquire and any mouse
+  press revokes; the Unity log has one `CHRIS procedure:` line per acquire, step start/end
+  (frames, ms, hover frames or trigger hold), revoke and release, and a failed palette read
+  logs its exception once.
+
+In-headset test flow (D62, 2026-10-04): the floating CHRIS status panel (Labs) has a test
+area below the status rows: up to four instruction lines, up to eight case Start buttons and
+Approve/Decline. `chris test --session` (backend) pushes what to show with `POST
+/chris/test/display` and reads physical panel clicks with `GET /chris/test/events?after=N`
+(`CHRISTestDisplay`, ring of 32). Approve/Decline appear only while a display carries a live
+one-time nonce (ttl at most 60 s), and one click consumes it; the runner then approves through
+the service's existing review binding, so the panel adds no HTTP approval path. The last
+instruction lines stay visible between cases. `/chris/context` reports `palette_in_view`
+using Open Brush's own head-facing limit for panel rays (`m_GazeMaxAngleFromFacing`, 70).
+Escape and the panel Stop remain the local stops.
+
+Offline verification: 107 native regression methods pass (89 existing + 18 procedure and
+test display), including 43 request cases of 83 in the shared procedure fixture (acquire,
+step, test display and events query), read in place from `../chris`; response-shape cases
+are validated in Python, and native checks its responses against the fixture's valid
+documents' keys. Evidence: `agent/logs/native-ui-runs/20261004-001001/` (exit 0, panel
+previews in `previews/`). Snapshot check
+`agent/logs/phase2-procedure-20261003/snapshot-before-editor-15/` found zero source
+differences and unchanged Git status after Unity. No player was built. Simulator gates:
+**NOT RUN** (D40).
+
+Headset session 2026-10-03 (Link, Unity Play mode, evidence in
+`agent/logs/headset-20261003/`): Phase 0 manual check in the v0.1.3 player passed. Case 1
+selected Fire through the controller path (lease, aim, press, release; the user saw one
+click). Cases 3/2 did not complete: the stale-flag takeover, a mouse focus click acting
+as Activate and head-facing for panel rays were found and fixed offline afterwards (above);
+the in-headset test flow addresses the headset-off workflow.
+
+Headset session 2026-10-04 (Link, Unity Play mode at `709975f8`, Bac's `chris test
+--session`, evidence in `agent/logs/headset-20261004/`): all five cases passed from the
+in-headset panel with the saved v0.1.3 mapping active. Case 4 took no lease. Case 1 aimed
+at Fire in 387 ms (3 hover frames), held the trigger 111 ms and changed Light to Fire.
+Case 3 passed twice (real trigger squeeze revoked the lease, nothing clicked). Case 5 was
+refused before review. Case 2 passed twice once the Game view had keyboard focus (Escape
+revoked "Stopped locally"); its first run saw no Escape because a manual Play start
+skipped the Game-view focus. Confirmed live: the stale-flag fix, per-event logs, panel
+nonce approvals, `palette_in_view` and editor foreground ("editor foreground True").
+Fixed afterwards: the launcher retries entering Play until playing and never toggles it
+off; every Play start focuses the Game view; the panel open is retried until it is open
+(the first display arrived while Open Brush loaded); a lease that returns to physical
+gives the Brush driver back before the mapping runs. Not yet verified live: those fixes,
+both handedness settings and sleeping controllers.
+
+Panel look (D80, 2026-10-04): the status panel is drawn like the wand panels. Its frame is
+a copy of the Labs "Border" (the same mesh, outline material and `BakedMeshOutline` bake, at
+the Labs transform scale). The ring is resized like a nine-slice, so its line width and
+corners match Labs at 2.4 x 3.2. Controls are native icon buttons with hover descriptions:
+Stop `power`, Start case `play` (number below), Approve `approve`, Decline `decline`. They
+are set as constants in `CHRISNativePopup`. There is no Move button: four invisible
+`CHRISDragStrip` border strips start the drag ("Drag to move"). Offline: 109 methods pass
+(`agent/logs/native-ui-runs/`, previews including `status-panel-next-to-labs.png` in
+`agent/logs/native-ui/`).
+
+Headset session 2026-10-09 (session 5, Link, Unity Play mode at `d16d19b5`, Bac's `chris
+test --session`, evidence in `agent/logs/headset-20261009/`): the launcher entered Play on
+the first attempt, with editor foreground True, XR FOCUSED and "CHRIS test panel opened".
+- Reset Panels fixed the overlapping wand panels. It is under More Options... on the main
+  wand panel, then Reset Panels, two clicks.
+- The user confirmed live that the wand-style panel's icon buttons, hover text and border
+  drag work.
+- Six case 1 runs were started and approved by physical clicks on the panel's icon buttons
+  (one further Start was declined). Each acquired a lease, aimed (345-364 ms, 3 hover
+  frames), pressed (trigger held 105-111 ms) and released, returning physical, alternating
+  Fire and Light. No exceptions were logged.
+- XR focus dropped several times (headset off, Meta overlay) and recovered without a
+  relaunch.
+
+The snapshot check after Unity closed found zero source differences. Requested next (D83)
+was a black background with white text inside the frame and dragging by the "CHRIS" title;
+both were then built (`816fb6a5`, with a seamless single background piece in `5611bfac`).
+
+Headset session 2026-10-09 evening (session 6, D84/D86, Link, Unity Play mode at
+`5611bfac`, evidence in `agent/logs/headset-20261009b/`): Bac's remote-model agent (preset
+cases 6 and 7, started and approved from the panel) chose its own steps with the existing
+lease tools; no native change was needed. Four leases were acquired and four released
+("return physical"), with no revokes, expiries or lost heartbeats and no exceptions:
+- Lease 1: three aims timed out (target not hovered within 2 s, hover frames 0), then two
+  aims succeeded (873 and 808 ms, 3 hover frames) and one press succeeded (trigger held
+  111 ms). The run took about 8 s of its 30 s.
+- Leases 2 and 3: one aim (387 and 379 ms) and one press (held 106 and 111 ms) each.
+- Lease 4: one aim (248 ms), then a press that native refused ("Hover target differs from
+  expected target", trigger held 0 ms, nothing clicked), a second aim (40 ms) and a press
+  (held 112 ms).
+That is 4 successful presses, 6 successful aims, 3 aim timeouts and 1 refused press. XR focus
+dropped and recovered repeatedly (headset or Meta overlay) without a relaunch. Per-run
+before/after brush verdicts are in Bac's logs. `procedure-summary.txt` lists every step.
+
+Agent drawing (D95, `5475291b`; fix `cbe42c3c`): a `draw` lease scope and a `stroke` step,
+a per-task drawing frame fixed in the room (0.6 m square, 0.55 m ahead, 0.1 m below the
+eyes, faint outline), a sketch guard and `GET /chris/drawing/snapshot` (strokes-only
+512 px JPEG). See the commit messages for caps and refusal strings. Every snapshot call
+logs `CHRIS drawing snapshot: ... ok; N bytes, M ms, K strokes` or its exact refusal or
+failure. Route and adapter exceptions are logged in full.
+
+Headset session 2026-10-09 night (session 7, the owl, Link, Play mode, evidence in
+`agent/logs/headset-20261009c/` and `-d/`, case 8):
+- `-c` at `5475291b` (Uni operating): a user-requested restart, because the first Play had a
+  loaded Sketchbook sketch (stroke_count 1) and focus flapping that blocked panel clicks.
+  Then six draw runs drew 24/24 strokes, but every first snapshot failed. Cause: each
+  stroke flips `stroke_active`, so Observe() makes its non-revoking "Manual state changed"
+  Stop, and `5475291b` ended all drawing runs on every Stop, dropping the frame mid-batch.
+  Fixed in `cbe42c3c`: only a revoking Stop ends runs. A regression test flips
+  `stroke_active` during a run.
+- `-d` at `cbe42c3c` (Tau operating): the first Play lost the Link session
+  (`XR_ERROR_SESSION_LOST` at 20:40:33) before any lease. In the second Play, task
+  `d23684f9` drew the owl over 6 draw leases on one frame: 30/30 strokes succeeded at
+  progress 1.00 (batches of 5/5/5/5/4/6). 7 snapshots were all ok (31-41 KB, 5-9 ms; one
+  double fetch between batches 5 and 6), and stroke counts matched the steps one for one.
+  There were 0 revokes and 0 exceptions. The frame fix is confirmed live, including
+  re-leasing for later batches.
+- The run stopped when stroke_count became 31. The 31st stroke came from outside any
+  lease: both controllers re-registered after the last snapshot, having slept during the
+  model call, and focus then went VISIBLE and IDLE. Most likely the user squeezed the
+  brush trigger while picking a controller up. Bac's guard stopped the run, and native
+  would have refused the next lease ("Sketch changed outside this drawing"), as designed.
+  Next time, keep the controllers at rest between batches.
+- `hand_back_pending` is true in every release reply, because of the one-frame
+  release-edge grace. It then stays true while the physical brush controller is
+  untracked, here asleep. It is not a failure. Bac's runner (`089e278`) now treats it as a
+  note and re-reads revision/epoch for every draw acquire.
+
+3D drawing (D106/D108, `550c0136`): a `draw3d` lease scope fixes a 0.6 m box 0.70 m ahead
+(near face 0.40 m from the head), with `stroke3d` steps of `[x, y, z]` points (x right, y
+down, z away). The 2D pen timing, caps and release apply. For a 3D task the snapshot is one
+1024 px `grid2x2` JPEG: front (x, y), side from the right (z, y), top from above (x, 1-z),
+and a perspective tile framed on the drawing.
+
+Headset session 2026-10-09 late (session 8, the 3D owl, Tau operating, `550c0136`,
+evidence in `agent/logs/headset-20261009f/`; the `-e` attempt ended in a Windows restart
+before any stroke):
+- 2 runs, 14 draw3d leases, all released. 66/66 stroke3d steps reported success, 15 grid
+  snapshots ok (54-119 KB, 19-30 ms), 0 refusals, revokes or exceptions. The box and
+  re-leasing on one box worked. Run 2 (task `dc2da528`) drew 60 strokes over 13 leases and
+  stopped at the 60-stroke cap. The user judged the result "hardly a recognizable owl".
+- The empty-sketch guard held: the user ran New Sketch between run 1's snapshot and run 2's
+  first lease ("Sketch Cleared"), and run 2's snapshots counted only its own strokes (6, 11,
+  ... 60). A lease line's "N strokes so far" is the run's own count, not the sketch's.
+- Run 1 (task `5533927a`): 6 steps succeeded, but only 4 strokes exist (stroke_count and the
+  snapshot both say 4), so 2 strokes did not paint. A step succeeds on pen movement; native
+  does not check that Open Brush started a stroke. The cause is unconfirmed: no stroke points
+  are logged on either side. The CHRIS panel's default spot near the box (UI-pointer mode) was
+  the first hypothesis, but the model's plan puts the likely missing stroke at the box centre
+  (z about 0.5), not near the panel. Run 2 painted every stroke.
+- Edge-on finding (Bac, confirmed by Karp): flat ribbon brushes (the user's brush was Light)
+  drawn in a plane facing the user are seen edge-on from the side and from above. They vanish
+  from the side and top tiles, which misleads the model's depth checks. Round brushes (Wire,
+  Tube) do not have this problem.
+- The user ended 3D exploration (D111: drawing in 3D space is not the goal). The three
+  follow-ups (keep the panel out of the box, report "not painted" steps with point bounds,
+  constant-width centreline overlays in the snapshot tiles) were proposed and are on hold;
+  none is built.
+
+Overlapping wand panels (2026-10-04): the editor's saved advanced layout
+(`HKCU\Software\Unity\UnityEditor\Icosa Foundation\Open Brush`, value
+`AdvancedLayout_h3386665793`) stores ToolsAdvanced and ExtraPanel in the same slot (angle
+240, same offset). Open Brush therefore restores them on top of each other. CHRIS is not
+involved: the panel is unique, so it is never saved, and it is not fixed to the wand. The
+player's PlayerPrefs have no saved layout. Fix: use Open Brush's own reset panel layout.
+Do not delete the editor preference by hand.
+
+Meta XR Simulator v207 (D75, skipped in D81): extracted only (`msiexec /a`) to
+`C:/Users/Yin/Dev/xr-sim/MetaXRSimulator`, used per process via `XR_RUNTIME_JSON`, with no
+OpenXR registry changes. Its UI (`MetaXRSimulator.exe`) does not start: it needs Windows App
+Runtime 1.5, which the extract does not install (the packages sit in `v207.0/WindowsAppRuntime`).
+The player stalls at OpenXR loader start-up. Nothing was installed. Evidence:
+`agent/logs/xr-sim-setup/`.
+
 ## Upstream integration points
 
 CHRIS uses the existing TiltBrush namespace and compilation boundaries.
@@ -193,7 +458,7 @@ Directory grouping does not require new generic interfaces or assembly splits.
 | `Assets/Scripts/App.cs` | Allow editor checks to exercise internal runtime contracts through the existing editor assembly. |
 | `Assets/Scripts/GUI/BasePanel.cs` | Reserve the CHRIS panel type. |
 | `Assets/Scripts/GUI/PanelManager.cs` | Check availability and lazily construct the optional floating panel. |
-| `Assets/Scripts/InputManager.cs` | While a CHRIS mapping uses mouse movement, drop the mouse branch of `GetBrushScrollAmount` and `GetMouseMoveDelta`. |
+| `Assets/Scripts/InputManager.cs` | While a CHRIS mapping uses mouse movement, drop the mouse branch of `GetBrushScrollAmount` and `GetMouseMoveDelta`. While a CHRIS procedure lease owns the Brush hand, `GetMouseButton`/`GetMouseButtonDown` report nothing, so a mouse click cannot act as Activate at the procedure's aim point. |
 | `Assets/Scripts/SketchControlsScript.cs` | Make `CanUndo` internal so mapped undo uses the native gate. |
 | `Assets/Scripts/Input/UnityXRControllerInfo.cs` | OR the active mapping's draw into the brush trigger (level, edges and value 1); report the brush as present while CHRIS move_brush owns its pose. |
 | `Assets/Prefabs/Panels/LabsPanel.prefab` | Provide the native CHRIS launcher. |

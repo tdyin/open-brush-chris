@@ -36,7 +36,7 @@ namespace TiltBrush
         static TrackedPoseDriver s_BrushDriver, s_WandDriver;
         static bool s_BrushDriverWasEnabled, s_WandDriverWasEnabled;
         static VrSdk s_HookedSdk;
-        static bool s_PhysicalReleaseGated;
+        static bool s_PhysicalReleaseGated, s_PhysicalHandBackPending;
         static Vector2 s_UIPointerOffset;
         static CHRISControlMode s_PreviousMode = CHRISControlMode.UI;
         static bool s_Focused = true;
@@ -74,18 +74,22 @@ namespace TiltBrush
             s_Input = new CHRISBimanualInput();
             s_BrushDriverWasEnabled = s_WandDriverWasEnabled = false;
             s_HookedSdk = null;
-            s_PhysicalReleaseGated = false;
+            s_PhysicalReleaseGated = s_PhysicalHandBackPending = false;
             s_UIPointerOffset = Vector2.zero;
             s_PreviousMode = CHRISControlMode.UI;
             s_Focused = true;
             s_KeyboardUI = new CHRISKeyboardUIOwnership();
         }
 
+        // Each hand answers from its own owner: a procedure lease (Brush only), the mapping
+        // while it holds that hand's pose or the keyboard UI pointer, otherwise physical input.
         public static CHRISVirtualHand HandFor(ControllerInfo controller)
         {
-            if (!OwnsDesktopControl || InputManager.Controllers == null) return null;
-            if (ReferenceEquals(controller, InputManager.Brush)) return s_Input.Brush;
-            if (ReferenceEquals(controller, InputManager.Wand)) return s_Input.Wand;
+            if (InputManager.m_Instance == null || InputManager.Controllers == null) return null;
+            if (ReferenceEquals(controller, InputManager.Brush))
+                return CHRISHandAuthority.BrushHand ?? (InUIMode || s_BrushDriver != null ? s_Input.Brush : null);
+            if (ReferenceEquals(controller, InputManager.Wand))
+                return InUIMode || s_WandDriver != null ? s_Input.Wand : null;
             return null;
         }
 
@@ -108,8 +112,26 @@ namespace TiltBrush
             bool active = mapping != null && mapping.IsBimanual;
             var head = active ? ViewpointScript.Head : null;
             var controls = SketchControlsScript.m_Instance;
-            bool busy = strokeInProgress || (controls != null &&
-                (controls.IsUserGrabbingWorld() || controls.IsUserInteractingWithAnyWidget()));
+            bool interacting = controls != null && (controls.IsUserGrabbingWorld() || controls.IsUserInteractingWithAnyWidget());
+            bool busy = strokeInProgress || interacting;
+            bool procedure = CHRISHandAuthority.Tick(focused, strokeInProgress, interacting, deviceInput);
+            // Keys held through a procedure hand-back need a fresh press under the mapping.
+            if (CHRISHandAuthority.TakeEnded())
+            {
+                if (s_Input.Active) s_Input.SuspendForEditor(deviceInput);
+                s_PhysicalHandBackPending = CHRISHandAuthority.LastReturnPhysical;
+            }
+            if (procedure)
+            {
+                var owner = InputManager.m_Instance;
+                if (active && head != null)
+                    s_Input.Step(mapping, deviceInput, focused, busy, head.position, head.forward,
+                        owner != null && !owner.WandOnRight, Time.deltaTime);
+                else if (s_Input.Active) { s_Input.Stop(); s_KeyboardUI.Release(); }
+                TakeProcedurePose();
+                return;
+            }
+            if (s_PhysicalHandBackPending && !FinishPhysicalHandBack(busy)) return;
             if (!active || head == null)
             {
                 bool wasActive = s_Input.Active;
@@ -161,6 +183,33 @@ namespace TiltBrush
             var wandDriver = InputManager.Wand.Behavior.GetComponent<TrackedPoseDriver>();
             ReconcileDriverOwnership(brushDriver, wandDriver);
             WritePoses();
+        }
+
+        // The procedure owns the Brush pose; the Wand keeps whichever owner it already had.
+        static void TakeProcedurePose()
+        {
+            if (InputManager.m_Instance == null || InputManager.Brush == null || InputManager.Wand == null) return;
+            HookPoseWrites();
+            var brushDriver = InputManager.Brush.Behavior.GetComponent<TrackedPoseDriver>();
+            var wandDriver = s_WandDriver != null ? InputManager.Wand.Behavior.GetComponent<TrackedPoseDriver>() : null;
+            ReconcileDriverOwnership(brushDriver, wandDriver);
+            // Let the hand-back gate physical release once.
+            s_PhysicalReleaseGated = false;
+            WritePoses();
+        }
+
+        internal static void BeginPhysicalHandBack() => s_PhysicalHandBackPending = true;
+
+        // A lease that took the Brush from physical control returns its driver before the
+        // mapping runs again; otherwise a mapping in UI mode would treat the held driver as its
+        // own pose and take both hands. Waits while a stroke or grab is finishing.
+        internal static bool FinishPhysicalHandBack(bool busy)
+        {
+            GatePhysicalRelease();
+            if (busy) return false;
+            Restore(ref s_BrushDriver, ref s_BrushDriverWasEnabled);
+            s_PhysicalHandBackPending = false;
+            return true;
         }
 
         internal static void ReconcileDriverOwnership(TrackedPoseDriver brushDriver, TrackedPoseDriver wandDriver)
@@ -217,7 +266,7 @@ namespace TiltBrush
 
         static void GatePhysicalRelease()
         {
-            if (s_PhysicalReleaseGated || InputManager.Controllers == null ||
+            if (s_PhysicalReleaseGated || InputManager.m_Instance == null || InputManager.Controllers == null ||
                 InputManager.Brush == null || InputManager.Wand == null) return;
             s_PhysicalReleaseGated = true;
             (InputManager.Brush as UnityXRControllerInfo)?.RequirePhysicalRelease();
@@ -233,7 +282,7 @@ namespace TiltBrush
 
         static void WritePoses()
         {
-            if (s_BrushDriver != null) WritePose(InputManager.Brush, s_Input.Brush);
+            if (s_BrushDriver != null) WritePose(InputManager.Brush, CHRISHandAuthority.BrushHand ?? s_Input.Brush);
             if (s_WandDriver != null) WritePose(InputManager.Wand, s_Input.Wand);
         }
 
