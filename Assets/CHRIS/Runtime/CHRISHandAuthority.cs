@@ -119,7 +119,12 @@ namespace TiltBrush
         }
 
         // Called by the gateway after session, epoch, revision and one-shot exclusion checks.
-        internal static JObject Acquire(string taskId, bool busy, out string refusal)
+        internal static JObject Acquire(string taskId, bool busy, out string refusal) =>
+            Acquire(taskId, busy, CHRISProcedureExecutor.PaletteScope, out refusal);
+
+        // A draw lease also opens (or continues) the task's drawing run; its first lease fixes
+        // the frame in front of the head. The gateway has already checked the sketch guard.
+        internal static JObject Acquire(string taskId, bool busy, string scope, out string refusal)
         {
             var bimanual = CHRISBimanualHost.Input;
             refusal = AcquireRefusal(new CHRISAcquireFacts
@@ -155,7 +160,10 @@ namespace TiltBrush
                 position = head.position + forward * 5f + right * 2f - Vector3.up;
                 rotation = Quaternion.LookRotation(forward, Vector3.up);
             }
-            var lease = Begin(taskId, ReturnMode(), position, rotation);
+            var viewpoint = ViewpointScript.Head;
+            var run = scope == CHRISProcedureExecutor.DrawScope
+                ? CHRISDrawingRuns.Begin(taskId, viewpoint.position, viewpoint.forward, Time.realtimeSinceStartup) : null;
+            var lease = Begin(taskId, ReturnMode(), position, rotation, run);
             s_BrushController = brush;
             s_WandOnRight = InputManager.m_Instance.WandOnRight;
             s_Mapping = CHRISInputMappingHost.Remap.Active;
@@ -165,16 +173,21 @@ namespace TiltBrush
             s_MappedBrushPosition = bimanual.Brush.Position;
             s_MappedBrushRotation = bimanual.Brush.Rotation;
             var xr = brush as UnityXRControllerInfo;
-            Log($"lease {lease.LeaseId} acquired for task {taskId}; return {lease.ReturnMode["source"]}");
+            Log($"lease {lease.LeaseId} acquired for task {taskId}; return {lease.ReturnMode["source"]}" +
+                (run != null ? $"; draw frame {run.Frame.Id}, {run.StrokesStarted} strokes so far" : ""));
             return Grant(lease, xr != null ? xr.PhysicalRightHand : !s_WandOnRight);
         }
 
         // Starts the lease record itself; the gateway test host calls this without controllers.
-        internal static CHRISProcedureExecutor Begin(string taskId, JObject returnMode, Vector3 position, Quaternion rotation)
+        internal static CHRISProcedureExecutor Begin(string taskId, JObject returnMode, Vector3 position, Quaternion rotation,
+            CHRISDrawingRuns.Run run = null)
         {
             if (s_Ledger.Count >= MaxLedger) s_Ledger.Clear();
-            s_Lease = new CHRISProcedureExecutor(Guid.NewGuid().ToString("N"), taskId, returnMode,
-                position, rotation, Time.realtimeSinceStartup);
+            s_Lease = run == null
+                ? new CHRISProcedureExecutor(Guid.NewGuid().ToString("N"), taskId, returnMode, position, rotation, Time.realtimeSinceStartup)
+                : new CHRISProcedureExecutor(Guid.NewGuid().ToString("N"), taskId, returnMode, position, rotation,
+                    Time.realtimeSinceStartup, CHRISProcedureExecutor.DrawScope, run.Frame,
+                    CHRISDrawingRuns.MaxStrokesPerRun - run.StrokesStarted);
             s_Ledger[s_Lease.LeaseId] = s_Lease;
             s_Lease.Log = Log;
             s_Ended = false;
@@ -218,6 +231,12 @@ namespace TiltBrush
 
         static void OnEnded()
         {
+            if (s_Lease != null && s_Lease.Draws)
+            {
+                if (s_Lease.State == CHRISLeaseState.Released)
+                    CHRISDrawingRuns.LeaseEnded(s_Lease.TaskId, s_Lease.StrokesStarted, Time.realtimeSinceStartup);
+                else CHRISDrawingRuns.EndRun(s_Lease.TaskId);
+            }
             s_GraceUntilFrame = Time.frameCount + 1;
             s_Ended = true;
             // Returning hands need a fresh press before physical input counts again.
@@ -260,9 +279,12 @@ namespace TiltBrush
 
         // Advances the lease once per frame before the host writes poses. Returns whether the
         // procedure owns the Brush hand this frame.
-        internal static bool Tick(bool focused, bool busy, ICHRISInputState input)
+        // A draw lease's own stroke is not a takeover: every other way to start one (physical
+        // trigger, mapped draw, mouse) revokes the lease on its own.
+        internal static bool Tick(bool focused, bool strokeInProgress, bool interacting, ICHRISInputState input)
         {
             if (!LeaseActive) return OwnsBrush;
+            bool busy = interacting || strokeInProgress && !s_Lease.Draws;
             var frame = new CHRISProcedureFrame { Now = Time.realtimeSinceStartup, Revocation = Revocation(focused, busy, input) };
             var brush = !ControllersPresent ? null : InputManager.Brush;
             var attach = brush?.Geometry != null ? brush.Geometry.PointerAttachPoint : null;

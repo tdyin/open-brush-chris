@@ -21,17 +21,21 @@ namespace TiltBrush
         public int Applied, ThrowOnAction;
         public bool Busy, SkipMutation, DelayPanel;
         public string LeaseRefusal;
+        public int StrokeCount;
+        protected override int SketchStrokeCount() => StrokeCount;
 
         public double Clock = Now;
         protected override double AuthorityTime => Clock;
         protected override bool IsNativeInteractionBusy() => Busy;
         // Controllers do not exist in edit mode: grant a physical-return lease at the origin.
-        protected override JObject AcquireHand(string task, out string refusal)
+        protected override JObject AcquireHand(string task, string scope, out string refusal)
         {
             refusal = LeaseRefusal ?? (CHRISHandAuthority.OwnsBrush ? "Another procedure lease is active" : null);
             if (refusal != null) return null;
             var physical = new JObject { ["source"] = "physical", ["mode"] = null, ["selected_hand"] = null };
-            return CHRISHandAuthority.Grant(CHRISHandAuthority.Begin(task, physical, Vector3.zero, Quaternion.identity), true);
+            var run = scope == CHRISProcedureExecutor.DrawScope
+                ? CHRISDrawingRuns.Begin(task, Vector3.zero, Vector3.forward, Time.realtimeSinceStartup, false) : null;
+            return CHRISHandAuthority.Grant(CHRISHandAuthority.Begin(task, physical, Vector3.zero, Quaternion.identity, run), true);
         }
 
 
@@ -47,6 +51,7 @@ namespace TiltBrush
         {
             var context = base.ReadContext();
             foreach (var property in State.Properties()) context[property.Name] = property.Value.DeepClone();
+            context["stroke_count"] = StrokeCount;
             return context;
         }
 

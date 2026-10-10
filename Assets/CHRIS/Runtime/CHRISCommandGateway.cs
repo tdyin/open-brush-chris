@@ -146,8 +146,9 @@ namespace TiltBrush
                 ["active_task"] = m_ActiveTask == null ? JValue.CreateNull() : new JValue(m_ActiveTask),
                 ["unknown"] = new JArray("active_layer", "selected_model", "physical_scale", "generation"),
                 ["palette"] = null, ["hover_target_id"] = null, ["palette_in_view"] = null,
-                ["grab_active"] = null, ["focus"] = null, ["buttons_neutral"] = null };
+                ["grab_active"] = null, ["focus"] = null, ["buttons_neutral"] = null, ["stroke_count"] = null };
             if (!ready) return c;
+            c["stroke_count"] = SketchStrokeCount();
             // Read-only procedure observations; not part of MateriallyChanged, so hover alone
             // never advances the revision.
             // A failed palette read reports null; it must never fail the context for one-shot tasks.
@@ -277,6 +278,7 @@ namespace TiltBrush
             Observe(true);
             if (m_Pending != null && IsNativeInteractionBusy()) Stop("Native interaction took control");
             OpenTestPanel();
+            CHRISDrawingRuns.Tick(Time.realtimeSinceStartup, CHRISHandAuthority.ActiveTaskId);
             AdvanceSegment();
             // Bound request work per frame so an HTTP caller cannot starve native controls.
             for (int i = 0; i < 4; ++i)
@@ -391,6 +393,13 @@ namespace TiltBrush
             if (request.Method == "POST" && request.Path == "/chris/commands")
                 return Submit(Parse(request.Body));
             if (request.Path.StartsWith(ProcedureRoute)) return RouteProcedure(request);
+            if (request.Method == "GET" && request.Path == "/chris/drawing/snapshot")
+            {
+                string task = SnapshotTask(request.Query);
+                if (task == null) return Error("Invalid task_id");
+                var snapshot = CHRISDrawingRuns.Snapshot(task, Time.realtimeSinceStartup, SketchStrokeCount(), Now, out string error);
+                return snapshot ?? Error(error);
+            }
             if (request.Method == "POST" && request.Path == "/chris/test/display")
             {
                 var display = Parse(request.Body);
@@ -417,6 +426,16 @@ namespace TiltBrush
             display.PanelOpened();
             Debug.Log(open ? "CHRIS test panel already open" : "CHRIS test panel opened");
         }
+
+        // "?task_id=<id>" and nothing else.
+        internal static string SnapshotTask(string query)
+        {
+            var match = Regex.Match(query ?? "", "\\A\\?task_id=([A-Za-z0-9_-]{1,80})\\z");
+            return match.Success ? match.Groups[1].Value : null;
+        }
+
+        // Strokes in the sketch, including any the user made; the drawing guard compares it.
+        protected virtual int SketchStrokeCount() => SketchMemoryScript.m_Instance != null ? SketchMemoryScript.m_Instance.StrokeCount : 0;
 
         // "?after=N" with N a non-negative integer; nothing else is accepted.
         internal static long? EventsAfter(string query)
@@ -472,8 +491,10 @@ namespace TiltBrush
         internal static string ValidateAcquire(JObject data)
         {
             var fields = new[] { "task_id", "host_session", "authority_epoch", "revision", "hand", "channels" };
-            if (data == null || !data.Properties().All(p => fields.Contains(p.Name)) || !fields.All(f => data[f] != null))
+            if (data == null || !data.Properties().All(p => fields.Contains(p.Name) || p.Name == "scope") || !fields.All(f => data[f] != null))
                 return "Invalid lease request fields";
+            if (data["scope"] != null && (!StringValue(data["scope"]) || (string)data["scope"] != CHRISProcedureExecutor.PaletteScope &&
+                (string)data["scope"] != CHRISProcedureExecutor.DrawScope)) return "Invalid scope";
             if (!StringValue(data["task_id"]) || !StringValue(data["host_session"]) || !StringValue(data["hand"]) ||
                 data["authority_epoch"].Type != JTokenType.Integer || data["revision"].Type != JTokenType.Integer ||
                 (long)data["authority_epoch"] < 0 || (long)data["revision"] < 0) return "Invalid lease request types";
@@ -489,15 +510,20 @@ namespace TiltBrush
             string invalid = ValidateAcquire(data);
             if (invalid != null) return Error(invalid);
             string task = (string)data["task_id"];
+            string scope = data["scope"] != null ? (string)data["scope"] : CHRISProcedureExecutor.PaletteScope;
+            bool draw = scope == CHRISProcedureExecutor.DrawScope;
             Observe(true);
             var context = ReadContext();
-            if (m_InvalidTasks.Contains(task)) return Error("Task authority invalidated");
+            // A drawing run leases once per stroke batch under one task; any other task leases once.
+            if (m_InvalidTasks.Contains(task) && !(draw && CHRISDrawingRuns.Find(task) != null))
+                return Error("Task authority invalidated");
             if (m_Pending != null) return Error("A one-shot command is active");
             if ((string)data["host_session"] != m_Session || (long)data["authority_epoch"] != m_Epoch ||
                 (long)data["revision"] != m_Revision) return Error("Stale context or host session");
             if (!(bool)context["ready"] || (bool)context["stroke_active"]) return Error("Host busy or unavailable");
             Require(m_InvalidTasks.Count < 4096, "Session ledger full; restart host");
-            var lease = AcquireHand(task, out string refusal);
+            if (draw && CHRISDrawingRuns.AcquireRefusal(task, SketchStrokeCount()) is string guard) return Error(guard);
+            var lease = AcquireHand(task, scope, out string refusal);
             if (lease == null) return Error(refusal);
             // One lease per task: the task cannot lease again or run one-shot commands.
             Invalidate(task);
@@ -508,8 +534,8 @@ namespace TiltBrush
             return lease;
         }
 
-        protected virtual JObject AcquireHand(string task, out string refusal) =>
-            CHRISHandAuthority.Acquire(task, IsNativeInteractionBusy(), out refusal);
+        protected virtual JObject AcquireHand(string task, string scope, out string refusal) =>
+            CHRISHandAuthority.Acquire(task, IsNativeInteractionBusy(), scope, out refusal);
 
         static JObject Parse(string json)
         {
@@ -701,6 +727,7 @@ namespace TiltBrush
         {
             var timer = System.Diagnostics.Stopwatch.StartNew();
             if (revokeLease) CHRISHandAuthority.Revoke(reason);
+            CHRISDrawingRuns.EndAll();
             m_Epoch++;
             Invalidate(m_ActiveTask);
             m_ActiveTask = null;

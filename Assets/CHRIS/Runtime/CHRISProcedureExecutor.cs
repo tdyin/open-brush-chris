@@ -45,6 +45,12 @@ namespace TiltBrush
         public const float MaxApproachAngle = 60f;
         public const float MoveUnitsPerSecond = 10f;
         public const float TurnDegreesPerSecond = 360f;
+        // Draw scope (D95): one stroke step follows a polyline in the run's frame with the
+        // trigger held. Native owns all timing; Python never sends a duration.
+        public const string PaletteScope = "palette", DrawScope = "draw";
+        public const int MaxStrokeMilliseconds = 8000, MinStrokePoints = 2, MaxStrokePoints = 64;
+        public const float MaxStrokePathMeters = 2.4f, PenMetersPerSecond = 0.4f, TravelMetersPerSecond = 1f,
+            PenSettleSeconds = 0.05f;
 
         static readonly Regex s_Id = new Regex("\\A[A-Za-z0-9_-]{1,80}\\z");
         static readonly Regex s_Target = new Regex(
@@ -56,11 +62,19 @@ namespace TiltBrush
             public int Seq, Hovered, Frames;
             public float Started, Deadline, PressStart = -1, Held;
             public bool Released;
+            // Stroke: frame points, path length and pen-down length drawn, both in units.
+            public Vector3[] Points;
+            public float Path, Drawn, PenUp = -1;
+            public int Segment;
+            public bool PenDown;
+            public float? Progress => Kind == "stroke" ? (Path > 0 ? Mathf.Clamp01(Drawn / Path) : 0) : (float?)null;
         }
 
         readonly List<Step> m_Steps = new List<Step>();
         float m_Expiry, m_LastHeartbeat, m_LastTick;
         Step m_Current;
+        Vector3 m_AttachLocalPosition;
+        Quaternion m_AttachLocalRotation = Quaternion.identity;
 
         public string LeaseId { get; }
         public string TaskId { get; }
@@ -70,6 +84,12 @@ namespace TiltBrush
         public bool Active => State == CHRISLeaseState.Active;
         public CHRISVirtualHand Hand { get; } = new CHRISVirtualHand();
         public Vector3 Origin { get; }
+        public string Scope { get; }
+        public bool Draws => Scope == DrawScope;
+        public CHRISDrawFrame Frame { get; }
+        // Strokes this lease may still start (the run's remaining budget) and has started.
+        public int StrokeBudget { get; }
+        public int StrokesStarted { get; private set; }
         public string WantedTargetId => m_Current?.Target;
         public bool ButtonsNeutral => Hand.IsNeutral;
         // Optional evidence sink; the host logs one line per step start and end.
@@ -78,7 +98,14 @@ namespace TiltBrush
 
         public CHRISProcedureExecutor(string leaseId, string taskId, JObject returnMode,
             Vector3 position, Quaternion rotation, float now)
+            : this(leaseId, taskId, returnMode, position, rotation, now, PaletteScope, default, 0) { }
+
+        public CHRISProcedureExecutor(string leaseId, string taskId, JObject returnMode,
+            Vector3 position, Quaternion rotation, float now, string scope, CHRISDrawFrame frame, int strokeBudget)
         {
+            Scope = scope;
+            Frame = frame;
+            StrokeBudget = strokeBudget;
             LeaseId = leaseId;
             TaskId = taskId;
             ReturnMode = returnMode;
@@ -101,23 +128,55 @@ namespace TiltBrush
             if (step == null) return "Invalid step";
             string kind = step["kind"]?.Type == JTokenType.String ? (string)step["kind"] : null;
             string[] fields = kind == "aim" ? new[] { "step_id", "seq", "kind", "target_id", "timeout_ms" } :
-                kind == "press" ? new[] { "step_id", "seq", "kind", "button", "expected_hover_target_id", "timeout_ms" } : null;
+                kind == "press" ? new[] { "step_id", "seq", "kind", "button", "expected_hover_target_id", "timeout_ms" } :
+                kind == "stroke" ? new[] { "step_id", "seq", "kind", "points", "timeout_ms" } : null;
             if (fields == null) return "Unknown step kind";
-            if (!step.Properties().All(p => fields.Contains(p.Name)) || !fields.All(f => step[f] != null))
+            if (!step.Properties().All(p => fields.Contains(p.Name) || kind == "stroke" && p.Name == "depth") ||
+                !fields.All(f => step[f] != null))
                 return "Invalid step fields";
             if (step["step_id"].Type != JTokenType.String || !s_Id.IsMatch((string)step["step_id"]))
                 return "Invalid step_id";
             if (step["seq"].Type != JTokenType.Integer || step["timeout_ms"].Type != JTokenType.Integer)
                 return "Invalid step numbers";
             long seq = (long)step["seq"], timeout = (long)step["timeout_ms"];
-            if (timeout < 1 || timeout > MaxStepMilliseconds) return "timeout_ms out of range";
+            if (timeout < 1 || timeout > (kind == "stroke" ? MaxStrokeMilliseconds : MaxStepMilliseconds)) return "timeout_ms out of range";
             if (seq < 1 || seq > MaxSteps) return "seq out of range";
+            if (kind == "stroke") return ValidateStroke(step);
             var target = step[kind == "aim" ? "target_id" : "expected_hover_target_id"];
             if (target.Type != JTokenType.String || !s_Target.IsMatch((string)target)) return "Invalid target_id";
             if (kind == "press" && (step["button"].Type != JTokenType.String || (string)step["button"] != "trigger"))
                 return "Unsupported button";
             return null;
         }
+
+        static bool Unit(JToken token) => (token.Type == JTokenType.Float || token.Type == JTokenType.Integer) &&
+            !double.IsNaN((double)token) && (double)token >= 0 && (double)token <= 1;
+
+        static string ValidateStroke(JObject step)
+        {
+            if (!(step["points"] is JArray points) || points.Count < MinStrokePoints || points.Count > MaxStrokePoints)
+                return "Stroke needs 2 to 64 points";
+            if (points.Any(p => !(p is JArray xy) || xy.Count != 2 || !Unit(xy[0]) || !Unit(xy[1])))
+                return "Stroke points must be [x, y] in 0..1";
+            if (step["depth"] != null && !Unit(step["depth"])) return "Stroke depth must be in 0..1";
+            return null;
+        }
+
+        // Frame points of a validated stroke step.
+        internal static Vector3[] StrokePoints(JObject step, CHRISDrawFrame frame)
+        {
+            float depth = step["depth"] != null ? (float)step["depth"] : 0.5f;
+            return ((JArray)step["points"]).Select(p => frame.Point((float)p[0], (float)p[1], depth)).ToArray();
+        }
+
+        static float PathLength(Vector3[] points)
+        {
+            float length = 0;
+            for (int i = 1; i < points.Length; i++) length += Vector3.Distance(points[i - 1], points[i]);
+            return length;
+        }
+
+        Vector3 Pen => Hand.Position + Hand.Rotation * m_AttachLocalPosition;
 
         // Queues one step. Returns an error reason, or null once queued. A rejected step does
         // not consume its seq; steps are never resent, so a repeated seq or step_id is refused.
@@ -132,8 +191,24 @@ namespace TiltBrush
             if (m_Steps.Any(s => s.Id == id)) return "Duplicate step_id";
             if (m_Current != null) return "Another step is in progress";
             if (m_Steps.Count >= MaxSteps) return "Step limit reached";
+            if (kind == "stroke" && !Draws) return "Lease is not draw scope";
+            if (kind != "stroke" && Draws) return "Aim and press need a palette lease";
+            Vector3[] points = null;
+            float path = 0;
+            if (kind == "stroke")
+            {
+                float units = App.METERS_TO_UNITS;
+                points = StrokePoints(step, Frame);
+                path = PathLength(points);
+                if (path > MaxStrokePathMeters * units) return "Stroke path too long";
+                if (StrokesStarted >= StrokeBudget) return "Stroke limit for this drawing reached";
+                float estimate = Vector3.Distance(Pen, points[0]) / (TravelMetersPerSecond * units) +
+                    path / (PenMetersPerSecond * units) + PenSettleSeconds;
+                if (estimate * 1000 > (long)step["timeout_ms"]) return "Stroke too long for its timeout";
+            }
             m_Current = new Step { Id = id, Kind = kind, Seq = m_Steps.Count + 1,
-                Target = (string)step[kind == "aim" ? "target_id" : "expected_hover_target_id"],
+                Target = kind == "stroke" ? null : (string)step[kind == "aim" ? "target_id" : "expected_hover_target_id"],
+                Points = points, Path = path,
                 Started = now, Deadline = now + (long)step["timeout_ms"] / 1000f };
             m_Steps.Add(m_Current);
             Note($"lease {LeaseId} step {m_Current.Seq} {kind} {m_Current.Target} started");
@@ -158,7 +233,8 @@ namespace TiltBrush
             step.Reason = reason;
             Note($"lease {LeaseId} step {step.Seq} {step.Kind} {status}" + (reason != null ? $" ({reason})" : "") +
                 $"; {step.Frames} frames, {(m_LastTick - step.Started) * 1000:F0} ms" +
-                (step.Kind == "aim" ? $", hover frames {step.Hovered}" : $", trigger held {step.Held * 1000:F0} ms"));
+                (step.Kind == "aim" ? $", hover frames {step.Hovered}" : step.Kind == "stroke" ?
+                    $", progress {step.Progress:F2} of {step.Path / App.METERS_TO_UNITS:F2} m" : $", trigger held {step.Held * 1000:F0} ms"));
             if (ReferenceEquals(step, m_Current)) m_Current = null;
         }
 
@@ -170,11 +246,71 @@ namespace TiltBrush
             if (frame.Revocation != null) { Revoke(frame.Revocation); return; }
             if (frame.Now >= m_Expiry) { End(CHRISLeaseState.Expired, "Lease reached 30 s limit"); return; }
             if (frame.Now - m_LastHeartbeat > HeartbeatSeconds) { Revoke("Heartbeat lost"); return; }
+            m_AttachLocalPosition = frame.AttachLocalPosition;
+            m_AttachLocalRotation = frame.AttachLocalRotation;
             var step = m_Current;
             if (step == null) { Hand.Release(); return; }
             step.Frames++;
             if (step.Kind == "aim") TickAim(step, frame, dt);
+            else if (step.Kind == "stroke") TickStroke(step, frame, dt);
             else TickPress(step, frame);
+        }
+
+        // Travel to the first point with the trigger released, press, follow the polyline at the
+        // pen speed, release and settle. Any end of the lease releases the trigger first.
+        void TickStroke(Step step, CHRISProcedureFrame frame, float dt)
+        {
+            float units = App.METERS_TO_UNITS;
+            Quaternion goal = Frame.PenRotation * Quaternion.Inverse(frame.AttachLocalRotation);
+            if (step.PenUp >= 0)
+            {
+                Hand.Release();
+                if (frame.Now - step.PenUp >= PenSettleSeconds) Finish(step, "succeeded", null);
+                return;
+            }
+            if (frame.Now >= step.Deadline)
+            {
+                Hand.Release();
+                Finish(step, "timeout", step.PenDown ? "Step deadline reached; trigger released" : "Stroke start not reached in time");
+                return;
+            }
+            Vector3 pen = Pen;
+            if (!step.PenDown)
+            {
+                // Travel: no stroke can start while the trigger is released.
+                Hand.Release();
+                Hand.Rotation = Quaternion.RotateTowards(Hand.Rotation, goal, TurnDegreesPerSecond * dt);
+                pen = Vector3.MoveTowards(pen, step.Points[0], TravelMetersPerSecond * units * dt);
+                Place(pen, frame.AttachLocalPosition);
+                if (Vector3.Distance(Pen, step.Points[0]) > 1e-4f || Quaternion.Angle(Hand.Rotation, goal) > 0.5f) return;
+                step.PenDown = true;
+                StrokesStarted++;
+                Hand.Sample(true, false, false, false, false, Vector2.zero);
+                return;
+            }
+            Hand.Rotation = goal;
+            float budget = PenMetersPerSecond * units * dt;
+            while (budget > 0 && step.Segment < step.Points.Length - 1)
+            {
+                Vector3 next = step.Points[step.Segment + 1];
+                float left = Vector3.Distance(pen, next);
+                if (left <= budget) { pen = next; budget -= left; step.Drawn += left; step.Segment++; }
+                else { pen = Vector3.MoveTowards(pen, next, budget); step.Drawn += budget; budget = 0; }
+            }
+            Place(pen, frame.AttachLocalPosition);
+            if (step.Segment >= step.Points.Length - 1)
+            {
+                step.Drawn = step.Path;
+                step.PenUp = frame.Now;
+                Hand.Release();
+            }
+            else Hand.Sample(true, false, false, false, false, Vector2.zero);
+        }
+
+        void Place(Vector3 pen, Vector3 attachLocalPosition)
+        {
+            Hand.Position = CHRISBimanualInput.ClampToOrigin(pen - Hand.Rotation * attachLocalPosition, Origin,
+                CHRISBimanualInput.MaxHandOffsetUnits);
         }
 
         void TickAim(Step step, CHRISProcedureFrame frame, float dt)
@@ -257,6 +393,7 @@ namespace TiltBrush
             {
                 ["step_id"] = s.Id, ["seq"] = s.Seq, ["kind"] = s.Kind,
                 ["status"] = s.Status, ["reason"] = s.Reason,
+                ["progress"] = s.Progress is float progress ? new JValue(Math.Round(progress, 4)) : JValue.CreateNull(),
             })),
         };
     }

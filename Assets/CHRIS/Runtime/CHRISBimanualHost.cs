@@ -112,9 +112,9 @@ namespace TiltBrush
             bool active = mapping != null && mapping.IsBimanual;
             var head = active ? ViewpointScript.Head : null;
             var controls = SketchControlsScript.m_Instance;
-            bool busy = strokeInProgress || (controls != null &&
-                (controls.IsUserGrabbingWorld() || controls.IsUserInteractingWithAnyWidget()));
-            bool procedure = CHRISHandAuthority.Tick(focused, busy, deviceInput);
+            bool interacting = controls != null && (controls.IsUserGrabbingWorld() || controls.IsUserInteractingWithAnyWidget());
+            bool busy = strokeInProgress || interacting;
+            bool procedure = CHRISHandAuthority.Tick(focused, strokeInProgress, interacting, deviceInput);
             // Keys held through a procedure hand-back need a fresh press under the mapping.
             if (CHRISHandAuthority.TakeEnded())
             {

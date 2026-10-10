@@ -47,6 +47,8 @@ namespace TiltBrush
         static string[] ValidKeys(string message) => ((JObject)SharedCases().First(c =>
             (string)c["message"] == message && (string)c["expect"] == "valid")["document"]).Properties().Select(p => p.Name).OrderBy(n => n).ToArray();
         internal static int SharedCasesChecked;
+        internal static string[] SharedValidKeys(string message) => ValidKeys(message);
+        internal static JObject SharedCase(string name) => (JObject)SharedCases().First(c => (string)c["name"] == name)["document"];
 
         [Test]
         public void SharedProcedureCasesMatchNativeMessageValidation()

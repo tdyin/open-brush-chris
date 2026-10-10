@@ -307,13 +307,14 @@ namespace TiltBrush
             {
             TestCHRISAssistance.Exported.Clear();
             int tests = 0;
-            foreach (var suite in new object[] { new TestCHRISNativeUI(), new TestCHRISAssistance(), new TestCHRISCloudVoice(), new TestCHRISCompanion(), new TestCHRISInputMapping(), new TestCHRISInputRemap(), new TestCHRISBimanualInput(), new TestCHRISMappingAuthority(), new TestCHRISPerfProbe(), new TestCHRISProcedure() })
+            foreach (var suite in new object[] { new TestCHRISNativeUI(), new TestCHRISAssistance(), new TestCHRISCloudVoice(), new TestCHRISCompanion(), new TestCHRISInputMapping(), new TestCHRISInputRemap(), new TestCHRISBimanualInput(), new TestCHRISMappingAuthority(), new TestCHRISPerfProbe(), new TestCHRISProcedure(), new TestCHRISDrawing() })
                 foreach (var method in suite.GetType().GetMethods().Where(m => m.GetCustomAttributes(typeof(TestAttribute), false).Length > 0))
                 {
                     method.Invoke(suite, null);
                     tests++;
                 }
             Render(output);
+            RenderDrawingSnapshot(output);
             File.WriteAllText(output + "/protocol-fixtures.json", TestCHRISAssistance.Exported.ToString());
             File.WriteAllText(output + "/companion-profiling.json", TestCHRISCompanion.Measurements.ToString());
             File.WriteAllText(output + "/mapping-cases.txt", TestCHRISInputMapping.Verdicts.ToString());
@@ -328,6 +329,66 @@ namespace TiltBrush
                     else PlayerPrefs.SetString(keys[i], savedStrings[i]);
                 }
                 PlayerPrefs.Save();
+            }
+        }
+
+        // The agent's view (D95): test strokes on the canvas layer inside a drawing frame, captured
+        // by the same snapshot camera path, with a panel-layer object that must not appear.
+        static void RenderDrawingSnapshot(string output)
+        {
+            var scene = EditorSceneManager.NewPreviewScene();
+            Texture2D image = null;
+            try
+            {
+                var frame = CHRISDrawFrame.Facing(Vector3.zero, Vector3.forward, "preview");
+                var resources = CHRISUIResources.Load();
+                var strokes = new GameObject("Test strokes");
+                UnityEngine.SceneManagement.SceneManager.MoveGameObjectToScene(strokes, scene);
+                strokes.layer = LayerMask.NameToLayer("MainCanvas");
+                strokes.transform.SetPositionAndRotation(frame.Center, frame.PenRotation);
+                Vector3 Local(float x, float y) => new Vector3((x - 0.5f) * frame.Size, (0.5f - y) * frame.Size, 0);
+                void Polyline(Color color, params float[] xy)
+                {
+                    for (int i = 2; i < xy.Length; i += 2)
+                    {
+                        Vector3 a = Local(xy[i - 2], xy[i - 1]), b = Local(xy[i], xy[i + 1]);
+                        var bar = resources.Surface(strokes.transform, "Segment", (a + b) / 2,
+                            new Vector2(Vector3.Distance(a, b) + 0.06f, 0.06f), color);
+                        bar.transform.localRotation = Quaternion.Euler(0, 0, Mathf.Atan2(b.y - a.y, b.x - a.x) * Mathf.Rad2Deg);
+                    }
+                }
+                float[] Ellipse(float cx, float cy, float rx, float ry, int n = 24) =>
+                    Enumerable.Range(0, n + 1).SelectMany(i => new[] {
+                        cx + rx * Mathf.Cos(i * 2 * Mathf.PI / n), cy + ry * Mathf.Sin(i * 2 * Mathf.PI / n) }).ToArray();
+                var ink = new Color(0.95f, 0.85f, 0.6f);
+                Polyline(ink, Ellipse(0.5f, 0.62f, 0.22f, 0.26f));                       // body
+                Polyline(ink, Ellipse(0.5f, 0.32f, 0.18f, 0.15f));                       // head
+                Polyline(ink, 0.36f, 0.22f, 0.33f, 0.1f, 0.42f, 0.18f);                   // left ear
+                Polyline(ink, 0.64f, 0.22f, 0.67f, 0.1f, 0.58f, 0.18f);                   // right ear
+                Polyline(Color.white, Ellipse(0.43f, 0.31f, 0.05f, 0.05f, 12));           // eyes
+                Polyline(Color.white, Ellipse(0.57f, 0.31f, 0.05f, 0.05f, 12));
+                Polyline(new Color(1, 0.6f, 0.2f), 0.47f, 0.38f, 0.5f, 0.44f, 0.53f, 0.38f); // beak
+                Polyline(ink, 0.42f, 0.88f, 0.42f, 0.95f, 0.58f, 0.88f, 0.58f, 0.95f);    // feet
+                Polyline(Color.white, 0.04f, 0.04f, 0.14f, 0.04f, 0.14f, 0.14f, 0.04f, 0.14f, 0.04f, 0.04f); // top-left marker
+                // A panel in front of the frame: the snapshot must not see it.
+                var panel = resources.Surface(strokes.transform, "Panel (must not render)", new Vector3(0, 0, -1), new Vector2(2, 2), Color.red);
+                panel.layer = LayerMask.NameToLayer("Panels");
+                foreach (var t in strokes.GetComponentsInChildren<Transform>()) if (t.gameObject != panel) t.gameObject.layer = strokes.layer;
+
+                int mask = 1 << LayerMask.NameToLayer("MainCanvas");
+                image = CHRISDrawingRuns.RenderFrame(frame, mask, CHRISDrawingRuns.SnapshotPixels, scene);
+                File.WriteAllBytes(output + "/drawing-snapshot.jpg", image.EncodeToJPG(CHRISDrawingRuns.SnapshotQuality));
+                int n = CHRISDrawingRuns.SnapshotPixels;
+                // Texture rows start at the bottom: frame (x, y) is pixel (x * n, (1 - y) * n).
+                Color Pixel(float x, float y) => image.GetPixel((int)(x * n), (int)((1 - y) * n));
+                Assert.That(Pixel(0.04f, 0.09f).grayscale, Is.GreaterThan(0.5f), "the top-left marker is at the image's top left");
+                Assert.That(Pixel(0.04f, 0.91f).grayscale, Is.LessThan(0.3f), "and not at the bottom left");
+                Assert.That(Pixel(0.15f, 0.6f).r, Is.LessThan(0.3f), "the panel layer is not rendered");
+            }
+            finally
+            {
+                if (image != null) UnityEngine.Object.DestroyImmediate(image);
+                EditorSceneManager.ClosePreviewScene(scene);
             }
         }
 
