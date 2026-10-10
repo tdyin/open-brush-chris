@@ -499,7 +499,8 @@ namespace TiltBrush
             if (data == null || !data.Properties().All(p => fields.Contains(p.Name) || p.Name == "scope") || !fields.All(f => data[f] != null))
                 return "Invalid lease request fields";
             if (data["scope"] != null && (!StringValue(data["scope"]) || (string)data["scope"] != CHRISProcedureExecutor.PaletteScope &&
-                (string)data["scope"] != CHRISProcedureExecutor.DrawScope)) return "Invalid scope";
+                (string)data["scope"] != CHRISProcedureExecutor.DrawScope && (string)data["scope"] != CHRISProcedureExecutor.Draw3dScope))
+                return "Invalid scope";
             if (!StringValue(data["task_id"]) || !StringValue(data["host_session"]) || !StringValue(data["hand"]) ||
                 data["authority_epoch"].Type != JTokenType.Integer || data["revision"].Type != JTokenType.Integer ||
                 (long)data["authority_epoch"] < 0 || (long)data["revision"] < 0) return "Invalid lease request types";
@@ -516,7 +517,7 @@ namespace TiltBrush
             if (invalid != null) return Error(invalid);
             string task = (string)data["task_id"];
             string scope = data["scope"] != null ? (string)data["scope"] : CHRISProcedureExecutor.PaletteScope;
-            bool draw = scope == CHRISProcedureExecutor.DrawScope;
+            bool box = scope == CHRISProcedureExecutor.Draw3dScope, draw = box || scope == CHRISProcedureExecutor.DrawScope;
             Observe(true);
             var context = ReadContext();
             // A drawing run leases once per stroke batch under one task; any other task leases once.
@@ -527,7 +528,7 @@ namespace TiltBrush
                 (long)data["revision"] != m_Revision) return Error("Stale context or host session");
             if (!(bool)context["ready"] || (bool)context["stroke_active"]) return Error("Host busy or unavailable");
             Require(m_InvalidTasks.Count < 4096, "Session ledger full; restart host");
-            if (draw && CHRISDrawingRuns.AcquireRefusal(task, SketchStrokeCount()) is string guard) return Error(guard);
+            if (draw && CHRISDrawingRuns.AcquireRefusal(task, SketchStrokeCount(), box) is string guard) return Error(guard);
             var lease = AcquireHand(task, scope, out string refusal);
             if (lease == null) return Error(refusal);
             // One lease per task: the task cannot lease again or run one-shot commands.

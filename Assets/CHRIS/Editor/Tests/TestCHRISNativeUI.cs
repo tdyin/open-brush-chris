@@ -315,6 +315,7 @@ namespace TiltBrush
                 }
             Render(output);
             RenderDrawingSnapshot(output);
+            RenderDrawingGrid(output);
             File.WriteAllText(output + "/protocol-fixtures.json", TestCHRISAssistance.Exported.ToString());
             File.WriteAllText(output + "/companion-profiling.json", TestCHRISCompanion.Measurements.ToString());
             File.WriteAllText(output + "/mapping-cases.txt", TestCHRISInputMapping.Verdicts.ToString());
@@ -384,6 +385,92 @@ namespace TiltBrush
                 Assert.That(Pixel(0.04f, 0.09f).grayscale, Is.GreaterThan(0.5f), "the top-left marker is at the image's top left");
                 Assert.That(Pixel(0.04f, 0.91f).grayscale, Is.LessThan(0.3f), "and not at the bottom left");
                 Assert.That(Pixel(0.15f, 0.6f).r, Is.LessThan(0.3f), "the panel layer is not rendered");
+            }
+            finally
+            {
+                if (image != null) UnityEngine.Object.DestroyImmediate(image);
+                EditorSceneManager.ClosePreviewScene(scene);
+            }
+        }
+
+        // The 3D view (D106): a test owl made of strokes in the box, captured by the same grid
+        // path as the live snapshot. A marker near the box's top-left-near corner proves each
+        // tile's (u, v) mapping.
+        static void RenderDrawingGrid(string output)
+        {
+            var scene = EditorSceneManager.NewPreviewScene();
+            Texture2D image = null;
+            try
+            {
+                var box = CHRISDrawFrame.Boxed(Vector3.zero, Vector3.forward, "preview");
+                var resources = CHRISUIResources.Load();
+                int canvas = LayerMask.NameToLayer("MainCanvas");
+                var strokes = new GameObject("Test 3D strokes") { layer = canvas };
+                UnityEngine.SceneManagement.SceneManager.MoveGameObjectToScene(strokes, scene);
+                GameObject Bar(Vector3 a, Vector3 b, Color color, float thickness = 0.06f)
+                {
+                    var bar = GameObject.CreatePrimitive(PrimitiveType.Cube);
+                    bar.layer = canvas;
+                    UnityEngine.Object.DestroyImmediate(bar.GetComponent<Collider>());
+                    bar.transform.SetParent(strokes.transform, true);
+                    bar.transform.position = (a + b) / 2;
+                    bar.transform.rotation = Quaternion.LookRotation(b - a);
+                    bar.transform.localScale = new Vector3(thickness, thickness, Vector3.Distance(a, b) + thickness);
+                    var material = new Material(resources.SurfaceShader);
+                    material.SetColor("_Color", color); material.SetColor("_SecondaryColor", color);
+                    bar.GetComponent<Renderer>().sharedMaterial = material;
+                    return bar;
+                }
+                void Ring(Func<float, Vector3> at, Color color, int n = 32)
+                {
+                    for (int i = 0; i < n; i++) Bar(at(i / (float)n), at((i + 1) / (float)n), color);
+                }
+                var ink = new Color(0.95f, 0.85f, 0.6f);
+                // Body: three orthogonal ellipses around (0.5, 0.62, 0.5); head: two around (0.5, 0.3, 0.45).
+                Ring(t => box.Point3(0.5f + 0.2f * Mathf.Cos(t * 6.283f), 0.62f + 0.24f * Mathf.Sin(t * 6.283f), 0.5f), ink);
+                Ring(t => box.Point3(0.5f, 0.62f + 0.24f * Mathf.Sin(t * 6.283f), 0.5f + 0.2f * Mathf.Cos(t * 6.283f)), ink);
+                Ring(t => box.Point3(0.5f + 0.2f * Mathf.Cos(t * 6.283f), 0.62f, 0.5f + 0.2f * Mathf.Sin(t * 6.283f)), ink);
+                Ring(t => box.Point3(0.5f + 0.16f * Mathf.Cos(t * 6.283f), 0.3f + 0.14f * Mathf.Sin(t * 6.283f), 0.45f), ink);
+                Ring(t => box.Point3(0.5f, 0.3f + 0.14f * Mathf.Sin(t * 6.283f), 0.45f + 0.15f * Mathf.Cos(t * 6.283f)), ink);
+                // Eyes on the near side of the head, a beak pointing at the user, ear tufts.
+                Ring(t => box.Point3(0.44f + 0.04f * Mathf.Cos(t * 6.283f), 0.29f + 0.04f * Mathf.Sin(t * 6.283f), 0.3f), Color.white, 12);
+                Ring(t => box.Point3(0.56f + 0.04f * Mathf.Cos(t * 6.283f), 0.29f + 0.04f * Mathf.Sin(t * 6.283f), 0.3f), Color.white, 12);
+                Bar(box.Point3(0.5f, 0.34f, 0.3f), box.Point3(0.5f, 0.38f, 0.22f), new Color(1, 0.6f, 0.2f));
+                Bar(box.Point3(0.38f, 0.19f, 0.45f), box.Point3(0.34f, 0.08f, 0.45f), ink);
+                Bar(box.Point3(0.62f, 0.19f, 0.45f), box.Point3(0.66f, 0.08f, 0.45f), ink);
+                // Marker: a small bright cube at (0.1, 0.1, 0.1).
+                var marker = Bar(box.Point3(0.07f, 0.1f, 0.1f), box.Point3(0.13f, 0.1f, 0.1f), Color.white, 0.25f);
+
+                image = CHRISDrawingRuns.RenderGrid(box, 1 << canvas, CHRISDrawingRuns.SnapshotPixels, scene);
+                File.WriteAllBytes(output + "/drawing-snapshot-3d.jpg", image.EncodeToJPG(CHRISDrawingRuns.SnapshotQuality));
+                Assert.That(image.width, Is.EqualTo(CHRISDrawingRuns.GridPixels));
+                int tile = CHRISDrawingRuns.SnapshotPixels;
+                // Tile (column, row from the top) and its (u, v): texture rows start at the bottom.
+                Color At(int column, int rowFromTop, float u, float v) =>
+                    image.GetPixel(column * tile + (int)(u * tile), (1 - rowFromTop) * tile + (int)((1 - v) * tile));
+                Assert.That(At(0, 0, 0.1f, 0.1f).grayscale, Is.GreaterThan(0.5f), "front (x, y): marker at the top left");
+                Assert.That(At(1, 0, 0.1f, 0.1f).grayscale, Is.GreaterThan(0.5f), "side (z, y): marker near-left, top");
+                Assert.That(At(0, 1, 0.1f, 0.9f).grayscale, Is.GreaterThan(0.5f), "top (x, 1 - z): marker left, near at the bottom");
+                Assert.That(At(0, 1, 0.1f, 0.1f).grayscale, Is.LessThan(0.3f), "top view is not mirrored");
+                Assert.That(At(0, 0, 0.9f, 0.1f).grayscale, Is.LessThan(0.3f), "front view is not mirrored");
+                // The perspective tile (bottom right) frames what was drawn, so the shape fills it.
+                int minX = tile, maxX = -1, minY = tile, maxY = -1;
+                for (int y = 0; y < tile; y++)
+                for (int x = 0; x < tile; x++)
+                    if (image.GetPixel(tile + x, y).grayscale > 0.4f)
+                    { minX = Math.Min(minX, x); maxX = Math.Max(maxX, x); minY = Math.Min(minY, y); maxY = Math.Max(maxY, y); }
+                Assert.That(Math.Max(maxX - minX, maxY - minY), Is.GreaterThan(tile * 0.5f), "the drawing fills the perspective tile");
+                // Without the corner marker the owl alone is framed and still fills the tile.
+                marker.SetActive(false);
+                UnityEngine.Object.DestroyImmediate(image);
+                image = CHRISDrawingRuns.RenderGrid(box, 1 << canvas, CHRISDrawingRuns.SnapshotPixels, scene);
+                File.WriteAllBytes(output + "/drawing-snapshot-3d-owl.jpg", image.EncodeToJPG(CHRISDrawingRuns.SnapshotQuality));
+                minX = tile; maxX = -1; minY = tile; maxY = -1;
+                for (int y = 0; y < tile; y++)
+                for (int x = 0; x < tile; x++)
+                    if (image.GetPixel(tile + x, y).grayscale > 0.4f)
+                    { minX = Math.Min(minX, x); maxX = Math.Max(maxX, x); minY = Math.Min(minY, y); maxY = Math.Max(maxY, y); }
+                Assert.That(Math.Max(maxX - minX, maxY - minY), Is.GreaterThan(tile * 0.5f), "the owl alone fills the perspective tile");
             }
             finally
             {

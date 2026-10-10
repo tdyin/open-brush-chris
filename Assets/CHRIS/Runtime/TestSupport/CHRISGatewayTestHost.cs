@@ -33,8 +33,9 @@ namespace TiltBrush
             refusal = LeaseRefusal ?? (CHRISHandAuthority.OwnsBrush ? "Another procedure lease is active" : null);
             if (refusal != null) return null;
             var physical = new JObject { ["source"] = "physical", ["mode"] = null, ["selected_hand"] = null };
-            var run = scope == CHRISProcedureExecutor.DrawScope
-                ? CHRISDrawingRuns.Begin(task, Vector3.zero, Vector3.forward, Time.realtimeSinceStartup, false) : null;
+            bool box = scope == CHRISProcedureExecutor.Draw3dScope;
+            var run = box || scope == CHRISProcedureExecutor.DrawScope
+                ? CHRISDrawingRuns.Begin(task, Vector3.zero, Vector3.forward, Time.realtimeSinceStartup, false, box) : null;
             return CHRISHandAuthority.Grant(CHRISHandAuthority.Begin(task, physical, Vector3.zero, Quaternion.identity, run), true);
         }
 

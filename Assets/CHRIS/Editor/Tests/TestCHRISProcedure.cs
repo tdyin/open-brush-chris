@@ -48,6 +48,10 @@ namespace TiltBrush
             (string)c["message"] == message && (string)c["expect"] == "valid")["document"]).Properties().Select(p => p.Name).OrderBy(n => n).ToArray();
         internal static int SharedCasesChecked;
         internal static string[] SharedValidKeys(string message) => ValidKeys(message);
+        // Keys of the first valid case of a message that matches, or null when none exists yet.
+        internal static string[] SharedValidKeysWhere(string message, Func<JObject, bool> match) =>
+            ((JObject)SharedCases().FirstOrDefault(c => (string)c["message"] == message && (string)c["expect"] == "valid" &&
+                match((JObject)c["document"]))?["document"])?.Properties().Select(p => p.Name).OrderBy(n => n).ToArray();
         internal static JObject SharedCase(string name) => (JObject)SharedCases().First(c => (string)c["name"] == name)["document"];
 
         [Test]

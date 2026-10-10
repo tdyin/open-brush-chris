@@ -161,8 +161,9 @@ namespace TiltBrush
                 rotation = Quaternion.LookRotation(forward, Vector3.up);
             }
             var viewpoint = ViewpointScript.Head;
-            var run = scope == CHRISProcedureExecutor.DrawScope
-                ? CHRISDrawingRuns.Begin(taskId, viewpoint.position, viewpoint.forward, Time.realtimeSinceStartup) : null;
+            bool box = scope == CHRISProcedureExecutor.Draw3dScope;
+            var run = box || scope == CHRISProcedureExecutor.DrawScope
+                ? CHRISDrawingRuns.Begin(taskId, viewpoint.position, viewpoint.forward, Time.realtimeSinceStartup, true, box) : null;
             var lease = Begin(taskId, ReturnMode(), position, rotation, run);
             s_BrushController = brush;
             s_WandOnRight = InputManager.m_Instance.WandOnRight;
@@ -174,7 +175,7 @@ namespace TiltBrush
             s_MappedBrushRotation = bimanual.Brush.Rotation;
             var xr = brush as UnityXRControllerInfo;
             Log($"lease {lease.LeaseId} acquired for task {taskId}; return {lease.ReturnMode["source"]}" +
-                (run != null ? $"; draw frame {run.Frame.Id}, {run.StrokesStarted} strokes so far" : ""));
+                (run != null ? $"; draw {(run.Frame.Box ? "box" : "frame")} {run.Frame.Id}, {run.StrokesStarted} strokes so far" : ""));
             return Grant(lease, xr != null ? xr.PhysicalRightHand : !s_WandOnRight);
         }
 
@@ -186,7 +187,7 @@ namespace TiltBrush
             s_Lease = run == null
                 ? new CHRISProcedureExecutor(Guid.NewGuid().ToString("N"), taskId, returnMode, position, rotation, Time.realtimeSinceStartup)
                 : new CHRISProcedureExecutor(Guid.NewGuid().ToString("N"), taskId, returnMode, position, rotation,
-                    Time.realtimeSinceStartup, CHRISProcedureExecutor.DrawScope, run.Frame,
+                    Time.realtimeSinceStartup, run.Frame.Box ? CHRISProcedureExecutor.Draw3dScope : CHRISProcedureExecutor.DrawScope, run.Frame,
                     CHRISDrawingRuns.MaxStrokesPerRun - run.StrokesStarted);
             s_Ledger[s_Lease.LeaseId] = s_Lease;
             s_Lease.Log = Log;

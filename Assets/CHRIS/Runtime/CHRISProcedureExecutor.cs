@@ -47,7 +47,7 @@ namespace TiltBrush
         public const float TurnDegreesPerSecond = 360f;
         // Draw scope (D95): one stroke step follows a polyline in the run's frame with the
         // trigger held. Native owns all timing; Python never sends a duration.
-        public const string PaletteScope = "palette", DrawScope = "draw";
+        public const string PaletteScope = "palette", DrawScope = "draw", Draw3dScope = "draw3d";
         public const int MaxStrokeMilliseconds = 8000, MinStrokePoints = 2, MaxStrokePoints = 64;
         public const float MaxStrokePathMeters = 2.4f, PenMetersPerSecond = 0.4f, TravelMetersPerSecond = 1f,
             PenSettleSeconds = 0.05f;
@@ -67,7 +67,8 @@ namespace TiltBrush
             public float Path, Drawn, PenUp = -1;
             public int Segment;
             public bool PenDown;
-            public float? Progress => Kind == "stroke" ? (Path > 0 ? Mathf.Clamp01(Drawn / Path) : 0) : (float?)null;
+            public bool Stroke => Kind == "stroke" || Kind == "stroke3d";
+            public float? Progress => Stroke ? (Path > 0 ? Mathf.Clamp01(Drawn / Path) : 0) : (float?)null;
         }
 
         readonly List<Step> m_Steps = new List<Step>();
@@ -85,7 +86,7 @@ namespace TiltBrush
         public CHRISVirtualHand Hand { get; } = new CHRISVirtualHand();
         public Vector3 Origin { get; }
         public string Scope { get; }
-        public bool Draws => Scope == DrawScope;
+        public bool Draws => Scope == DrawScope || Scope == Draw3dScope;
         public CHRISDrawFrame Frame { get; }
         // Strokes this lease may still start (the run's remaining budget) and has started.
         public int StrokeBudget { get; }
@@ -129,7 +130,7 @@ namespace TiltBrush
             string kind = step["kind"]?.Type == JTokenType.String ? (string)step["kind"] : null;
             string[] fields = kind == "aim" ? new[] { "step_id", "seq", "kind", "target_id", "timeout_ms" } :
                 kind == "press" ? new[] { "step_id", "seq", "kind", "button", "expected_hover_target_id", "timeout_ms" } :
-                kind == "stroke" ? new[] { "step_id", "seq", "kind", "points", "timeout_ms" } : null;
+                kind == "stroke" || kind == "stroke3d" ? new[] { "step_id", "seq", "kind", "points", "timeout_ms" } : null;
             if (fields == null) return "Unknown step kind";
             if (!step.Properties().All(p => fields.Contains(p.Name) || kind == "stroke" && p.Name == "depth") ||
                 !fields.All(f => step[f] != null))
@@ -139,9 +140,10 @@ namespace TiltBrush
             if (step["seq"].Type != JTokenType.Integer || step["timeout_ms"].Type != JTokenType.Integer)
                 return "Invalid step numbers";
             long seq = (long)step["seq"], timeout = (long)step["timeout_ms"];
-            if (timeout < 1 || timeout > (kind == "stroke" ? MaxStrokeMilliseconds : MaxStepMilliseconds)) return "timeout_ms out of range";
+            bool stroke = kind == "stroke" || kind == "stroke3d";
+            if (timeout < 1 || timeout > (stroke ? MaxStrokeMilliseconds : MaxStepMilliseconds)) return "timeout_ms out of range";
             if (seq < 1 || seq > MaxSteps) return "seq out of range";
-            if (kind == "stroke") return ValidateStroke(step);
+            if (stroke) return ValidateStroke(step, kind == "stroke3d" ? 3 : 2);
             var target = step[kind == "aim" ? "target_id" : "expected_hover_target_id"];
             if (target.Type != JTokenType.String || !s_Target.IsMatch((string)target)) return "Invalid target_id";
             if (kind == "press" && (step["button"].Type != JTokenType.String || (string)step["button"] != "trigger"))
@@ -152,12 +154,12 @@ namespace TiltBrush
         static bool Unit(JToken token) => (token.Type == JTokenType.Float || token.Type == JTokenType.Integer) &&
             !double.IsNaN((double)token) && (double)token >= 0 && (double)token <= 1;
 
-        static string ValidateStroke(JObject step)
+        static string ValidateStroke(JObject step, int dimensions)
         {
             if (!(step["points"] is JArray points) || points.Count < MinStrokePoints || points.Count > MaxStrokePoints)
                 return "Stroke needs 2 to 64 points";
-            if (points.Any(p => !(p is JArray xy) || xy.Count != 2 || !Unit(xy[0]) || !Unit(xy[1])))
-                return "Stroke points must be [x, y] in 0..1";
+            if (points.Any(p => !(p is JArray xy) || xy.Count != dimensions || xy.Any(v => !Unit(v))))
+                return dimensions == 3 ? "Stroke points must be [x, y, z] in 0..1" : "Stroke points must be [x, y] in 0..1";
             if (step["depth"] != null && !Unit(step["depth"])) return "Stroke depth must be in 0..1";
             return null;
         }
@@ -165,6 +167,8 @@ namespace TiltBrush
         // Frame points of a validated stroke step.
         internal static Vector3[] StrokePoints(JObject step, CHRISDrawFrame frame)
         {
+            if ((string)step["kind"] == "stroke3d")
+                return ((JArray)step["points"]).Select(p => frame.Point3((float)p[0], (float)p[1], (float)p[2])).ToArray();
             float depth = step["depth"] != null ? (float)step["depth"] : 0.5f;
             return ((JArray)step["points"]).Select(p => frame.Point((float)p[0], (float)p[1], depth)).ToArray();
         }
@@ -191,11 +195,14 @@ namespace TiltBrush
             if (m_Steps.Any(s => s.Id == id)) return "Duplicate step_id";
             if (m_Current != null) return "Another step is in progress";
             if (m_Steps.Count >= MaxSteps) return "Step limit reached";
+            bool stroke = kind == "stroke" || kind == "stroke3d";
+            if (kind == "stroke" && Scope == Draw3dScope) return "2D strokes need a draw lease";
+            if (kind == "stroke3d" && Scope != Draw3dScope) return "3D strokes need a draw3d lease";
             if (kind == "stroke" && !Draws) return "Lease is not draw scope";
-            if (kind != "stroke" && Draws) return "Aim and press need a palette lease";
+            if (!stroke && Draws) return "Aim and press need a palette lease";
             Vector3[] points = null;
             float path = 0;
-            if (kind == "stroke")
+            if (stroke)
             {
                 float units = App.METERS_TO_UNITS;
                 points = StrokePoints(step, Frame);
@@ -207,7 +214,7 @@ namespace TiltBrush
                 if (estimate * 1000 > (long)step["timeout_ms"]) return "Stroke too long for its timeout";
             }
             m_Current = new Step { Id = id, Kind = kind, Seq = m_Steps.Count + 1,
-                Target = kind == "stroke" ? null : (string)step[kind == "aim" ? "target_id" : "expected_hover_target_id"],
+                Target = stroke ? null : (string)step[kind == "aim" ? "target_id" : "expected_hover_target_id"],
                 Points = points, Path = path,
                 Started = now, Deadline = now + (long)step["timeout_ms"] / 1000f };
             m_Steps.Add(m_Current);
@@ -233,7 +240,7 @@ namespace TiltBrush
             step.Reason = reason;
             Note($"lease {LeaseId} step {step.Seq} {step.Kind} {status}" + (reason != null ? $" ({reason})" : "") +
                 $"; {step.Frames} frames, {(m_LastTick - step.Started) * 1000:F0} ms" +
-                (step.Kind == "aim" ? $", hover frames {step.Hovered}" : step.Kind == "stroke" ?
+                (step.Kind == "aim" ? $", hover frames {step.Hovered}" : step.Stroke ?
                     $", progress {step.Progress:F2} of {step.Path / App.METERS_TO_UNITS:F2} m" : $", trigger held {step.Held * 1000:F0} ms"));
             if (ReferenceEquals(step, m_Current)) m_Current = null;
         }
@@ -252,7 +259,7 @@ namespace TiltBrush
             if (step == null) { Hand.Release(); return; }
             step.Frames++;
             if (step.Kind == "aim") TickAim(step, frame, dt);
-            else if (step.Kind == "stroke") TickStroke(step, frame, dt);
+            else if (step.Stroke) TickStroke(step, frame, dt);
             else TickPress(step, frame);
         }
 
