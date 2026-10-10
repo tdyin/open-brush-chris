@@ -300,17 +300,19 @@ namespace TiltBrush
             Vector3 eye = target.center + (r * 0.8f + up * 0.6f - f * 1.0f).normalized *
                 (radius / Mathf.Sin(PerspectiveFov / 2 * Mathf.Deg2Rad) * 1.05f);
             c = target.center;
-            var views = new[]
-            {
-                (RenderView(box - f * (half + back), Quaternion.LookRotation(f, up), half, 0, far, cullingMask, tile, scene), 0, 1),
-                (RenderView(box + r * (half + back), Quaternion.LookRotation(-r, up), half, 0, far, cullingMask, tile, scene), 1, 1),
-                (RenderView(box + up * (half + back), Quaternion.LookRotation(-up, f), half, 0, far, cullingMask, tile, scene), 0, 0),
-                (RenderView(eye, Quaternion.LookRotation(c - eye, Vector3.up), 0, PerspectiveFov,
-                    Vector3.Distance(eye, c) + radius * 2, cullingMask, tile, scene), 1, 0),
-            };
-            var grid = new Texture2D(2 * tile, 2 * tile, TextureFormat.RGB24, false);
+            // Every texture made here is destroyed on failure; only the finished grid is returned.
+            var views = new List<(Texture2D image, int column, int row)>();
+            Texture2D grid = null;
             try
             {
+                views.Add((RenderView(box - f * (half + back), Quaternion.LookRotation(f, up), half, 0, far, cullingMask, tile, scene), 0, 1));
+                views.Add((RenderView(box + r * (half + back), Quaternion.LookRotation(-r, up), half, 0, far, cullingMask, tile, scene), 1, 1));
+                views.Add((RenderView(box + up * (half + back), Quaternion.LookRotation(-up, f), half, 0, far, cullingMask, tile, scene), 0, 0));
+                views.Add((RenderView(eye, Quaternion.LookRotation(c - eye, Vector3.up), 0, PerspectiveFov,
+                    Vector3.Distance(eye, c) + radius * 2, cullingMask, tile, scene), 1, 0));
+                if (FailGridForTest != null) FailGridForTest(views.Count);
+                grid = new Texture2D(2 * tile, 2 * tile, TextureFormat.RGB24, false);
+                if (FailGridForTest != null) FailGridForTest(views.Count + 1);
                 foreach (var (image, column, row) in views)
                     grid.SetPixels32(column * tile, row * tile, tile, tile, image.GetPixels32());
                 // Texture rows start at the bottom: row 1 is the top half of the image.
@@ -321,10 +323,19 @@ namespace TiltBrush
                     grid.SetPixel(i, tile - 1, border); grid.SetPixel(i, tile, border);
                 }
                 grid.Apply();
-                return grid;
+                var done = grid;
+                grid = null;
+                return done;
             }
-            finally { foreach (var (image, _, _) in views) UnityEngine.Object.DestroyImmediate(image); }
+            finally
+            {
+                foreach (var view in views) UnityEngine.Object.DestroyImmediate(view.image);
+                if (grid != null) UnityEngine.Object.DestroyImmediate(grid);
+            }
         }
+
+        // Tests only: throws at a chosen point of grid composition to prove cleanup.
+        internal static Action<int> FailGridForTest;
 
         const float PerspectiveFov = 42;
 

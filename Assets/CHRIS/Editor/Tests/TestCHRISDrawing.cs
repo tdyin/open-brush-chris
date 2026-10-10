@@ -140,6 +140,89 @@ namespace TiltBrush
             finally { CHRISDrawingRuns.ResetForPlay(); }
         }
 
+        // Atlas review 2026-10-09, item 1: only a physical brush-controller click may start a case
+        // or decide an approval; every mapped or virtual source of the same click is refused.
+        [Test]
+        public void TestPanelClicksNeedThePhysicalBrushController()
+        {
+            Assert.That(CHRISHandAuthority.PhysicalClick(true, false, false, false, false, false, false), Is.True);
+            Assert.That(CHRISHandAuthority.PhysicalClick(false, false, false, false, false, false, false), Is.False, "no real trigger");
+            Assert.That(CHRISHandAuthority.PhysicalClick(true, true, false, false, false, false, false), Is.False, "procedure lease");
+            Assert.That(CHRISHandAuthority.PhysicalClick(true, false, true, false, false, false, false), Is.False, "mouse button");
+            Assert.That(CHRISHandAuthority.PhysicalClick(true, false, false, true, false, false, false), Is.False, "mapped draw key");
+            Assert.That(CHRISHandAuthority.PhysicalClick(true, false, false, false, true, false, false), Is.False, "keyboard UI pointer (Enter)");
+            Assert.That(CHRISHandAuthority.PhysicalClick(true, false, false, false, false, true, false), Is.False, "recovery UI");
+            Assert.That(CHRISHandAuthority.PhysicalClick(true, false, false, false, false, false, true), Is.False, "mapped brush pose");
+
+            // The real button path: the panel's own press handlers, which every UI activation
+            // (physical or mapped) reaches.
+            var popupObject = UnityEngine.Object.Instantiate(CHRISUIResources.Load().PopupPrefab);
+            CHRISTestDisplay.ResetForPlay();
+            try
+            {
+                var popup = popupObject.GetComponent<CHRISNativePopup>();
+                popup.BuildView();
+                void Press(string name)
+                {
+                    var button = popupObject.GetComponentsInChildren<CHRISNativeButton>(true).Single(b => b.name == name);
+                    typeof(CHRISNativeButton).GetMethod("OnButtonPressed", InstanceFlags).Invoke(button, null);
+                }
+                JObject Show(string nonce) => new JObject {
+                    ["lines"] = new JArray("test"), ["nonce"] = nonce,
+                    ["buttons"] = nonce == null ? new JArray() : new JArray("approve", "decline"),
+                    ["cases"] = new JArray(new JObject { ["id"] = 1, ["title"] = "Happy path" }), ["ttl_s"] = 30 };
+                var display = CHRISTestDisplay.Instance;
+                display.Show(Show(null), Time.realtimeSinceStartup);
+                popup.RefreshTest();
+                CHRISHandAuthority.PhysicalClickSource = () => false;
+                Press("Test case 1");
+                Assert.That(display.Latest, Is.EqualTo(0), "a mapped Start click records nothing");
+                display.Show(Show("nonce_a"), Time.realtimeSinceStartup);
+                popup.RefreshTest();
+                Press("Test approve");
+                Press("Test decline");
+                Assert.That(display.Latest, Is.EqualTo(0), "a mapped Approve/Decline consumes nothing");
+                Assert.That(display.ButtonsLive(Time.realtimeSinceStartup), Is.True, "the nonce is still live for a physical click");
+                CHRISHandAuthority.PhysicalClickSource = () => true;
+                Press("Test approve");
+                Assert.That(display.Latest, Is.EqualTo(1));
+                Assert.That((string)display.Events(0)["events"][0]["kind"], Is.EqualTo("approve"));
+                display.Show(Show(null), Time.realtimeSinceStartup);
+                popup.RefreshTest();
+                Press("Test case 1");
+                Assert.That(display.Latest, Is.EqualTo(2), "a physical Start click records");
+                // Stop is never gated.
+                CHRISHandAuthority.PhysicalClickSource = () => false;
+                Assert.That(() => Press("Local Stop"), Throws.Nothing);
+            }
+            finally
+            {
+                CHRISHandAuthority.PhysicalClickSource = null;
+                CHRISTestDisplay.ResetForPlay();
+                UnityEngine.Object.DestroyImmediate(popupObject);
+            }
+        }
+
+        // Atlas review item 3: a failure part-way through the grid leaves no textures behind.
+        [Test]
+        public void GridSnapshotFailureLeavesNoTextures()
+        {
+            var box = TestBox();
+            int mask = 1 << LayerMask.NameToLayer("MainCanvas");
+            foreach (int failAt in new[] { 4, 5 })
+            {
+                int before = Resources.FindObjectsOfTypeAll<Texture2D>().Length;
+                CHRISDrawingRuns.FailGridForTest = n => { if (n == failAt) throw new InvalidOperationException("forced"); };
+                try { Assert.That(() => CHRISDrawingRuns.RenderGrid(box, mask, 64), Throws.InvalidOperationException); }
+                finally { CHRISDrawingRuns.FailGridForTest = null; }
+                Assert.That(Resources.FindObjectsOfTypeAll<Texture2D>().Length, Is.EqualTo(before),
+                    failAt == 4 ? "views made, grid not yet made" : "grid made, composition failed");
+            }
+            var ok = CHRISDrawingRuns.RenderGrid(box, mask, 64);
+            Assert.That(ok.width, Is.EqualTo(128));
+            UnityEngine.Object.DestroyImmediate(ok);
+        }
+
         [Test]
         public void StrokeTravelsPressesFollowsAndReleases()
         {
@@ -345,6 +428,25 @@ namespace TiltBrush
                 var gridKeys = TestCHRISProcedure.SharedValidKeysWhere("drawing_snapshot", d => d["layout"] != null);
                 if (gridKeys != null)
                     Assert.That(grid.Properties().Select(p => p.Name).OrderBy(n => n), Is.EqualTo(gridKeys));
+
+                // Atlas review item 2: cancelling between batches (no lease active) ends the run, so
+                // the task cannot lease again; the strokes already drawn are kept.
+                foreach (var scope in new[] { "draw", "draw3d" })
+                {
+                    string task = "cancel_" + scope;
+                    var leased = Acquire(host, task, scope);
+                    Assert.That(leased["error"], Is.Null, leased.ToString());
+                    Route(host, "POST", "/chris/procedure/" + (string)leased["lease_id"] + "/release");
+                    CHRISHandAuthority.ResetForPlay();
+                    Assert.That(CHRISHandAuthority.LeaseActive, Is.False);
+                    int strokes = host.StrokeCount;
+                    var cancelled = Route(host, "POST", "/chris/cancel", new JObject {
+                        ["task_id"] = task, ["host_session"] = host.Capture()["host_session"] });
+                    Assert.That((bool?)cancelled["cancelled"], Is.True, cancelled.ToString());
+                    Assert.That(CHRISDrawingRuns.Find(task), Is.Null, scope + ": cancellation ends the run");
+                    Assert.That((string)Acquire(host, task, scope)["error"], Is.EqualTo("Task authority invalidated"), scope);
+                    Assert.That(host.StrokeCount, Is.EqualTo(strokes), "completed strokes are kept");
+                }
 
                 host.Stop();
                 Assert.That(CHRISDrawingRuns.Find("draw_t"), Is.Null, "Stop ends the drawing");

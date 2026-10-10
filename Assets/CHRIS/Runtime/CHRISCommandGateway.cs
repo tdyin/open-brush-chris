@@ -393,6 +393,9 @@ namespace TiltBrush
                 Invalidate(task);
                 if (m_ActiveTask == task) Stop("Task cancelled");
                 if (CHRISHandAuthority.ActiveTaskId == task) CHRISHandAuthority.Revoke("Task cancelled");
+                // Between batches no lease is active; the run must still end so the task cannot
+                // lease again. Strokes already drawn stay in the sketch.
+                CHRISDrawingRuns.EndRun(task);
                 return new JObject { ["cancelled"] = true, ["host_session"] = m_Session };
             }
             if (request.Method == "POST" && request.Path == "/chris/commands")

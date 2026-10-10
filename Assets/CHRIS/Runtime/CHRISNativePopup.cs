@@ -108,14 +108,28 @@ namespace TiltBrush
             m_Reasoning.gameObject.SetActive(false);
         }
 
+        // Start, Approve and Decline accept only a physical brush-controller click (D62); a mapped
+        // UI pointer, Enter or mouse activation reaches these handlers too and is ignored. Stop
+        // is never gated.
         void StartCase(int slot)
         {
+            if (!PhysicalOrLog("Start")) return;
             var cases = CHRISTestDisplay.Instance.Cases;
             if (slot < cases.Length) CHRISTestDisplay.Instance.Start(cases[slot].id, CHRISCommandGateway.Now);
         }
 
-        void Decide(bool approve) =>
+        void Decide(bool approve)
+        {
+            if (!PhysicalOrLog(approve ? "Approve" : "Decline")) return;
             CHRISTestDisplay.Instance.Decide(approve, Time.realtimeSinceStartup, CHRISCommandGateway.Now);
+        }
+
+        static bool PhysicalOrLog(string button)
+        {
+            if (CHRISHandAuthority.IsPhysicalBrushClick()) return true;
+            Debug.Log($"CHRIS test panel: ignored a non-physical {button} click (D62: physical brush controller only)");
+            return false;
+        }
 
         internal static string CaseHover(int id, string title) => "Start case " + id + ": " + title;
 

@@ -94,6 +94,25 @@ namespace TiltBrush
 
         static UnityXRControllerInfo BrushXR => !ControllersPresent ? null : InputManager.Brush as UnityXRControllerInfo;
 
+        // D62: test Start, Approve and Decline count only from the user's own brush controller.
+        // Any virtual source of the same click (a procedure lease, the keyboard/mouse mapping's
+        // UI pointer, recovery UI, mapped draw keys or a mouse button) makes it not physical.
+        internal static bool PhysicalClick(bool rawTrigger, bool leaseOwnsBrush, bool mouseHeld, bool mappedDraw,
+            bool keyboardUI, bool recoveryUI, bool mappedBrushPose) =>
+            rawTrigger && !leaseOwnsBrush && !mouseHeld && !mappedDraw && !keyboardUI && !recoveryUI && !mappedBrushPose;
+
+        // Tests replace the live source; null in normal use.
+        internal static Func<bool> PhysicalClickSource;
+
+        public static bool IsPhysicalBrushClick()
+        {
+            if (PhysicalClickSource != null) return PhysicalClickSource();
+            var xr = BrushXR;
+            return PhysicalClick(xr != null && xr.RawVrInput(VrInput.Trigger), OwnsBrush, MouseHeld(),
+                CHRISInputMappingHost.Remap.DrawHeld, CHRISBimanualHost.InUIMode, CHRISBimanualHost.RecoveryUI,
+                CHRISBimanualHost.OwnsBrushPose);
+        }
+
         static bool PhysicalHeld()
         {
             var xr = BrushXR;
