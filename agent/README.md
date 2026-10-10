@@ -401,6 +401,33 @@ Headset session 2026-10-09 night (session 7, the owl, Link, Play mode, evidence 
   untracked, here asleep. It is not a failure. Bac's runner (`089e278`) now treats it as a
   note and re-reads revision/epoch for every draw acquire.
 
+3D drawing (D106/D108, `550c0136`): a `draw3d` lease scope fixes a 0.6 m box 0.70 m ahead
+(near face 0.40 m from the head), with `stroke3d` steps of `[x, y, z]` points (x right, y
+down, z away). The 2D pen timing, caps and release apply. For a 3D task the snapshot is one
+1024 px `grid2x2` JPEG: front (x, y), side from the right (z, y), top from above (x, 1-z),
+and a perspective tile framed on the drawing.
+
+Headset session 2026-10-09 late (session 8, the 3D owl, Tau operating, `550c0136`,
+evidence in `agent/logs/headset-20261009f/`; the `-e` attempt ended in a Windows restart
+before any stroke):
+- 2 runs, 14 draw3d leases, all released. 66/66 stroke3d steps reported success, 15 grid
+  snapshots ok (54-119 KB, 19-30 ms), 0 refusals, revokes or exceptions. The box and
+  re-leasing on one box worked. Run 2 (task `dc2da528`) drew 60 strokes over 13 leases and
+  stopped at the 60-stroke cap.
+- Run 1 (task `5533927a`): 6 steps succeeded, but only 4 strokes exist (stroke_count and the
+  snapshot both say 4), so 2 strokes did not paint. A step succeeds on pen movement; native
+  does not check that Open Brush started a stroke. The cause is unconfirmed: no stroke points
+  are logged on either side. The CHRIS panel's default spot near the box (UI-pointer mode) was
+  the first hypothesis, but the model's plan puts the likely missing stroke at the box centre
+  (z about 0.5), not near the panel. Run 2 painted every stroke.
+- Edge-on finding (Bac, confirmed by Karp): flat ribbon brushes (the user's brush was Light)
+  drawn in a plane facing the user are seen edge-on from the side and from above. They vanish
+  from the side and top tiles, which misleads the model's depth checks. Round brushes (Wire,
+  Tube) do not have this problem.
+- The user ended 3D exploration (D111: drawing in 3D space is not the goal). The three
+  follow-ups (keep the panel out of the box, report "not painted" steps with point bounds,
+  constant-width centreline overlays in the snapshot tiles) are on hold, not built.
+
 Overlapping wand panels (2026-10-04): the editor's saved advanced layout
 (`HKCU\Software\Unity\UnityEditor\Icosa Foundation\Open Brush`, value
 `AdvancedLayout_h3386665793`) stores ToolsAdvanced and ExtraPanel in the same slot (angle
