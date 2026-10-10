@@ -260,6 +260,20 @@ namespace TiltBrush
             Assert.That(late.Submit(Stroke(1, 8000, 0, 0.5f, 1, 0.5f), 2.5f), Is.EqualTo("Step would pass the task deadline"));
             Assert.That((JArray)late.Status()["steps"], Is.Empty, "nothing moved");
 
+            // Atlas second re-review: the estimate fits but the full timeout does not. A 0.6 m stroke
+            // estimates about 1.9 s with a 3 s timeout; with 2.5 s left after a request delay it is
+            // refused, and with 3 s left it is admitted.
+            var tight = DrawLease();
+            tight.LimitTo(1 + 2.5f);
+            Assert.That(tight.Submit(Stroke(1, 3000, 0, 0.5f, 1, 0.5f), 1), Is.EqualTo("Step would pass the task deadline"),
+                "estimate 1.9 s fits in 2.5 s, timeout 3 s does not");
+            Assert.That((JArray)tight.Status()["steps"], Is.Empty);
+            var room = DrawLease();
+            room.LimitTo(1 + 3.05f);
+            Assert.That(room.Submit(Stroke(1, 3000, 0, 0.5f, 1, 0.5f), 1), Is.Null, "the full timeout fits");
+            // The separate path-duration check still applies.
+            Assert.That(DrawLease().Submit(Stroke(1, 1500, 0, 0.5f, 1, 0.5f), 0), Is.EqualTo("Stroke too long for its timeout"));
+
             // Cut off mid-stroke: released in that frame, cancelled with partial progress.
             var lease = DrawLease();
             Assert.That(lease.Submit(Stroke(1, 8000, 0, 0.5f, 1, 0.5f), 0), Is.Null);

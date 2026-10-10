@@ -223,9 +223,11 @@ namespace TiltBrush
                 float estimate = Vector3.Distance(Pen, points[0]) / (TravelMetersPerSecond * units) +
                     path / (PenMetersPerSecond * units) + PenSettleSeconds;
                 if (estimate * 1000 > (long)step["timeout_ms"]) return "Stroke too long for its timeout";
-                if (m_TaskDeadline && now + estimate > m_Expiry) return "Step would pass the task deadline";
             }
-            else if (m_TaskDeadline && now + (long)step["timeout_ms"] / 1000f > m_Expiry) return "Step would pass the task deadline";
+            // The deadline budget is the step's full timeout for every kind: a stroke may take
+            // longer than its motion estimate (the pen also turns into place), never longer than
+            // its timeout.
+            if (m_TaskDeadline && now + (long)step["timeout_ms"] / 1000f > m_Expiry) return "Step would pass the task deadline";
             m_Current = new Step { Id = id, Kind = kind, Seq = m_Steps.Count + 1,
                 Target = stroke ? null : (string)step[kind == "aim" ? "target_id" : "expected_hover_target_id"],
                 Points = points, Path = path,
