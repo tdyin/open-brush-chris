@@ -213,7 +213,7 @@ namespace TiltBrush
                 Assert.That((string)Acquire(host, "draw_t", "draw")["error"], Is.EqualTo("Start a new sketch first"));
                 host.StrokeCount = 0;
                 Assert.That((string)Route(host, "GET", "/chris/drawing/snapshot", null, "?task_id=draw_t")["error"],
-                    Is.EqualTo("No drawing frame for this task"));
+                    Does.StartWith("No drawing frame for this task"));
                 var first = Acquire(host, "draw_t", "draw");
                 Assert.That(first["error"], Is.Null, first.ToString());
                 string frameId = CHRISDrawingRuns.Find("draw_t").Frame.Id;
@@ -244,6 +244,18 @@ namespace TiltBrush
                 Assert.That(jpeg[0] == 0xFF && jpeg[1] == 0xD8, Is.True, "JPEG data");
                 Assert.That((string)Route(host, "GET", "/chris/drawing/snapshot", null, "?task_id=draw_t")["error"],
                     Is.EqualTo("Snapshot rate limit; retry after 1 s"));
+
+                // Regression (D101): drawing flips stroke_active, so Observe() makes the gateway's
+                // soft, non-revoking Stop. That must keep the frame and the next batch's lease.
+                host.State["stroke_active"] = true; host.Tick();
+                host.State["stroke_active"] = false; host.Tick();
+                Assert.That(CHRISDrawingRuns.Find("draw_t"), Is.Not.Null, "a manual state change keeps the drawing");
+                Assert.That((string)Route(host, "GET", "/chris/drawing/snapshot", null, "?task_id=draw_t")["error"],
+                    Is.EqualTo("Snapshot rate limit; retry after 1 s"), "the frame still exists (only rate limited)");
+                var third = Acquire(host, "draw_t", "draw");
+                Assert.That(third["error"], Is.Null, "the next batch can still lease after a manual state change: " + third);
+                Route(host, "POST", "/chris/procedure/" + (string)third["lease_id"] + "/release");
+                CHRISHandAuthority.ResetForPlay();
 
                 host.Stop();
                 Assert.That(CHRISDrawingRuns.Find("draw_t"), Is.Null, "Stop ends the drawing");

@@ -291,7 +291,11 @@ namespace TiltBrush
                     if (!request.Abandoned)
                     {
                         try { request.Reply = Route(request); }
-                        catch (Exception) { request.Reply = Error("Rejected invalid or unavailable operation"); }
+                        catch (Exception error)
+                        {
+                            Debug.LogWarning($"CHRIS route exception for {request.Method} {request.Path}: {error}");
+                            request.Reply = Error("Rejected invalid or unavailable operation");
+                        }
                     }
                     request.Done.Set();
                 }
@@ -350,8 +354,9 @@ namespace TiltBrush
                 record.Deadline = Time.realtimeSinceStartup + 3;
                 record.Result = Result(record, "queued", "Awaiting native readback", null);
             }
-            catch (Exception)
+            catch (Exception error)
             {
+                Debug.LogWarning("CHRIS action adapter exception: " + error);
                 FinishSegment(record, "unverified", "Operation failed; inspect native state before further work");
             }
         }
@@ -726,8 +731,14 @@ namespace TiltBrush
         public void Stop(string reason = "Stopped locally", bool announce = true, bool revokeLease = true)
         {
             var timer = System.Diagnostics.Stopwatch.StartNew();
-            if (revokeLease) CHRISHandAuthority.Revoke(reason);
-            CHRISDrawingRuns.EndAll();
+            // Observe() also stops on every material context change without revoking the lease
+            // (a drawing lease changes stroke_active with each stroke); only a revoking Stop
+            // ends drawing runs.
+            if (revokeLease)
+            {
+                CHRISHandAuthority.Revoke(reason);
+                CHRISDrawingRuns.EndAll();
+            }
             m_Epoch++;
             Invalidate(m_ActiveTask);
             m_ActiveTask = null;

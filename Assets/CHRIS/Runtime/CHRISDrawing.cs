@@ -177,25 +177,43 @@ namespace TiltBrush
             return mask;
         }
 
-        // Read-only and rate limited; the frame must exist, no lease is needed.
+        // Read-only and rate limited; the frame must exist, no lease is needed. Every call logs
+        // one line: the size and time, or the exact reason it was refused or failed.
         public static JObject Snapshot(string taskId, float now, int strokeCount, double capturedAt, out string error)
         {
+            var timer = System.Diagnostics.Stopwatch.StartNew();
             error = null;
             var run = Find(taskId);
-            if (run == null) { error = "No drawing frame for this task"; return null; }
-            if (now - run.LastSnapshot < SnapshotIntervalSeconds) { error = "Snapshot rate limit; retry after 1 s"; return null; }
+            if (run == null) error = "No drawing frame for this task (no run, or the run ended)";
+            else if (now - run.LastSnapshot < SnapshotIntervalSeconds) error = "Snapshot rate limit; retry after 1 s";
+            if (error != null)
+            {
+                Debug.Log($"CHRIS drawing snapshot: task {taskId} refused: {error}");
+                return null;
+            }
             run.LastSnapshot = now;
-            var image = RenderFrame(run.Frame, CanvasMask(), SnapshotPixels);
+            Texture2D image = null;
             try
             {
+                image = RenderFrame(run.Frame, CanvasMask(), SnapshotPixels);
+                byte[] jpeg = image.EncodeToJPG(SnapshotQuality);
+                if (jpeg == null || jpeg.Length == 0) throw new InvalidOperationException("JPEG encode returned no data");
+                Debug.Log($"CHRIS drawing snapshot: task {taskId} frame {run.Frame.Id} ok; {jpeg.Length} bytes, " +
+                    $"{timer.Elapsed.TotalMilliseconds:F0} ms, {strokeCount} strokes");
                 return new JObject
                 {
                     ["format"] = "jpeg", ["width"] = SnapshotPixels, ["height"] = SnapshotPixels,
-                    ["data"] = Convert.ToBase64String(image.EncodeToJPG(SnapshotQuality)),
+                    ["data"] = Convert.ToBase64String(jpeg),
                     ["frame_id"] = run.Frame.Id, ["stroke_count"] = strokeCount, ["captured_at"] = capturedAt,
                 };
             }
-            finally { UnityEngine.Object.DestroyImmediate(image); }
+            catch (Exception exception)
+            {
+                error = "Snapshot render failed: " + exception.GetType().Name + ": " + exception.Message;
+                Debug.LogWarning($"CHRIS drawing snapshot: task {taskId} frame {run.Frame.Id} failed: {exception}");
+                return null;
+            }
+            finally { if (image != null) UnityEngine.Object.DestroyImmediate(image); }
         }
 
         // An orthographic camera square on the frame, on the user's side, fitted exactly to it.
