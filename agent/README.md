@@ -367,6 +367,40 @@ That is 4 successful presses, 6 successful aims, 3 aim timeouts and 1 refused pr
 dropped and recovered repeatedly (headset or Meta overlay) without a relaunch. Per-run
 before/after brush verdicts are in Bac's logs. `procedure-summary.txt` lists every step.
 
+Agent drawing (D95, `5475291b`; fix `cbe42c3c`): a `draw` lease scope and a `stroke` step,
+a per-task drawing frame fixed in the room (0.6 m square, 0.55 m ahead, 0.1 m below the
+eyes, faint outline), a sketch guard and `GET /chris/drawing/snapshot` (strokes-only
+512 px JPEG). See the commit messages for caps and refusal strings. Every snapshot call
+logs `CHRIS drawing snapshot: ... ok; N bytes, M ms, K strokes` or its exact refusal or
+failure. Route and adapter exceptions are logged in full.
+
+Headset session 2026-10-09 night (session 7, the owl, Link, Play mode, evidence in
+`agent/logs/headset-20261009c/` and `-d/`, case 8):
+- `-c` at `5475291b` (Uni operating): a user-requested restart, because the first Play had a
+  loaded Sketchbook sketch (stroke_count 1) and focus flapping that blocked panel clicks.
+  Then six draw runs drew 24/24 strokes, but every first snapshot failed. Cause: each
+  stroke flips `stroke_active`, so Observe() makes its non-revoking "Manual state changed"
+  Stop, and `5475291b` ended all drawing runs on every Stop, dropping the frame mid-batch.
+  Fixed in `cbe42c3c`: only a revoking Stop ends runs. A regression test flips
+  `stroke_active` during a run.
+- `-d` at `cbe42c3c` (Tau operating): the first Play lost the Link session
+  (`XR_ERROR_SESSION_LOST` at 20:40:33) before any lease. In the second Play, task
+  `d23684f9` drew the owl over 6 draw leases on one frame: 30/30 strokes succeeded at
+  progress 1.00 (batches of 5/5/5/5/4/6). 7 snapshots were all ok (31-41 KB, 5-9 ms; one
+  double fetch between batches 5 and 6), and stroke counts matched the steps one for one.
+  There were 0 revokes and 0 exceptions. The frame fix is confirmed live, including
+  re-leasing for later batches.
+- The run stopped when stroke_count became 31. The 31st stroke came from outside any
+  lease: both controllers re-registered after the last snapshot, having slept during the
+  model call, and focus then went VISIBLE and IDLE. Most likely the user squeezed the
+  brush trigger while picking a controller up. Bac's guard stopped the run, and native
+  would have refused the next lease ("Sketch changed outside this drawing"), as designed.
+  Next time, keep the controllers at rest between batches.
+- `hand_back_pending` is true in every release reply, because of the one-frame
+  release-edge grace. It then stays true while the physical brush controller is
+  untracked, here asleep. It is not a failure. Bac's runner (`089e278`) now treats it as a
+  note and re-reads revision/epoch for every draw acquire.
+
 Overlapping wand panels (2026-10-04): the editor's saved advanced layout
 (`HKCU\Software\Unity\UnityEditor\Icosa Foundation\Open Brush`, value
 `AdvancedLayout_h3386665793`) stores ToolsAdvanced and ExtraPanel in the same slot (angle
