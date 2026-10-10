@@ -73,6 +73,8 @@ namespace TiltBrush
 
         readonly List<Step> m_Steps = new List<Step>();
         float m_Expiry, m_LastHeartbeat, m_LastTick;
+        // True once the approved task deadline, not the 30 s cap, ends this lease.
+        bool m_TaskDeadline;
         Step m_Current;
         Vector3 m_AttachLocalPosition;
         Quaternion m_AttachLocalRotation = Quaternion.identity;
@@ -117,6 +119,15 @@ namespace TiltBrush
         }
 
         public float SecondsLeft(float now) => Mathf.Max(0, m_Expiry - now);
+
+        // The approved task deadline (Atlas re-review): the lease ends there if it is earlier
+        // than the 30 s cap, and no step may be admitted that could run past it.
+        public void LimitTo(float deadline)
+        {
+            if (deadline >= m_Expiry) return;
+            m_Expiry = deadline;
+            m_TaskDeadline = true;
+        }
 
         public void Heartbeat(float now)
         {
@@ -212,7 +223,9 @@ namespace TiltBrush
                 float estimate = Vector3.Distance(Pen, points[0]) / (TravelMetersPerSecond * units) +
                     path / (PenMetersPerSecond * units) + PenSettleSeconds;
                 if (estimate * 1000 > (long)step["timeout_ms"]) return "Stroke too long for its timeout";
+                if (m_TaskDeadline && now + estimate > m_Expiry) return "Step would pass the task deadline";
             }
+            else if (m_TaskDeadline && now + (long)step["timeout_ms"] / 1000f > m_Expiry) return "Step would pass the task deadline";
             m_Current = new Step { Id = id, Kind = kind, Seq = m_Steps.Count + 1,
                 Target = stroke ? null : (string)step[kind == "aim" ? "target_id" : "expected_hover_target_id"],
                 Points = points, Path = path,
@@ -251,7 +264,8 @@ namespace TiltBrush
             m_LastTick = frame.Now;
             if (!Active) return;
             if (frame.Revocation != null) { Revoke(frame.Revocation); return; }
-            if (frame.Now >= m_Expiry) { End(CHRISLeaseState.Expired, "Lease reached 30 s limit"); return; }
+            if (frame.Now >= m_Expiry)
+            { End(CHRISLeaseState.Expired, m_TaskDeadline ? "Task deadline reached" : "Lease reached 30 s limit"); return; }
             if (frame.Now - m_LastHeartbeat > HeartbeatSeconds) { Revoke("Heartbeat lost"); return; }
             m_AttachLocalPosition = frame.AttachLocalPosition;
             m_AttachLocalRotation = frame.AttachLocalRotation;

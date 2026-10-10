@@ -336,6 +336,8 @@ namespace TiltBrush
 
         // Tests only: throws at a chosen point of grid composition to prove cleanup.
         internal static Action<int> FailGridForTest;
+        // Tests only: throws inside a tile render, after its texture is allocated.
+        internal static Action FailViewForTest;
 
         const float PerspectiveFov = 42;
 
@@ -370,6 +372,7 @@ namespace TiltBrush
         {
             var obj = new GameObject("CHRIS drawing snapshot camera") { hideFlags = HideFlags.HideAndDontSave };
             RenderTexture target = null;
+            Texture2D image = null;
             var previous = RenderTexture.active;
             Camera camera = null;
             try
@@ -392,13 +395,18 @@ namespace TiltBrush
                 camera.targetTexture = target;
                 camera.Render();
                 RenderTexture.active = target;
-                var image = new Texture2D(pixels, pixels, TextureFormat.RGB24, false);
+                image = new Texture2D(pixels, pixels, TextureFormat.RGB24, false);
+                if (FailViewForTest != null) FailViewForTest();
                 image.ReadPixels(new Rect(0, 0, pixels, pixels), 0, 0);
                 image.Apply();
-                return image;
+                // Ownership passes to the caller only on success; any failure destroys it below.
+                var done = image;
+                image = null;
+                return done;
             }
             finally
             {
+                if (image != null) UnityEngine.Object.DestroyImmediate(image);
                 RenderTexture.active = previous;
                 if (camera != null) camera.targetTexture = null;
                 if (target != null) RenderTexture.ReleaseTemporary(target);

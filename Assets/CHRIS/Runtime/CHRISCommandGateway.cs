@@ -499,8 +499,11 @@ namespace TiltBrush
         internal static string ValidateAcquire(JObject data)
         {
             var fields = new[] { "task_id", "host_session", "authority_epoch", "revision", "hand", "channels" };
-            if (data == null || !data.Properties().All(p => fields.Contains(p.Name) || p.Name == "scope") || !fields.All(f => data[f] != null))
+            if (data == null || !data.Properties().All(p => fields.Contains(p.Name) || p.Name == "scope" || p.Name == "task_deadline") ||
+                !fields.All(f => data[f] != null))
                 return "Invalid lease request fields";
+            if (data["task_deadline"] != null && (!NumberValue(data["task_deadline"]) || (double)data["task_deadline"] < 0))
+                return "Invalid task_deadline";
             if (data["scope"] != null && (!StringValue(data["scope"]) || (string)data["scope"] != CHRISProcedureExecutor.PaletteScope &&
                 (string)data["scope"] != CHRISProcedureExecutor.DrawScope && (string)data["scope"] != CHRISProcedureExecutor.Draw3dScope))
                 return "Invalid scope";
@@ -532,14 +535,24 @@ namespace TiltBrush
             if (!(bool)context["ready"] || (bool)context["stroke_active"]) return Error("Host busy or unavailable");
             Require(m_InvalidTasks.Count < 4096, "Session ledger full; restart host");
             if (draw && CHRISDrawingRuns.AcquireRefusal(task, SketchStrokeCount(), box) is string guard) return Error(guard);
+            // The approved task deadline caps the lease; a deadline about to pass grants nothing.
+            double? deadline = data["task_deadline"] != null ? (double)data["task_deadline"] : (double?)null;
+            if (deadline.HasValue && deadline.Value <= AuthorityTime + 1) return Error("Task deadline already reached");
             var lease = AcquireHand(task, scope, out string refusal);
             if (lease == null) return Error(refusal);
+            double seconds = CHRISProcedureExecutor.MaxLeaseSeconds;
+            if (deadline.HasValue)
+            {
+                double remaining = deadline.Value - AuthorityTime;
+                CHRISHandAuthority.Find((string)lease["lease_id"])?.LimitTo(Time.realtimeSinceStartup + (float)remaining);
+                seconds = Math.Min(seconds, remaining);
+            }
             // One lease per task: the task cannot lease again or run one-shot commands.
             Invalidate(task);
             double granted = Now;
             lease["host_session"] = m_Session;
             lease["granted_at"] = granted;
-            lease["expires_at"] = granted + CHRISProcedureExecutor.MaxLeaseSeconds;
+            lease["expires_at"] = granted + seconds;
             return lease;
         }
 

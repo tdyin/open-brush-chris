@@ -218,9 +218,75 @@ namespace TiltBrush
                 Assert.That(Resources.FindObjectsOfTypeAll<Texture2D>().Length, Is.EqualTo(before),
                     failAt == 4 ? "views made, grid not yet made" : "grid made, composition failed");
             }
+            // Re-review item 1: a failure inside a tile render, after its texture exists, at the
+            // first, second and last tile.
+            foreach (int failingTile in new[] { 1, 2, 4 })
+            {
+                int before = Resources.FindObjectsOfTypeAll<Texture2D>().Length;
+                int rendered = 0;
+                CHRISDrawingRuns.FailViewForTest = () => { if (++rendered == failingTile) throw new InvalidOperationException("forced"); };
+                try { Assert.That(() => CHRISDrawingRuns.RenderGrid(box, mask, 64), Throws.InvalidOperationException); }
+                finally { CHRISDrawingRuns.FailViewForTest = null; }
+                Assert.That(Resources.FindObjectsOfTypeAll<Texture2D>().Length, Is.EqualTo(before), "tile " + failingTile + " failed after allocation");
+            }
+            var frame2d = TestFrame();
+            int before2d = Resources.FindObjectsOfTypeAll<Texture2D>().Length;
+            CHRISDrawingRuns.FailViewForTest = () => throw new InvalidOperationException("forced");
+            try { Assert.That(() => CHRISDrawingRuns.RenderFrame(frame2d, mask, 64), Throws.InvalidOperationException); }
+            finally { CHRISDrawingRuns.FailViewForTest = null; }
+            Assert.That(Resources.FindObjectsOfTypeAll<Texture2D>().Length, Is.EqualTo(before2d), "2D snapshot render");
             var ok = CHRISDrawingRuns.RenderGrid(box, mask, 64);
             Assert.That(ok.width, Is.EqualTo(128));
             UnityEngine.Object.DestroyImmediate(ok);
+        }
+
+        // Atlas re-review item 2: the approved task deadline. A lease ends at it, and no step is
+        // admitted that could run past it, whatever the delay before native accepted the step.
+        [Test]
+        public void TaskDeadlineCapsTheLeaseAndItsSteps()
+        {
+            var aim = new JObject { ["step_id"] = "aim1", ["seq"] = 1, ["kind"] = "aim",
+                ["target_id"] = "brush:00000000-0000-0000-0000-000000000001", ["timeout_ms"] = 2000 };
+            var palette = new CHRISProcedureExecutor("lease", "task", Physical(), Vector3.zero, Quaternion.identity, 0);
+            palette.LimitTo(5);
+            Assert.That(palette.Submit(aim, 3.5f), Is.EqualTo("Step would pass the task deadline"), "3.5 s + 2 s > 5 s");
+            Assert.That(palette.Submit(aim, 2.5f), Is.Null, "2.5 s + 2 s fits");
+            palette.LimitTo(60);
+            Assert.That(palette.SecondsLeft(2.5f), Is.EqualTo(2.5f).Within(1e-4f), "a later deadline never extends the lease");
+
+            // A stroke admitted late: its native estimate (about 1.9 s) no longer fits.
+            var late = DrawLease();
+            late.LimitTo(4);
+            Assert.That(late.Submit(Stroke(1, 8000, 0, 0.5f, 1, 0.5f), 2.5f), Is.EqualTo("Step would pass the task deadline"));
+            Assert.That((JArray)late.Status()["steps"], Is.Empty, "nothing moved");
+
+            // Cut off mid-stroke: released in that frame, cancelled with partial progress.
+            var lease = DrawLease();
+            Assert.That(lease.Submit(Stroke(1, 8000, 0, 0.5f, 1, 0.5f), 0), Is.Null);
+            float now = 0;
+            while (!lease.Hand.TriggerHeld && now < 4) { now += Dt; lease.Heartbeat(now); lease.Tick(Frame(now)); }
+            for (int i = 0; i < 30; i++) { now += Dt; lease.Heartbeat(now); lease.Tick(Frame(now)); }
+            Assert.That(lease.Hand.TriggerHeld, Is.True);
+            lease.LimitTo(now + Dt / 2);
+            now += Dt; lease.Heartbeat(now); lease.Tick(Frame(now));
+            Assert.That(lease.Hand.TriggerHeld, Is.False, "released in the deadline frame");
+            Assert.That(lease.State, Is.EqualTo(CHRISLeaseState.Expired));
+            Assert.That(lease.Reason, Is.EqualTo("Task deadline reached"));
+            Assert.That((string)Step(lease, 0)["status"], Is.EqualTo("cancelled"));
+            Assert.That((double)Step(lease, 0)["progress"], Is.GreaterThan(0).And.LessThan(1));
+
+            // Shapes.
+            JObject Body(JToken deadline)
+            {
+                var b = new JObject { ["task_id"] = "t", ["host_session"] = "s", ["authority_epoch"] = 0, ["revision"] = 0,
+                    ["hand"] = "brush", ["channels"] = new JArray("pose", "trigger") };
+                if (deadline != null) b["task_deadline"] = deadline;
+                return b;
+            }
+            Assert.That(CHRISCommandGateway.ValidateAcquire(Body(1791600000.5)), Is.Null);
+            Assert.That(CHRISCommandGateway.ValidateAcquire(Body(null)), Is.Null, "optional for old clients");
+            Assert.That(CHRISCommandGateway.ValidateAcquire(Body("soon")), Is.EqualTo("Invalid task_deadline"));
+            Assert.That(CHRISCommandGateway.ValidateAcquire(Body(-1)), Is.EqualTo("Invalid task_deadline"));
         }
 
         [Test]
@@ -428,6 +494,21 @@ namespace TiltBrush
                 var gridKeys = TestCHRISProcedure.SharedValidKeysWhere("drawing_snapshot", d => d["layout"] != null);
                 if (gridKeys != null)
                     Assert.That(grid.Properties().Select(p => p.Name).OrderBy(n => n), Is.EqualTo(gridKeys));
+
+                // The task deadline at acquire: one about to pass grants nothing and does not burn
+                // the task; a later one caps expires_at.
+                var past = new JObject { ["task_id"] = "deadline_t", ["host_session"] = host.Capture()["host_session"],
+                    ["authority_epoch"] = host.Capture()["authority_epoch"], ["revision"] = host.Capture()["revision"],
+                    ["hand"] = "brush", ["channels"] = new JArray("pose", "trigger"), ["task_deadline"] = host.Clock + 0.5 };
+                Assert.That((string)Route(host, "POST", "/chris/procedure/acquire", past)["error"], Is.EqualTo("Task deadline already reached"));
+                past["task_deadline"] = host.Clock + 10;
+                var capped = Route(host, "POST", "/chris/procedure/acquire", past);
+                Assert.That(capped["error"], Is.Null, "the refused deadline did not invalidate the task: " + capped);
+                Assert.That((double)capped["expires_at"] - (double)capped["granted_at"], Is.EqualTo(10).Within(0.5));
+                Assert.That(CHRISHandAuthority.Find((string)capped["lease_id"]).SecondsLeft(Time.realtimeSinceStartup),
+                    Is.EqualTo(10).Within(0.5));
+                Route(host, "POST", "/chris/procedure/" + (string)capped["lease_id"] + "/release");
+                CHRISHandAuthority.ResetForPlay();
 
                 // Atlas review item 2: cancelling between batches (no lease active) ends the run, so
                 // the task cannot lease again; the strokes already drawn are kept.
