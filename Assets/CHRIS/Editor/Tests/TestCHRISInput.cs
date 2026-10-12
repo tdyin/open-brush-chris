@@ -74,6 +74,7 @@ namespace TiltBrush
                 CHRISInputExecutor.NeutralRefusal, CHRISInputExecutor.BusyBatch, CHRISInputExecutor.StaleSeq,
                 CHRISInputExecutor.Inactive, CHRISInputExecutor.DeadlineRefusal, CHRISInputExecutor.TokenRefusal,
                 CHRISInputExecutor.FrameRefusal, CHRISInputExecutor.FieldRefusal, CHRISInputExecutor.HeadRefusal,
+                CHRISInputExecutor.OutsideRefusal, CHRISInputExecutor.BatchLimit,
                 "Task stopped; new approval needed", "Authority changed; new approval needed", "Task deadline already reached",
                 "Host busy or unavailable", "Requested limit above the native cap" })
                 Assert.That(refusals, Does.Contain(native), "native string not in the shared refusals: " + native);

@@ -49,7 +49,8 @@ namespace TiltBrush
             BusyBatch = "Batch in progress", StaleSeq = "Duplicate or stale batch", Inactive = "Lease is not active",
             DeadlineRefusal = "Batch would pass the task deadline", TokenRefusal = "Observation is stale",
             FrameRefusal = "Frame changed; observe again", FieldRefusal = "Unsupported field",
-            HeadRefusal = "Bounds centre must be 0.25-1.0 m from the head", OutsideRefusal = "Controller outside the bounds";
+            HeadRefusal = "Bounds centre must be 0.25-1.0 m from the head", OutsideRefusal = "Controller outside the bounds",
+            BatchLimit = "Batch limit reached";
         // Interruption and revocation reasons.
         public const string Late = "Execution late", PressToken = "Observation changed before a press",
             DeadlineReached = "Task deadline reached", Recenter = "Recenter", HeartbeatLost = "Heartbeat lost",
@@ -249,7 +250,7 @@ namespace TiltBrush
             string id = (string)batch["batch_id"];
             if (m_Batches.Any(b => b.Id == id) || (long)batch["seq"] != m_Batches.Count + 1) return StaleSeq;
             if (m_Current != null) return BusyBatch;
-            if (m_Batches.Count >= MaxBatches) return "Batch limit reached";
+            if (m_Batches.Count >= MaxBatches) return BatchLimit;
             string problem = LeaseProblem(batch, FrameEpoch, m_Position, m_Rotation, Limits);
             if (problem != null) return problem;
             var samples = (JArray)batch["samples"];
