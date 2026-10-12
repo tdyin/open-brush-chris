@@ -541,6 +541,21 @@ namespace TiltBrush
                     var first = popupObject.GetComponentsInChildren<CHRISNativeButton>().Single(b => b.name == "Test case 1");
                     Assert.That(first.Label.text, Is.EqualTo("4"));
                     Assert.That(first.Hover, Is.EqualTo("Start case 4: Request the current brush"));
+                    // M3 primitive cases take ids 10-12 (D118); two-digit labels must fit their buttons.
+                    var primitive = Display(new[] { "CHRIS tests: click Start with the brush ray",
+                        "Next: case 10 - Primitive: select a different brush" }, null,
+                        (10, "Primitive: select a different brush"), (11, "Primitive: draw one short line"),
+                        (12, "Primitive: same line, trigger up (no mark)"), (1, "Select a brush"));
+                    Assert.That(CHRISTestDisplay.Validate(primitive), Is.Null);
+                    CHRISTestDisplay.Instance.Show(primitive, Time.realtimeSinceStartup);
+                    popup.RefreshTest();
+                    Capture(popupObject, "status-panel-primitive.png");
+                    var ten = popupObject.GetComponentsInChildren<CHRISNativeButton>().Single(b => b.name == "Test case 1");
+                    Assert.That(ten.Label.text, Is.EqualTo("10"));
+                    Assert.That(ten.Hover, Is.EqualTo("Start case 10: Primitive: select a different brush"));
+                    Assert.That(CHRISTestDisplay.Validate(Display(new string[0], null, (15, "Last id"))), Is.Null);
+                    Assert.That(CHRISTestDisplay.Validate(Display(new string[0], null, (16, "Too high"))), Is.EqualTo("Invalid cases"));
+                    Assert.That(CHRISTestDisplay.Validate(Display(new string[0], null, (0, "Too low"))), Is.EqualTo("Invalid cases"));
                     CHRISTestDisplay.Instance.Show(Display(new[] { "Case 1 Happy path: select Light",
                         "Look at the palette, keep the brush trigger released", "Approve to start", "Last: case 4 PASS" },
                         "preview"), Time.realtimeSinceStartup);

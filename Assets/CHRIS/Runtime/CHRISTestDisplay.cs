@@ -14,7 +14,7 @@ namespace TiltBrush
     // still approves through the service's existing review binding.
     public sealed class CHRISTestDisplay
     {
-        public const int MaxLines = 4, MaxLineLength = 80, MaxCases = 8, MaxTitleLength = 60, MaxTtl = 60, RingSize = 32;
+        public const int MaxLines = 4, MaxLineLength = 80, MaxCases = 8, MaxCaseId = 15, MaxTitleLength = 60, MaxTtl = 60, RingSize = 32;
         // The agent's latest reasoning, wrapped in its own panel area (D89). Optional: absent and
         // null are the same.
         public const int MaxReasoningLength = 400;
@@ -76,7 +76,7 @@ namespace TiltBrush
             foreach (var c in cases)
             {
                 if (!(c is JObject o) || o.Count != 2 || o["id"]?.Type != JTokenType.Integer || o["title"]?.Type != JTokenType.String ||
-                    (long)o["id"] < 1 || (long)o["id"] > 9 || ((string)o["title"]).Length > MaxTitleLength || !ids.Add((long)o["id"]))
+                    (long)o["id"] < 1 || (long)o["id"] > MaxCaseId || ((string)o["title"]).Length > MaxTitleLength || !ids.Add((long)o["id"]))
                     return "Invalid cases";
             }
             if (d["ttl_s"].Type != JTokenType.Integer || (long)d["ttl_s"] < 1 || (long)d["ttl_s"] > MaxTtl) return "Invalid ttl_s";

@@ -479,6 +479,12 @@ The contract is Bac's (`chris` `src/chris/core/primitive.py`; shared cases in
   stroke count, focus and owners. It is checked at admission and again just before each
   trigger-down edge ("Observation changed before a press"). Live risk: the Brush panel rides
   on the wand, so wand movement between observing and pressing stales the token.
+- M3 (D118), native side:
+  - Test-panel case ids now go to 15, so the primitive cases can keep ids 10-12.
+  - A test runs a brush selection (aim, then a guarded press) and a short line through one
+    lease and one executor.
+  - The hand-back tracking check no longer waits on usages the runtime does not report; the
+    first acquire logs which ones the controller reports.
 - Not yet run on the headset.
 
 ## Upstream integration points

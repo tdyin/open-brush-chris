@@ -73,6 +73,7 @@ namespace TiltBrush
             s_Hand = null;
             s_InputOwns = false;
             s_LastReturnMode = null;
+            s_TrackingLogged = false;
             s_BrushController = null;
             s_Mapping = null;
             s_GraceUntilFrame = -1;
@@ -151,18 +152,28 @@ namespace TiltBrush
         }
 
         // input-v0.2 hand-back: a physical controller counts only while it reports isTracked
-        // with both position and rotation tracking.
-        internal static bool PoseTracked(bool valid, bool isTracked, InputTrackingState state) =>
-            valid && isTracked && (state & (InputTrackingState.Position | InputTrackingState.Rotation)) ==
-                (InputTrackingState.Position | InputTrackingState.Rotation);
+        // with both position and rotation tracking. A runtime that does not report a feature
+        // (null) is not held to it, so the check never waits forever on a missing usage.
+        internal static bool PoseTracked(bool valid, bool? isTracked, InputTrackingState? state) =>
+            valid && isTracked != false && (state == null || (state.Value & (InputTrackingState.Position | InputTrackingState.Rotation)) ==
+                (InputTrackingState.Position | InputTrackingState.Rotation));
+
+        static bool s_TrackingLogged;
 
         static bool PhysicalPoseTracked()
         {
             var device = BrushDevice();
-            bool tracked = false;
-            InputTrackingState state = InputTrackingState.None;
-            return device.isValid && device.TryGetFeatureValue(UnityEngine.XR.CommonUsages.isTracked, out tracked) &&
-                device.TryGetFeatureValue(UnityEngine.XR.CommonUsages.trackingState, out state) && PoseTracked(true, tracked, state);
+            if (!device.isValid) return false;
+            bool? tracked = device.TryGetFeatureValue(UnityEngine.XR.CommonUsages.isTracked, out bool t) ? t : (bool?)null;
+            InputTrackingState? state = device.TryGetFeatureValue(UnityEngine.XR.CommonUsages.trackingState, out InputTrackingState st)
+                ? st : (InputTrackingState?)null;
+            if (!s_TrackingLogged)
+            {
+                s_TrackingLogged = true;
+                Log($"brush tracking features on {device.name}: isTracked {(tracked.HasValue ? tracked.ToString() : "not reported")}, " +
+                    $"trackingState {(state.HasValue ? state.ToString() : "not reported")}");
+            }
+            return PoseTracked(true, tracked, state);
         }
 
         // The controller's own release gate (it waits for every button and axis to be neutral

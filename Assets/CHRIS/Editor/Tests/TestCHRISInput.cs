@@ -294,6 +294,9 @@ namespace TiltBrush
             Assert.That(CHRISHandAuthority.PoseTracked(true, true, InputTrackingState.Position), Is.False);
             Assert.That(CHRISHandAuthority.PoseTracked(true, false, both), Is.False);
             Assert.That(CHRISHandAuthority.PoseTracked(false, true, both), Is.False);
+            Assert.That(CHRISHandAuthority.PoseTracked(true, null, null), Is.True, "features not reported: valid is enough");
+            Assert.That(CHRISHandAuthority.PoseTracked(true, true, null), Is.True);
+            Assert.That(CHRISHandAuthority.PoseTracked(true, null, InputTrackingState.Rotation), Is.False);
             Assert.That(CHRISHandAuthority.PhysicalHandBackPending(false, true, false), Is.False);
             Assert.That(CHRISHandAuthority.PhysicalHandBackPending(true, true, false), Is.True, "CHRIS still holds the driver");
             Assert.That(CHRISHandAuthority.PhysicalHandBackPending(false, false, false), Is.True, "not tracked");
@@ -502,6 +505,58 @@ namespace TiltBrush
                 CHRISHandAuthority.ResetForPlay();
                 CHRISRoomFrame.ResetForPlay();
                 CHRISDrawingRuns.ResetForPlay();
+                UnityEngine.Object.DestroyImmediate(obj);
+            }
+        }
+
+        // M3 (D118): brush selection and a short line are the same primitive input. One lease,
+        // one route, one executor: an aim move, a guarded stationary press, then a line drawn
+        // with the trigger held while moving. Nothing names a target, stroke or brush.
+        [Test]
+        public void BrushSelectionAndAShortLineUseTheSameExecutor()
+        {
+            CHRISHandAuthority.ResetForPlay();
+            CHRISRoomFrame.ResetForPlay();
+            CHRISDrawingRuns.ResetForPlay();
+            var obj = new GameObject("CHRIS input same-executor host");
+            try
+            {
+                var host = obj.AddComponent<CHRISGatewayTestHost>();
+                host.Initialize();
+                var grant = AcquireInput(host, "same");
+                Assert.That(grant["error"], Is.Null, grant.ToString());
+                string route = "/chris/input/" + (string)grant["lease_id"];
+                var lease = CHRISHandAuthority.FindInput((string)grant["lease_id"]);
+                float now = Time.realtimeSinceStartup;
+                int frame = 0;
+                void Run(JObject batch)
+                {
+                    var reply = Route(host, "POST", route + "/batches", batch);
+                    Assert.That(reply["error"], Is.Null, reply.ToString());
+                    for (int i = 0; i < 200 && lease.BatchRunning; i++)
+                    { now += Dt; lease.Heartbeat(now); lease.Tick(new CHRISInputFrame { Now = now, Index = ++frame }); }
+                    Assert.That(lease.BatchRunning, Is.False);
+                }
+                Vector3 button = Start + new Vector3(-0.1f, 0.05f, 0.05f);
+                var turned = Quaternion.AngleAxis(-20, Vector3.up);
+                Run(B(1, S(0, Start), S(300, button, false, turned)));
+                host.Observed["semantic"]["hover_target_id"] = "brush:cb92b597-94ca-4255-b017-0e3f42f12f9e";
+                var press = B(2, S(0, button, false, turned), S(50, button, true, turned), S(150, button, false, turned));
+                press["if_token"] = (string)Route(host, "GET", "/chris/observe")["token"];
+                Run(press);
+                Vector3 lineEnd = button + new Vector3(0.1f, 0, 0);
+                Run(B(3, S(0, button, false, turned), S(60, button, true, turned), S(360, lineEnd, true, turned), S(420, lineEnd, false, turned)));
+                var status = Route(host, "GET", route);
+                Assert.That(status["batches"].Select(b => (string)b["state"]), Is.EqualTo(new[] { "completed", "completed", "completed" }));
+                Assert.That(status["batches"].Select(b => b["edges"].Count()), Is.EqualTo(new[] { 0, 2, 2 }));
+                Assert.That(Vector3.Distance(lease.AppliedPosition, lineEnd), Is.LessThan(1e-5f));
+                Assert.That(CHRISDrawingRuns.Find("same"), Is.Null, "no drawing run: the line is plain trigger and pose input");
+                Route(host, "POST", route + "/release");
+            }
+            finally
+            {
+                CHRISHandAuthority.ResetForPlay();
+                CHRISRoomFrame.ResetForPlay();
                 UnityEngine.Object.DestroyImmediate(obj);
             }
         }
