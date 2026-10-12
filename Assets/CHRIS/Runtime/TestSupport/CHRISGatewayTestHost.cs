@@ -39,6 +39,35 @@ namespace TiltBrush
             return CHRISHandAuthority.Grant(CHRISHandAuthority.Begin(task, physical, Vector3.zero, Quaternion.identity, run), true);
         }
 
+        // input-v0.2: the head and the controller at the grant, room metres.
+        public Vector3 Head = new Vector3(0, 1.6f, 0), InputStart = new Vector3(0.2f, 1.2f, 0.4f);
+        public JObject InputReturnMode = new JObject { ["source"] = "physical", ["mode"] = null, ["selected_hand"] = null };
+        public bool Focus = true;
+        protected override bool InputFocused => Focus;
+        protected override CHRISInputExecutor AcquireInputHand(string task, CHRISInputLimits limits, out string refusal)
+        {
+            refusal = LeaseRefusal ?? (CHRISHandAuthority.OwnsBrush ? "Another lease is active" : null) ??
+                CHRISInputExecutor.BoundsRefusal(Head, limits, InputStart);
+            return refusal != null ? null : CHRISHandAuthority.BeginInput(task, (JObject)InputReturnMode.DeepClone(),
+                CHRISRoomFrame.Epoch, limits, InputStart, Quaternion.identity);
+        }
+        // The observation body the gateway wraps; tests change its semantic and palette parts.
+        public JObject Observed = new JObject
+        {
+            ["focus"] = true, ["buttons_neutral"] = true, ["grab_active"] = false,
+            ["owners"] = new JObject { ["brush"] = "agent", ["wand"] = "physical" },
+            ["head"] = new JObject { ["position"] = new JArray(0.0, 1.6, 0.0), ["rotation"] = new JArray(0.0, 0.0, 0.0, 1.0) },
+            ["brush"] = new JObject
+            {
+                ["pose"] = new JObject { ["position"] = new JArray(0.2, 1.2, 0.4), ["rotation"] = new JArray(0.0, 0.0, 0.0, 1.0) },
+                ["tracked_pose"] = null, ["trigger"] = false,
+                ["pointer_attachment"] = new JObject { ["position"] = new JArray(0.0, 0.0, 0.05), ["rotation"] = new JArray(0.0, 0.0, 0.0, 1.0) },
+                ["pointer_ray"] = new JObject { ["origin"] = new JArray(0.2, 1.2, 0.45), ["direction"] = new JArray(0.0, 0.0, 1.0) },
+            },
+            ["semantic"] = new JObject { ["hover_target_id"] = null, ["brush_id"] = "ink", ["stroke_count"] = 0, ["stroke_active"] = false },
+            ["palette"] = null,
+        };
+        protected override JObject ReadObservation() => (JObject)Observed?.DeepClone();
 
         public void Initialize()
         {

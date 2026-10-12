@@ -447,6 +447,40 @@ Runtime 1.5, which the extract does not install (the packages sit in `v207.0/Win
 The player stalls at OpenXR loader start-up. Nothing was installed. Evidence:
 `agent/logs/xr-sim-setup/`.
 
+### Primitive controller input, input-v0.2 M2 (2026-10-11, branch `chris/primitive-input`, D117)
+
+The agent chooses controller-root poses and trigger transitions; native only delivers them.
+The contract is Bac's (`chris` `src/chris/core/primitive.py`; shared cases in
+`schemas/input/v0.2/fixtures/cases.json`, whose `refusals` map holds the exact strings).
+
+- `CHRISInputExecutor` plays batches of at most 1 s (1-64 samples, room frame: Unity global
+  space in metres) with linear position and shortest-path rotation. The trigger makes at most
+  one transition per frame, in order, and the hand gets exactly one `Sample` per frame. An edge
+  more than 100 ms late interrupts the batch ("Execution late"). After the last sample the
+  pose holds with the trigger released. Invalid batches are refused whole and nothing is
+  clamped. The executor knows nothing about targets, strokes or drawings; a test walks the
+  compiled IL to prove the input path never reaches the procedure steps or drawing runs.
+- Routes: `POST /chris/input/acquire`, `POST /chris/input/{lease}/batches`,
+  `GET /chris/input/{lease}` (status, also the heartbeat), `POST /chris/input/{lease}/release`,
+  and `GET /chris/observe`, which is read-only. An input lease and a procedure lease exclude
+  each other, and one-shot commands are refused while either is active.
+- Authority: the soft Stop (a manual state change) now advances the revision only. The
+  authority epoch changes on a revoking Stop, focus loss, or an input lease ending other than
+  by release. Such an end tombstones the task ("Task stopped; new approval needed"), and
+  cancel does too. A normal release allows a re-acquire before the deadline.
+- Room frame: `CHRISRoomFrame` advances its epoch on `XRInputSubsystem.trackingOriginUpdated`.
+  A recenter during a lease revokes it with "Recenter".
+- Takeover reasons are "Stop", "Focus lost", "Recenter", "Heartbeat lost", "Task deadline
+  reached" and "Takeover: <source>". The physical stick and face buttons on the leased hand
+  also take over. Hand-back: a mapped return continues from the last applied pose, clamped to
+  the mapping's reach. A physical return is pending until the controller reports isTracked
+  with position and rotation and its release gate has opened.
+- `if_token` hashes palette visibility, page and surface pose (5 mm, about 1°), hover, brush,
+  stroke count, focus and owners. It is checked at admission and again just before each
+  trigger-down edge ("Observation changed before a press"). Live risk: the Brush panel rides
+  on the wand, so wand movement between observing and pressing stales the token.
+- Not yet run on the headset.
+
 ## Upstream integration points
 
 CHRIS uses the existing TiltBrush namespace and compilation boundaries.
