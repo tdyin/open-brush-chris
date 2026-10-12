@@ -561,6 +561,43 @@ namespace TiltBrush
             }
         }
 
+        // Karp (headset-20261012a): when the guard stops a press, the log names what changed.
+        [Test]
+        public void TheStaleGuardNamesTheChangedFields()
+        {
+            JObject Observation(string hover, double x, int page = 0) => new JObject
+            {
+                ["focus"] = true, ["owners"] = new JObject { ["brush"] = "agent", ["wand"] = "physical" },
+                ["semantic"] = new JObject { ["hover_target_id"] = hover, ["brush_id"] = "ink", ["stroke_count"] = 0 },
+                ["palette"] = new JObject { ["visible"] = true, ["page"] = page, ["page_count"] = 2,
+                    ["surface"] = new JObject { ["center"] = new JArray(x, 1.3, 0.6), ["rotation"] = new JArray(0.0, 0.0, 0.0, 1.0) } },
+            };
+            var before = CHRISCommandGateway.TokenFields(Observation("brush:a", 0));
+            // D120: the palette surface pose is not in the token; a hand-held wand's tremor must
+            // not stop a press while the hover holds.
+            Assert.That(CHRISCommandGateway.ChangedFields(before, CHRISCommandGateway.TokenFields(Observation("brush:a", 0.05))),
+                Is.EqualTo("nothing"));
+            Assert.That(CHRISCommandGateway.TokenOf(Observation("brush:a", 0.05)), Is.EqualTo(CHRISCommandGateway.TokenOf(Observation("brush:a", 0))));
+            Assert.That(CHRISCommandGateway.ChangedFields(before, CHRISCommandGateway.TokenFields(Observation("brush:a", 0, 1))),
+                Is.EqualTo("palette.page (palette.page 0 -> 1)"));
+            string hover = CHRISCommandGateway.ChangedFields(before, CHRISCommandGateway.TokenFields(Observation(null, 0)));
+            Assert.That(hover, Is.EqualTo("hover_target_id (hover_target_id \"brush:a\" -> null)"));
+
+            var notes = new List<string>();
+            string token = "t1";
+            var lease = Lease();
+            lease.Log = notes.Add;
+            lease.TokenSource = () => token;
+            lease.TokenChange = issued => "hover_target_id (test)";
+            var press = Press(1, Start);
+            press["if_token"] = "t1";
+            Assert.That(lease.Submit(press, 0, lease.TokenSource), Is.Null);
+            Tick(lease, 0, 1);
+            token = "t2";
+            Tick(lease, 0.06f, 2);
+            Assert.That(notes.Any(n => n.EndsWith("press guard: changed hover_target_id (test)")), Is.True, string.Join("\n", notes));
+        }
+
         // ---- The new executor never reaches the aim, stroke or drawing-run code ----
         // A static IL walk: from the input roots, follow every call into CHRIS input code, and fail
         // on any reference to the procedure executor, the drawing runs, the draw frame or the

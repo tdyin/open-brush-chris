@@ -111,6 +111,8 @@ namespace TiltBrush
         public Quaternion AppliedRotation => m_Rotation;
         // The current freshness token, computed on demand; the host sets it at acquire.
         public Func<string> TokenSource;
+        // Diagnostic only: which token fields differ from the batch's observed token.
+        public Func<string, string> TokenChange;
         public Action<string> Log;
         void Note(string message) { if (Log != null) Log(message); }
 
@@ -346,7 +348,11 @@ namespace TiltBrush
                     // The guard runs just before a press: if what was observed has changed, the
                     // trigger stays released.
                     if (edge.Trigger && batch.Token != null && (TokenSource == null || TokenSource() != batch.Token))
-                    { Interrupt(batch, PressToken, frame.Now); return; }
+                    {
+                        Note($"lease {LeaseId} batch {batch.Seq} {batch.Id} press guard: changed {TokenChange?.Invoke(batch.Token) ?? "unknown"}");
+                        Interrupt(batch, PressToken, frame.Now);
+                        return;
+                    }
                     m_Trigger = edge.Trigger;
                     batch.Applied.Add(new Edge { Index = batch.Edges[batch.NextEdge], Trigger = edge.Trigger,
                         Frame = frame.Index, At = frame.Now });

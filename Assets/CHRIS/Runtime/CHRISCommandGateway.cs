@@ -665,6 +665,9 @@ namespace TiltBrush
             if (parts[1] == "batches")
             {
                 string error = lease.Submit(body, now, ObservationToken);
+                if (error == CHRISInputExecutor.TokenRefusal && StringValue(body["if_token"]))
+                    Debug.Log($"CHRIS input: lease {lease.LeaseId} batch {body["batch_id"]} refused at admission (stale observation): " +
+                        $"changed {TokenChange((string)body["if_token"])}");
                 return error != null ? Error(error) :
                     new JObject { ["lease_id"] = lease.LeaseId, ["batch_id"] = body["batch_id"], ["accepted"] = true };
             }
@@ -695,7 +698,12 @@ namespace TiltBrush
             if (m_Tombstones.Contains(task) || m_InvalidTasks.Contains(task) && !m_InputTasks.Contains(task))
                 return Error(TombstoneRefusal);
             if ((string)data["host_session"] != m_Session || (long)data["authority_epoch"] != m_Epoch) return Error(AuthorityRefusal);
-            if (m_Pending != null || !(bool)context["ready"] || (bool)context["stroke_active"]) return Error(BusyRefusal);
+            if (m_Pending != null || !(bool)context["ready"] || (bool)context["stroke_active"])
+            {
+                Debug.Log($"CHRIS procedure: input acquire refused for task {task}: host busy (" +
+                    (m_Pending != null ? "one-shot command pending" : !(bool)context["ready"] ? "host not ready" : "stroke active") + ")");
+                return Error(BusyRefusal);
+            }
             double deadline = (double)data["task_deadline"];
             if (deadline <= AuthorityTime + 1) return Error("Task deadline already reached");
             Require(m_InvalidTasks.Count < 4096 && m_Tombstones.Count < 4096, "Session ledger full; restart host");
@@ -705,6 +713,7 @@ namespace TiltBrush
             double remaining = deadline - AuthorityTime;
             lease.LimitTo(Time.realtimeSinceStartup + (float)remaining);
             lease.TokenSource = ObservationToken;
+            lease.TokenChange = TokenChange;
             m_InputLease = lease;
             m_InputTasks.Add(task);
             // One-shot commands cannot use a task that has held an input lease.
@@ -742,7 +751,7 @@ namespace TiltBrush
             var observation = new JObject
             {
                 ["observation_id"] = Guid.NewGuid().ToString("N"),
-                ["token"] = TokenOf(body),
+                ["token"] = Remember(body),
                 ["frame"] = FrameObject(CHRISRoomFrame.Epoch),
                 ["frame_index"] = Time.frameCount,
                 ["captured_at"] = Now,
@@ -752,46 +761,80 @@ namespace TiltBrush
             return observation;
         }
 
-        // The freshness token (if_token): palette visibility, page and surface pose, hover,
-        // brush, stroke count, focus and owners. Never the leased controller or head pose, so an
-        // agent's own motion between observing and pressing does not stale it. Computed on
-        // demand: at admission and again just before each trigger-down edge.
+        // The freshness token (if_token): palette visibility and page, hover, brush, stroke
+        // count, focus and owners. Never a pose: not the leased controller, the head or the
+        // palette surface (D120: a hand-held wand's tremor moves the panel; at the press edge the
+        // hover itself is the atomic condition). Computed on demand: at admission and again just
+        // before each trigger-down edge.
         string ObservationToken()
         {
             var body = ReadObservation();
             return body == null ? null : TokenOf(body);
         }
 
-        internal static string TokenOf(JObject observation)
+        internal static string TokenOf(JObject observation) => Hash(TokenFields(observation).ToString(Formatting.None)).Substring(0, 32);
+
+        // The fields of each token this host handed out, so a stale guard can say what changed.
+        readonly Dictionary<string, JObject> m_TokenFields = new Dictionary<string, JObject>();
+
+        string Remember(JObject observation)
+        {
+            var fields = TokenFields(observation);
+            string token = Hash(fields.ToString(Formatting.None)).Substring(0, 32);
+            if (m_TokenFields.Count >= 64) m_TokenFields.Clear();
+            m_TokenFields[token] = fields;
+            return token;
+        }
+
+        // Diagnostic only: the token fields that differ now from when the token was observed.
+        string TokenChange(string token)
+        {
+            var body = ReadObservation();
+            if (body == null) return "observation unavailable";
+            if (token == null || !m_TokenFields.TryGetValue(token, out var before)) return "unknown (token not issued by this host)";
+            return ChangedFields(before, TokenFields(body));
+        }
+
+        // "palette.surface (...)" style: dotted names for changed parts of nested objects, then
+        // old -> new values for each changed field.
+        internal static string ChangedFields(JObject before, JObject after)
+        {
+            var changed = new List<string>();
+            var values = new List<string>();
+            foreach (var property in after.Properties())
+            {
+                var old = before[property.Name];
+                if (JToken.DeepEquals(old, property.Value)) continue;
+                if (old is JObject a && property.Value is JObject b)
+                    foreach (var name in a.Properties().Select(p => p.Name).Union(b.Properties().Select(p => p.Name)))
+                    {
+                        if (JToken.DeepEquals(a[name], b[name])) continue;
+                        changed.Add(property.Name + "." + name);
+                        values.Add($"{property.Name}.{name} {a[name]?.ToString(Formatting.None) ?? "null"} -> {b[name]?.ToString(Formatting.None) ?? "null"}");
+                    }
+                else
+                {
+                    changed.Add(property.Name);
+                    values.Add($"{property.Name} {old?.ToString(Formatting.None) ?? "null"} -> {property.Value.ToString(Formatting.None)}");
+                }
+            }
+            return changed.Count == 0 ? "nothing" : string.Join(", ", changed) + " (" + string.Join("; ", values) + ")";
+        }
+
+        internal static JObject TokenFields(JObject observation)
         {
             var palette = observation["palette"] as JObject;
-            var surface = palette?["surface"] as JObject;
             var semantic = observation["semantic"] as JObject;
-            var fields = new JObject
+            return new JObject
             {
                 ["palette"] = palette == null ? null : new JObject
                 {
                     ["visible"] = palette["visible"], ["page"] = palette["page"], ["page_count"] = palette["page_count"],
-                    ["surface"] = surface == null ? null : new JObject {
-                        ["center"] = Quantize(surface["center"], 200), ["rotation"] = QuantizeRotation(surface["rotation"]) },
                 },
                 ["hover_target_id"] = semantic?["hover_target_id"], ["brush_id"] = semantic?["brush_id"],
                 ["stroke_count"] = semantic?["stroke_count"], ["focus"] = observation["focus"],
                 ["owners"] = observation["owners"],
             };
-            return Hash(fields.ToString(Formatting.None)).Substring(0, 32);
-        }
-
-        // Surface position to 5 mm and rotation to about 1 degree, so tracking noise of a
-        // panel that is not moving does not stale the token.
-        static JArray Quantize(JToken values, double perMeter) =>
-            values is JArray array ? new JArray(array.Select(v => (long)Math.Round((double)v * perMeter))) : null;
-
-        static JArray QuantizeRotation(JToken values)
-        {
-            if (!(values is JArray q) || q.Count != 4) return null;
-            double sign = (double)q[3] < 0 ? -1 : 1;
-            return new JArray(q.Select(v => (long)Math.Round(sign * (double)v * 100)));
         }
 
         // The observation body; the envelope (id, token, frame, time, authority) is added by

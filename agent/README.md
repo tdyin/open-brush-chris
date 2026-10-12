@@ -475,17 +475,18 @@ The contract is Bac's (`chris` `src/chris/core/primitive.py`; shared cases in
   also take over. Hand-back: a mapped return continues from the last applied pose, clamped to
   the mapping's reach. A physical return is pending until the controller reports isTracked
   with position and rotation and its release gate has opened.
-- `if_token` hashes palette visibility, page and surface pose (5 mm, about 1°), hover, brush,
-  stroke count, focus and owners. It is checked at admission and again just before each
-  trigger-down edge ("Observation changed before a press"). Live risk: the Brush panel rides
-  on the wand, so wand movement between observing and pressing stales the token.
+- `if_token` hashes palette visibility and page, hover, brush, stroke count, focus and owners.
+  Since D120 it contains no pose: the palette surface pose was removed after
+  headset-20261012a, where a hand-held wand's tremor stopped every case 10 press. It is
+  checked at admission and again just before each trigger-down edge ("Observation changed
+  before a press"). Either refusal logs the changed fields with old and new values.
 - M3 (D118), native side:
   - Test-panel case ids now go to 15, so the primitive cases can keep ids 10-12.
   - A test runs a brush selection (aim, then a guarded press) and a short line through one
     lease and one executor.
   - The hand-back tracking check no longer waits on usages the runtime does not report; the
     first acquire logs which ones the controller reports.
-- Not yet run on the headset.
+- First headset run: headset-20261012a (M3 cases 10-12, at dbe1fc9d).
 
 ## Upstream integration points
 
