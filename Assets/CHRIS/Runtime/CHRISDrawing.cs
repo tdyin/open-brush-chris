@@ -161,6 +161,12 @@ namespace TiltBrush
             s_Runs.Remove(run);
         }
 
+        // Hidden while a head-view image is taken, so the image shows only what Open Brush shows.
+        internal static void SetOutlinesActive(bool active)
+        {
+            foreach (var run in s_Runs) if (run.Outline != null) run.Outline.SetActive(active);
+        }
+
         static void DestroyOutline(Run run)
         {
             if (run.Outline == null) return;

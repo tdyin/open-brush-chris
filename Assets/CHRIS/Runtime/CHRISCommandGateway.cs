@@ -40,6 +40,13 @@ namespace TiltBrush
         private readonly Queue<Request> m_Requests = new Queue<Request>();
         private readonly Dictionary<string, Record> m_Records = new Dictionary<string, Record>();
         private readonly HashSet<string> m_InvalidTasks = new HashSet<string>();
+        // input-v0.2: tasks that have held an input lease, and tasks whose input ended any way
+        // other than a normal release (the tombstone: a new approval is needed).
+        private readonly HashSet<string> m_InputTasks = new HashSet<string>();
+        private readonly HashSet<string> m_Tombstones = new HashSet<string>();
+        private CHRISInputExecutor m_InputLease;
+        private bool m_WasFocused = true;
+        private int m_SeenLocalStops = CHRISHandAuthority.LocalStops;
         private readonly string m_Session = Guid.NewGuid().ToString("N");
         private long m_Revision, m_Epoch;
         private string m_ActiveTask;
@@ -51,6 +58,8 @@ namespace TiltBrush
         private string m_PaletteError;
         private float m_NextPanelOpen;
         public string Status { get; private set; } = "Waiting for native host";
+        // A one-shot command segment is running (the panel's mic button waits for it).
+        public bool CommandPending => m_Pending != null;
         public double LastStopMilliseconds { get; private set; }
         public long StopCount { get; private set; }
         public event Action Stopped;
@@ -275,6 +284,17 @@ namespace TiltBrush
         void Update()
         {
             if (m_Closed) return;
+            // Escape is a local Stop with or without a lease: authority changes either way.
+            if (CHRISHandAuthority.LocalStops != m_SeenLocalStops)
+            {
+                m_SeenLocalStops = CHRISHandAuthority.LocalStops;
+                Stop("Stopped locally");
+            }
+            // Focus loss changes authority whether or not a lease is active.
+            bool focused = InputFocused;
+            if (m_WasFocused && !focused) m_Epoch++;
+            m_WasFocused = focused;
+            SyncInput();
             Observe(true);
             if (m_Pending != null && IsNativeInteractionBusy()) Stop("Native interaction took control");
             OpenTestPanel();
@@ -303,6 +323,8 @@ namespace TiltBrush
         }
 
         protected virtual double AuthorityTime => Now;
+
+        protected virtual bool InputFocused => CHRISInputMappingHost.InputFocusedNow;
 
         protected virtual bool IsNativeInteractionBusy() => NativeInteractionBusy();
 
@@ -392,7 +414,10 @@ namespace TiltBrush
                 Require(m_InvalidTasks.Contains(task) || m_InvalidTasks.Count < 4096, "Session ledger full; restart host");
                 Invalidate(task);
                 if (m_ActiveTask == task) Stop("Task cancelled");
-                if (CHRISHandAuthority.ActiveTaskId == task) CHRISHandAuthority.Revoke("Task cancelled");
+                if (CHRISHandAuthority.ActiveTaskId == task || CHRISHandAuthority.InputTaskId == task)
+                    CHRISHandAuthority.Revoke("Task cancelled");
+                SyncInput();
+                Tombstone(task);
                 // Between batches no lease is active; the run must still end so the task cannot
                 // lease again. Strokes already drawn stay in the sketch.
                 CHRISDrawingRuns.EndRun(task);
@@ -401,6 +426,9 @@ namespace TiltBrush
             if (request.Method == "POST" && request.Path == "/chris/commands")
                 return Submit(Parse(request.Body));
             if (request.Path.StartsWith(ProcedureRoute)) return RouteProcedure(request);
+            if (request.Method == "GET" && request.Path == "/chris/observe") return Observation();
+            if (request.Method == "POST" && request.Path == "/chris/observe/image") return ObserveImage(Parse(request.Body));
+            if (request.Path.StartsWith(InputRoute)) return RouteInput(request);
             if (request.Method == "GET" && request.Path == "/chris/drawing/snapshot")
             {
                 string task = SnapshotTask(request.Query);
@@ -558,6 +586,394 @@ namespace TiltBrush
 
         protected virtual JObject AcquireHand(string task, string scope, out string refusal) =>
             CHRISHandAuthority.Acquire(task, IsNativeInteractionBusy(), scope, out refusal);
+
+        // ---- input-v0.2: primitive controller input (Brush hand pose and trigger only) ----
+        // Nothing on these routes names a target, stroke or brush, and nothing here calls the
+        // procedure steps or drawing runs.
+        const string InputRoute = "/chris/input/";
+        const string AuthorityRefusal = "Authority changed; new approval needed", TombstoneRefusal = "Task stopped; new approval needed",
+            BusyRefusal = "Host busy or unavailable", CapRefusal = "Requested limit above the native cap";
+        static readonly string[] s_InputAcquireFields = { "task_id", "host_session", "authority_epoch", "hand", "channels",
+            "task_deadline", "bounds", "max_speed_mps", "max_turn_dps" };
+
+        // A lease that ended other than by a normal release tombstones its task and changes
+        // authority. bump is false when the caller (Stop) changes authority itself.
+        void SyncInput(bool bump = true)
+        {
+            var lease = m_InputLease;
+            if (lease == null || lease.Active) return;
+            m_InputLease = null;
+            if (lease.State == CHRISLeaseState.Released) return;
+            if (bump) m_Epoch++;
+            Tombstone(lease.TaskId);
+        }
+
+        void Tombstone(string task)
+        {
+            if (task != null && m_Tombstones.Count < 4096) m_Tombstones.Add(task);
+        }
+
+        double UnixAt(float realtime) => Now - (Time.realtimeSinceStartup - realtime);
+
+        // Message shape only, as the shared input cases describe (stateless).
+        internal static string ValidateInputAcquire(JObject data)
+        {
+            if (data == null) return "Invalid input acquire";
+            if (!data.Properties().All(p => s_InputAcquireFields.Contains(p.Name))) return CHRISInputExecutor.FieldRefusal;
+            if (!s_InputAcquireFields.All(f => data[f] != null)) return "Invalid input acquire fields";
+            if (!StringValue(data["task_id"]) || !StringValue(data["host_session"]) || !StringValue(data["hand"]) ||
+                data["authority_epoch"].Type != JTokenType.Integer || (long)data["authority_epoch"] < 0)
+                return "Invalid input acquire types";
+            if (!Id((string)data["task_id"]) || !Id((string)data["host_session"])) return "Invalid task_id";
+            if ((string)data["hand"] != "brush") return "Only the brush hand can be leased";
+            if (!JToken.DeepEquals(data["channels"], new JArray("pose", "trigger"))) return "Channels must be pose and trigger";
+            if (!NumberValue(data["task_deadline"]) || (double)data["task_deadline"] < 0) return "Invalid task_deadline";
+            var bounds = data["bounds"] as JObject;
+            if (bounds == null || !bounds.Properties().All(p => p.Name == "center" || p.Name == "radius_m") ||
+                !(bounds["center"] is JArray center) || center.Count != 3 || !center.All(NumberValue) ||
+                !NumberValue(bounds["radius_m"])) return "Invalid bounds";
+            if (!NumberValue(data["max_speed_mps"]) || !NumberValue(data["max_turn_dps"])) return "Invalid limits";
+            double radius = (double)bounds["radius_m"], speed = (double)data["max_speed_mps"], turn = (double)data["max_turn_dps"];
+            if (radius <= 0 || speed <= 0 || turn <= 0) return "Limits must be positive";
+            if (radius > CHRISInputExecutor.MaxRadiusM || speed > CHRISInputExecutor.MaxSpeedMps ||
+                turn > CHRISInputExecutor.MaxTurnDps) return CapRefusal;
+            return null;
+        }
+
+        internal static CHRISInputLimits InputLimits(JObject data)
+        {
+            var center = (JArray)data["bounds"]["center"];
+            return new CHRISInputLimits { Center = new Vector3((float)center[0], (float)center[1], (float)center[2]),
+                RadiusM = (float)data["bounds"]["radius_m"], MaxSpeedMps = (float)data["max_speed_mps"],
+                MaxTurnDps = (float)data["max_turn_dps"] };
+        }
+
+        JObject RouteInput(Request request)
+        {
+            // A recenter between frames revokes the lease even before the next input tick.
+            var active = CHRISHandAuthority.FindInput(CHRISHandAuthority.InputLeaseId);
+            if (active != null && active.FrameEpoch != CHRISRoomFrame.Epoch) CHRISHandAuthority.RevokeInput(CHRISInputExecutor.Recenter);
+            SyncInput();
+            string rest = request.Path.Substring(InputRoute.Length);
+            if (request.Method == "POST" && rest == "acquire") return AcquireInput(Parse(request.Body));
+            string[] parts = rest.Split('/');
+            if (parts.Length > 2 || !s_LeaseId.IsMatch(parts[0])) return Error("Unknown route");
+            var lease = CHRISHandAuthority.FindInput(parts[0]);
+            if (lease == null) return Error("Unknown lease");
+            float now = Time.realtimeSinceStartup;
+            if (request.Method == "GET" && parts.Length == 1)
+            {
+                // The status read is also the heartbeat.
+                lease.Heartbeat(now);
+                var status = lease.Status(UnixAt);
+                status["host_session"] = m_Session;
+                status["captured_at"] = Now;
+                return status;
+            }
+            if (request.Method != "POST" || parts.Length != 2) return Error("Unknown route");
+            var body = Parse(request.Body);
+            if (parts[1] == "batches")
+            {
+                string error = lease.Submit(body, now, ObservationToken);
+                if (error == CHRISInputExecutor.TokenRefusal && StringValue(body["if_token"]))
+                    Debug.Log($"CHRIS input: lease {lease.LeaseId} batch {body["batch_id"]} refused at admission (stale observation): " +
+                        $"changed {TokenChange((string)body["if_token"])}");
+                return error != null ? Error(error) :
+                    new JObject { ["lease_id"] = lease.LeaseId, ["batch_id"] = body["batch_id"], ["accepted"] = true };
+            }
+            if (parts[1] == "renew") return RenewInput(lease, body, now);
+            if (parts[1] == "release")
+            {
+                Fields(body);
+                // Idempotent: a revoked, expired or released lease reports its current state.
+                CHRISHandAuthority.Release(lease);
+                SyncInput();
+                return new JObject { ["lease_id"] = lease.LeaseId, ["released"] = true,
+                    ["buttons_neutral"] = lease.ButtonsNeutral,
+                    ["restored_mode"] = CHRISHandAuthority.RestoredMode(lease),
+                    ["hand_back_pending"] = CHRISHandAuthority.HandBackPending(lease) };
+            }
+            return Error("Unknown route");
+        }
+
+        // D131: POST /chris/input/{lease}/renew, body {}. In the agreed order: an ended lease, a
+        // running batch, changed authority, a tombstone, the task deadline, then the acquire-time
+        // host and hand checks. A refusal never ends the lease.
+        JObject RenewInput(CHRISInputExecutor lease, JObject body, float now)
+        {
+            if (ValidateRenew(body) is string invalid) return Error(invalid);
+            if (!lease.Active) return Error(CHRISInputExecutor.Inactive);
+            if (lease.BatchRunning) return Error(CHRISInputExecutor.BusyBatch);
+            if (!m_GrantEpoch.TryGetValue(lease.LeaseId, out long epoch) || epoch != m_Epoch) return Error(AuthorityRefusal);
+            if (m_Tombstones.Contains(lease.TaskId)) return Error(TombstoneRefusal);
+            if (lease.DeadlineNear(now)) return Error("Task deadline already reached");
+            var context = ReadContext();
+            string refusal = m_Pending != null || !(bool)context["ready"] || (bool)context["stroke_active"]
+                ? "host busy" : RenewHandRefusal();
+            if (refusal != null)
+            {
+                Debug.Log($"CHRIS procedure: input lease {lease.LeaseId} renew refused: {refusal}");
+                return Error(BusyRefusal);
+            }
+            string error = lease.Renew(now);
+            if (error != null) return Error(error);
+            return new JObject { ["lease_id"] = lease.LeaseId, ["expires_at"] = Now + (lease.ExpiresAt - now) };
+        }
+
+        // Message shape only, as the shared renew_request cases describe: the body is {}.
+        internal static string ValidateRenew(JObject body) =>
+            body == null || body.Properties().Any() ? CHRISInputExecutor.FieldRefusal : null;
+
+        protected virtual string RenewHandRefusal() => CHRISHandAuthority.RenewRefusal(IsNativeInteractionBusy());
+
+        // The authority epoch each input lease was granted under.
+        private readonly Dictionary<string, long> m_GrantEpoch = new Dictionary<string, long>();
+
+        JObject AcquireInput(JObject data)
+        {
+            Require(!m_Closed && m_Registered, "Host closed or unavailable");
+            string invalid = ValidateInputAcquire(data);
+            if (invalid != null) return Error(invalid);
+            string task = (string)data["task_id"];
+            // No revision check on this path (input-v0.2): session and authority epoch only.
+            var context = ReadContext();
+            // Re-acquire is allowed after a normal release while the task is valid; any other
+            // end, a cancel, or a task already used another way needs a new approval.
+            if (m_Tombstones.Contains(task) || m_InvalidTasks.Contains(task) && !m_InputTasks.Contains(task))
+                return Error(TombstoneRefusal);
+            if ((string)data["host_session"] != m_Session || (long)data["authority_epoch"] != m_Epoch) return Error(AuthorityRefusal);
+            if (m_Pending != null || !(bool)context["ready"] || (bool)context["stroke_active"])
+            {
+                Debug.Log($"CHRIS procedure: input acquire refused for task {task}: host busy (" +
+                    (m_Pending != null ? "one-shot command pending" : !(bool)context["ready"] ? "host not ready" : "stroke active") + ")");
+                return Error(BusyRefusal);
+            }
+            double deadline = (double)data["task_deadline"];
+            if (deadline <= AuthorityTime + 1) return Error("Task deadline already reached");
+            Require(m_InvalidTasks.Count < 4096 && m_Tombstones.Count < 4096, "Session ledger full; restart host");
+            var lease = AcquireInputHand(task, InputLimits(data), out string refusal);
+            if (lease == null)
+                return Error(refusal == CHRISInputExecutor.HeadRefusal || refusal == CHRISInputExecutor.OutsideRefusal ? refusal : BusyRefusal);
+            double remaining = deadline - AuthorityTime;
+            lease.LimitTo(Time.realtimeSinceStartup + (float)remaining);
+            lease.TokenSource = ObservationToken;
+            lease.TokenChange = TokenChange;
+            m_InputLease = lease;
+            if (m_GrantEpoch.Count >= 256) m_GrantEpoch.Clear();
+            m_GrantEpoch[lease.LeaseId] = m_Epoch;
+            m_InputTasks.Add(task);
+            // One-shot commands cannot use a task that has held an input lease.
+            Invalidate(task);
+            double granted = Now;
+            return new JObject
+            {
+                ["lease_id"] = lease.LeaseId,
+                ["task_id"] = task,
+                ["host_session"] = m_Session,
+                ["granted_at"] = granted,
+                ["expires_at"] = granted + Math.Min(CHRISInputExecutor.MaxLeaseSeconds, remaining),
+                ["frame"] = FrameObject(lease.FrameEpoch),
+                ["start"] = PoseObject(lease.AppliedPosition, lease.AppliedRotation),
+                ["return_mode"] = lease.ReturnMode.DeepClone(),
+            };
+        }
+
+        protected virtual CHRISInputExecutor AcquireInputHand(string task, CHRISInputLimits limits, out string refusal) =>
+            CHRISHandAuthority.AcquireInput(task, IsNativeInteractionBusy(), limits, out refusal);
+
+        JObject FrameObject(long epoch) => new JObject { ["id"] = CHRISRoomFrame.Id, ["session"] = m_Session, ["epoch"] = epoch };
+
+        internal static JObject PoseObject(Vector3 position, Quaternion rotation) => new JObject {
+            ["position"] = new JArray(position.x, position.y, position.z),
+            ["rotation"] = new JArray(rotation.x, rotation.y, rotation.z, rotation.w) };
+
+        // GET /chris/observe: read-only structured observation in the room frame.
+        JObject Observation()
+        {
+            Require(!m_Closed && m_Registered, "Host closed or unavailable");
+            SyncInput();
+            var body = ReadObservation();
+            if (body == null) return Error(BusyRefusal);
+            var observation = new JObject
+            {
+                ["observation_id"] = Guid.NewGuid().ToString("N"),
+                ["token"] = Remember(body),
+                ["frame"] = FrameObject(CHRISRoomFrame.Epoch),
+                ["frame_index"] = Time.frameCount,
+                ["captured_at"] = Now,
+                ["authority_epoch"] = m_Epoch,
+            };
+            foreach (var property in body.Properties()) observation[property.Name] = property.Value;
+            return observation;
+        }
+
+        // POST /chris/observe/image (D122): a read-only head-view image, at most one per second,
+        // never while an input batch runs (a main-thread capture would make its edges late).
+        JObject ObserveImage(JObject body)
+        {
+            Require(!m_Closed && m_Registered, "Host closed or unavailable");
+            string invalid = CHRISHeadView.ValidateRequest(body);
+            if (invalid != null) return Error(invalid);
+            float now = Time.realtimeSinceStartup;
+            if (CHRISHeadView.RateLimited(now)) return Error(CHRISHeadView.RateRefusal);
+            if (CHRISHandAuthority.FindInput(CHRISHandAuthority.InputLeaseId)?.BatchRunning == true)
+                return Error(CHRISInputExecutor.BusyBatch);
+            var image = CaptureHeadView((int)(long)body["width"], out string error);
+            if (image == null) return Error(error ?? BusyRefusal);
+            CHRISHeadView.Taken(now);
+            image["frame"] = FrameObject(CHRISRoomFrame.Epoch);
+            image["frame_index"] = Time.frameCount;
+            image["captured_at"] = Now;
+            return image;
+        }
+
+        protected virtual JObject CaptureHeadView(int width, out string error)
+        {
+            CHRISDrawingRuns.SetOutlinesActive(false);
+            try { return CHRISHeadView.Capture(width, out error); }
+            finally { CHRISDrawingRuns.SetOutlinesActive(true); }
+        }
+
+        // The freshness token (if_token): palette visibility and page, hover, brush, stroke
+        // count, focus and owners. Never a pose: not the leased controller, the head or the
+        // palette surface (D120: a hand-held wand's tremor moves the panel; at the press edge the
+        // hover itself is the atomic condition). Computed on demand: at admission and again just
+        // before each trigger-down edge.
+        string ObservationToken()
+        {
+            var body = ReadObservation();
+            return body == null ? null : TokenOf(body);
+        }
+
+        internal static string TokenOf(JObject observation) => Hash(TokenFields(observation).ToString(Formatting.None)).Substring(0, 32);
+
+        // The fields of each token this host handed out, so a stale guard can say what changed.
+        readonly Dictionary<string, JObject> m_TokenFields = new Dictionary<string, JObject>();
+
+        string Remember(JObject observation)
+        {
+            var fields = TokenFields(observation);
+            string token = Hash(fields.ToString(Formatting.None)).Substring(0, 32);
+            if (m_TokenFields.Count >= 64) m_TokenFields.Clear();
+            m_TokenFields[token] = fields;
+            return token;
+        }
+
+        // Diagnostic only: the token fields that differ now from when the token was observed.
+        string TokenChange(string token)
+        {
+            var body = ReadObservation();
+            if (body == null) return "observation unavailable";
+            if (token == null || !m_TokenFields.TryGetValue(token, out var before)) return "unknown (token not issued by this host)";
+            return ChangedFields(before, TokenFields(body));
+        }
+
+        // "palette.surface (...)" style: dotted names for changed parts of nested objects, then
+        // old -> new values for each changed field.
+        internal static string ChangedFields(JObject before, JObject after)
+        {
+            var changed = new List<string>();
+            var values = new List<string>();
+            foreach (var property in after.Properties())
+            {
+                var old = before[property.Name];
+                if (JToken.DeepEquals(old, property.Value)) continue;
+                if (old is JObject a && property.Value is JObject b)
+                    foreach (var name in a.Properties().Select(p => p.Name).Union(b.Properties().Select(p => p.Name)))
+                    {
+                        if (JToken.DeepEquals(a[name], b[name])) continue;
+                        changed.Add(property.Name + "." + name);
+                        values.Add($"{property.Name}.{name} {a[name]?.ToString(Formatting.None) ?? "null"} -> {b[name]?.ToString(Formatting.None) ?? "null"}");
+                    }
+                else
+                {
+                    changed.Add(property.Name);
+                    values.Add($"{property.Name} {old?.ToString(Formatting.None) ?? "null"} -> {property.Value.ToString(Formatting.None)}");
+                }
+            }
+            return changed.Count == 0 ? "nothing" : string.Join(", ", changed) + " (" + string.Join("; ", values) + ")";
+        }
+
+        internal static JObject TokenFields(JObject observation)
+        {
+            var palette = observation["palette"] as JObject;
+            var semantic = observation["semantic"] as JObject;
+            return new JObject
+            {
+                ["palette"] = palette == null ? null : new JObject
+                {
+                    ["visible"] = palette["visible"], ["page"] = palette["page"], ["page_count"] = palette["page_count"],
+                },
+                ["hover_target_id"] = semantic?["hover_target_id"], ["brush_id"] = semantic?["brush_id"],
+                ["stroke_count"] = semantic?["stroke_count"], ["focus"] = observation["focus"],
+                ["owners"] = observation["owners"],
+            };
+        }
+
+        // The observation body; the envelope (id, token, frame, time, authority) is added by
+        // Observation(). Null when the controllers, head or sketch are unavailable.
+        protected virtual JObject ReadObservation()
+        {
+            if (m_Closed || App.CurrentState != App.AppState.Standard || ViewpointScript.Head == null ||
+                InputManager.m_Instance == null || InputManager.Controllers == null || InputManager.Brush == null ||
+                SketchControlsScript.m_Instance == null || PointerManager.m_Instance == null) return null;
+            float units = App.METERS_TO_UNITS;
+            var head = ViewpointScript.Head;
+            var brush = InputManager.Brush;
+            var root = brush.Transform;
+            var attach = brush.Geometry != null ? brush.Geometry.PointerAttachPoint : null;
+            var inverse = Quaternion.Inverse(root.rotation);
+            JObject ray = null;
+            Vector3 attachLocal = Vector3.zero;
+            Quaternion attachRotation = Quaternion.identity;
+            if (attach != null)
+            {
+                attachLocal = inverse * (attach.position - root.position) / units;
+                attachRotation = inverse * attach.rotation;
+                Vector3 origin = attach.position / units, direction = attach.forward;
+                ray = new JObject { ["origin"] = new JArray(origin.x, origin.y, origin.z),
+                    ["direction"] = new JArray(direction.x, direction.y, direction.z) };
+            }
+            var pointer = PointerManager.m_Instance.MainPointer;
+            JObject palette = null;
+            string hover = null;
+            try
+            {
+                palette = CHRISPaletteObserver.Observe();
+                hover = CHRISPaletteObserver.HoverTargetId();
+            }
+            catch (Exception error)
+            {
+                string message = error.GetType().Name + ": " + error.Message;
+                if (message != m_PaletteError) Debug.LogWarning("CHRIS palette read failed: " + message);
+                m_PaletteError = message;
+            }
+            return new JObject
+            {
+                ["focus"] = InputFocused,
+                ["buttons_neutral"] = CHRISHandAuthority.BrushButtonsNeutral,
+                ["grab_active"] = SketchControlsScript.m_Instance.IsUserGrabbingWorld(),
+                ["owners"] = CHRISHandAuthority.Owners(),
+                ["head"] = PoseObject(head.position / units, head.rotation),
+                ["brush"] = new JObject
+                {
+                    ["pose"] = PoseObject(root.position / units, root.rotation),
+                    ["tracked_pose"] = CHRISHandAuthority.TrackedPose(out Vector3 tracked, out Quaternion trackedRotation)
+                        ? PoseObject(tracked, trackedRotation) : null,
+                    ["trigger"] = CHRISHandAuthority.BrushTriggerHeld(),
+                    ["pointer_attachment"] = PoseObject(attachLocal, attachRotation),
+                    ["pointer_ray"] = ray,
+                },
+                ["semantic"] = new JObject
+                {
+                    ["hover_target_id"] = hover,
+                    ["brush_id"] = pointer?.CurrentBrush != null ? pointer.CurrentBrush.m_Guid.ToString() : null,
+                    ["stroke_count"] = SketchStrokeCount(),
+                    ["stroke_active"] = PointerManager.MainPointerIsPainting(),
+                },
+                ["palette"] = palette,
+            };
+        }
 
         static JObject Parse(string json)
         {
@@ -751,12 +1167,18 @@ namespace TiltBrush
             // Observe() also stops on every material context change without revoking the lease
             // (a drawing lease changes stroke_active with each stroke); only a revoking Stop
             // ends drawing runs.
+            // Only a revoking Stop changes authority (input-v0.2): the soft Stop on a manual
+            // state change advances the revision alone.
             if (revokeLease)
             {
                 CHRISHandAuthority.Revoke(reason);
                 CHRISDrawingRuns.EndAll();
+                SyncInput(false);
+                m_Epoch++;
+                // Every task that has held input needs a new approval after a Stop, including
+                // one released normally just before it.
+                foreach (var task in m_InputTasks) Tombstone(task);
             }
-            m_Epoch++;
             Invalidate(m_ActiveTask);
             m_ActiveTask = null;
             if (m_Pending != null)

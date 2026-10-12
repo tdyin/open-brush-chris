@@ -93,8 +93,26 @@ namespace TiltBrush
             Correcting = false;
         }
 
+        // D129 tap-to-talk. Its own voice input (not the assistance backend): built when the
+        // panel first opens, so the headset microphone is found before the first click.
+        public CHRISTalk Talk { get; private set; }
+
+        public CHRISTalk EnsureTalk()
+        {
+            if (Talk != null) return Talk;
+            var voice = gameObject.AddComponent<CHRISVoiceInput>();
+            voice.PreferHeadsetMicrophone();
+            Talk = new CHRISTalk(voice, () => CHRISTestDisplay.Instance, () => CHRISInputMappingHost.InputFocusedNow);
+            return Talk;
+        }
+
+        // Why talking is not allowed now, or null: never during an approval, a lease or a command.
+        public string TalkBusy(float now) => CHRISTestDisplay.Instance.ButtonsLive(now) ? "Approve or Decline first" :
+            CHRISHandAuthority.OwnsBrush || Gateway != null && Gateway.CommandPending ? CHRISTalk.BusyNotice : null;
+
         void OnGatewayStopped()
         {
+            Talk?.Cancel("Stopped; nothing sent");
             CancelInput();
             ClearReview();
             Assistance?.Cancel();
@@ -287,6 +305,7 @@ namespace TiltBrush
 
         void Update()
         {
+            Talk?.Tick(Time.realtimeSinceStartup, CHRISInputMappingHost.InputFocusedNow);
             if (Gateway == null || Assistance == null) return;
             ProcessReleasedDecision();
             SubmitReplacementWhenReady();

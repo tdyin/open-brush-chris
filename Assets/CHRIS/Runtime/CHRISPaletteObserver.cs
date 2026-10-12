@@ -92,6 +92,63 @@ namespace TiltBrush
                 ["page_count"] = count, ["targets"] = targets };
         }
 
+        // input-v0.2 observation of the palette in the room frame (metres): the panel surface and
+        // each button's centre and size from its BoxCollider (size x lossyScale), or null when the
+        // Brush panel is not shown. A button without a box collider has no size and is left out.
+        public static JObject Observe()
+        {
+            var panel = BrushPanel();
+            if (panel == null) return null;
+            bool stable = PageStable(panel.GetComponentInChildren<BrushGrid>(), out int page, out int count);
+            var box = panel.GetCollider() as BoxCollider;
+            var surface = box == null ? null : ((Vector3, Quaternion, Vector2)?)(box.bounds.center / App.METERS_TO_UNITS,
+                panel.transform.rotation, Size(box));
+            return BuildObservedPalette(Buttons(panel).Select(b => ((Guid)b.m_Brush.m_Guid, b.m_Brush.m_DurableName,
+                Center(b) / App.METERS_TO_UNITS, Size(b.GetComponent<BoxCollider>()), Interactable(b, stable))), page, count, surface);
+        }
+
+        static Vector2 Size(BoxCollider box)
+        {
+            if (box == null) return Vector2.zero;
+            Vector3 size = Vector3.Scale(box.size, box.transform.lossyScale) / App.METERS_TO_UNITS;
+            return new Vector2(Mathf.Abs(size.x), Mathf.Abs(size.y));
+        }
+
+        static bool Finite(Vector3 v) => !float.IsNaN(v.x + v.y + v.z) && !float.IsInfinity(v.x + v.y + v.z);
+        static bool Positive(Vector2 v) => v.x > 0 && v.y > 0 && !float.IsInfinity(v.x + v.y);
+
+        // Same invariants as the context palette, plus sizes that are positive and finite.
+        internal static JObject BuildObservedPalette(
+            IEnumerable<(Guid brush, string label, Vector3 center, Vector2 size, bool interactable)> buttons,
+            int page, int count, (Vector3 center, Quaternion rotation, Vector2 size)? surface)
+        {
+            count = Mathf.Max(1, count);
+            var seen = new HashSet<Guid>();
+            var targets = new JArray();
+            foreach (var (brush, name, c, size, interactable) in buttons)
+            {
+                if (targets.Count >= MaxTargets) break;
+                if (!Finite(c) || !Positive(size) || !seen.Add(brush)) continue;
+                string label = name ?? "";
+                targets.Add(new JObject
+                {
+                    ["target_id"] = TargetPrefix + brush.ToString("D"),
+                    ["brush_id"] = brush.ToString("D"),
+                    ["label"] = label.Length > 80 ? label.Substring(0, 80) : label,
+                    ["center"] = new JArray(c.x, c.y, c.z),
+                    ["size_m"] = new JArray(size.x, size.y),
+                    ["interactable"] = interactable,
+                });
+            }
+            JObject plane = null;
+            if (surface is (Vector3 center, Quaternion rotation, Vector2 extent) && Finite(center) && Positive(extent))
+                plane = new JObject { ["center"] = new JArray(center.x, center.y, center.z),
+                    ["rotation"] = new JArray(rotation.x, rotation.y, rotation.z, rotation.w),
+                    ["size_m"] = new JArray(extent.x, extent.y) };
+            return new JObject { ["visible"] = true, ["page"] = Mathf.Clamp(page, 0, count - 1),
+                ["page_count"] = count, ["surface"] = plane, ["targets"] = targets };
+        }
+
         // Open Brush lets a controller ray hit a panel only while the head roughly faces it
         // (SketchControlsScript m_GazeMaxAngleFromFacing, 70 in Main.unity). Null when not reported.
         static readonly FieldInfo s_FacingLimit = typeof(SketchControlsScript).GetField("m_GazeMaxAngleFromFacing", Private);

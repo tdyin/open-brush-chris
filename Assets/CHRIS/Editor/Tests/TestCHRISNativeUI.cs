@@ -307,7 +307,7 @@ namespace TiltBrush
             {
             TestCHRISAssistance.Exported.Clear();
             int tests = 0;
-            foreach (var suite in new object[] { new TestCHRISNativeUI(), new TestCHRISAssistance(), new TestCHRISCloudVoice(), new TestCHRISCompanion(), new TestCHRISInputMapping(), new TestCHRISInputRemap(), new TestCHRISBimanualInput(), new TestCHRISMappingAuthority(), new TestCHRISPerfProbe(), new TestCHRISProcedure(), new TestCHRISDrawing() })
+            foreach (var suite in new object[] { new TestCHRISNativeUI(), new TestCHRISAssistance(), new TestCHRISCloudVoice(), new TestCHRISCompanion(), new TestCHRISInputMapping(), new TestCHRISInputRemap(), new TestCHRISBimanualInput(), new TestCHRISMappingAuthority(), new TestCHRISPerfProbe(), new TestCHRISProcedure(), new TestCHRISDrawing(), new TestCHRISInput(), new TestCHRISTalk() })
                 foreach (var method in suite.GetType().GetMethods().Where(m => m.GetCustomAttributes(typeof(TestAttribute), false).Length > 0))
                 {
                     method.Invoke(suite, null);
@@ -319,7 +319,7 @@ namespace TiltBrush
             File.WriteAllText(output + "/protocol-fixtures.json", TestCHRISAssistance.Exported.ToString());
             File.WriteAllText(output + "/companion-profiling.json", TestCHRISCompanion.Measurements.ToString());
             File.WriteAllText(output + "/mapping-cases.txt", TestCHRISInputMapping.Verdicts.ToString());
-            File.WriteAllText(output + "/checks.txt", "PASS: " + tests + " native regression methods; voice and companion contracts, compact status UI, v0.1.1 and v0.1.2 mapping cases, byte-matched bundled preset, two-hand state transitions, and the controller-procedure lease (" + TestCHRISProcedure.SharedCasesChecked + " shared procedure message cases). No Play mode, HTTP, microphone recording, speech/model inference or sketch changes.");
+            File.WriteAllText(output + "/checks.txt", "PASS: " + tests + " native regression methods; voice and companion contracts, compact status UI, v0.1.1 and v0.1.2 mapping cases, byte-matched bundled preset, two-hand state transitions, and the controller-procedure lease (" + TestCHRISProcedure.SharedCasesChecked + " shared procedure message cases), and the input-v0.2 primitive input executor (" + TestCHRISInput.SharedCasesChecked + " shared input cases). No Play mode, HTTP, microphone recording, speech/model inference or sketch changes.");
             }
             finally
             {
@@ -541,6 +541,44 @@ namespace TiltBrush
                     var first = popupObject.GetComponentsInChildren<CHRISNativeButton>().Single(b => b.name == "Test case 1");
                     Assert.That(first.Label.text, Is.EqualTo("4"));
                     Assert.That(first.Hover, Is.EqualTo("Start case 4: Request the current brush"));
+                    // M3 primitive cases take ids 10-12 (D118); two-digit labels must fit their buttons.
+                    var primitive = Display(new[] { "CHRIS tests: click Start with the brush ray",
+                        "Next: case 10 - Primitive: select a different brush" }, null,
+                        (10, "Primitive: select a different brush"), (11, "Primitive: draw one short line"),
+                        (12, "Primitive: same line, trigger up (no mark)"), (1, "Select a brush"));
+                    Assert.That(CHRISTestDisplay.Validate(primitive), Is.Null);
+                    CHRISTestDisplay.Instance.Show(primitive, Time.realtimeSinceStartup);
+                    popup.RefreshTest();
+                    Capture(popupObject, "status-panel-primitive.png");
+                    // D129: recording with the mic button, live "Heard" and the privacy line.
+                    var voice = popupObject.AddComponent<CHRISVoiceInput>();
+                    voice.Devices = () => new CHRISMicrophoneDevice[0];
+                    var talk = new CHRISTalk(voice, () => CHRISTestDisplay.Instance);
+                    popup.TalkOverride = talk;
+                    popup.TalkBusyOverride = _ => null;
+                    popup.RefreshTest();
+                    Assert.That(Icons(popupObject), Does.Contain("Talk").And.Not.Contain("Talk cancel"), "idle: the mic only");
+                    talk.Click(Time.realtimeSinceStartup, null);
+                    voice.Receive(voice.Session.Id, "listening", "");
+                    voice.Receive(voice.Session.Id, "partial", "select the fire brush please");
+                    popup.RefreshTest();
+                    Capture(popupObject, "status-panel-talk.png");
+                    Assert.That(Icons(popupObject), Does.Contain("Talk").And.Contain("Talk cancel"));
+                    Assert.That(Icons(popupObject).Count(n => n.StartsWith("Test case")), Is.Zero, "the talk area replaces Start");
+                    talk.Cancel("Cancelled; nothing sent");
+                    popup.TalkBusyOverride = _ => CHRISTalk.BusyNotice;
+                    popup.RefreshTest();
+                    Assert.That(Icons(popupObject), Does.Not.Contain("Talk"), "hidden while busy");
+                    popup.TalkOverride = null;
+                    popup.TalkBusyOverride = null;
+                    UnityEngine.Object.DestroyImmediate(voice);
+                    popup.RefreshTest();
+                    var ten = popupObject.GetComponentsInChildren<CHRISNativeButton>().Single(b => b.name == "Test case 1");
+                    Assert.That(ten.Label.text, Is.EqualTo("10"));
+                    Assert.That(ten.Hover, Is.EqualTo("Start case 10: Primitive: select a different brush"));
+                    Assert.That(CHRISTestDisplay.Validate(Display(new string[0], null, (15, "Last id"))), Is.Null);
+                    Assert.That(CHRISTestDisplay.Validate(Display(new string[0], null, (16, "Too high"))), Is.EqualTo("Invalid cases"));
+                    Assert.That(CHRISTestDisplay.Validate(Display(new string[0], null, (0, "Too low"))), Is.EqualTo("Invalid cases"));
                     CHRISTestDisplay.Instance.Show(Display(new[] { "Case 1 Happy path: select Light",
                         "Look at the palette, keep the brush trigger released", "Approve to start", "Last: case 4 PASS" },
                         "preview"), Time.realtimeSinceStartup);

@@ -447,6 +447,74 @@ Runtime 1.5, which the extract does not install (the packages sit in `v207.0/Win
 The player stalls at OpenXR loader start-up. Nothing was installed. Evidence:
 `agent/logs/xr-sim-setup/`.
 
+### Primitive controller input, input-v0.2 M2 (2026-10-11, branch `chris/primitive-input`, D117)
+
+The agent chooses controller-root poses and trigger transitions; native only delivers them.
+The contract is Bac's (`chris` `src/chris/core/primitive.py`; shared cases in
+`schemas/input/v0.2/fixtures/cases.json`, whose `refusals` map holds the exact strings).
+
+- `CHRISInputExecutor` plays batches of at most 1 s (1-64 samples, room frame: Unity global
+  space in metres) with linear position and shortest-path rotation. The trigger makes at most
+  one transition per frame, in order, and the hand gets exactly one `Sample` per frame. An edge
+  more than 100 ms late interrupts the batch ("Execution late"). After the last sample the
+  pose holds with the trigger released. Invalid batches are refused whole and nothing is
+  clamped. The executor knows nothing about targets, strokes or drawings; a test walks the
+  compiled IL to prove the input path never reaches the procedure steps or drawing runs.
+- Routes: `POST /chris/input/acquire`, `POST /chris/input/{lease}/batches`,
+  `GET /chris/input/{lease}` (status, also the heartbeat), `POST /chris/input/{lease}/release`,
+  and `GET /chris/observe`, which is read-only. An input lease and a procedure lease exclude
+  each other, and one-shot commands are refused while either is active.
+- Authority: the soft Stop (a manual state change) now advances the revision only. The
+  authority epoch changes on a revoking Stop, focus loss, or an input lease ending other than
+  by release. Such an end tombstones the task ("Task stopped; new approval needed"), and
+  cancel does too. A normal release allows a re-acquire before the deadline.
+- Room frame: `CHRISRoomFrame` advances its epoch on `XRInputSubsystem.trackingOriginUpdated`.
+  A recenter during a lease revokes it with "Recenter".
+- Takeover reasons are "Stop", "Focus lost", "Recenter", "Heartbeat lost", "Task deadline
+  reached" and "Takeover: <source>". The physical stick and face buttons on the leased hand
+  also take over. Hand-back: a mapped return continues from the last applied pose, clamped to
+  the mapping's reach. A physical return is pending until the controller reports isTracked
+  with position and rotation and its release gate has opened.
+- `if_token` hashes palette visibility and page, hover, brush, stroke count, focus and owners.
+  Since D120 it contains no pose: the palette surface pose was removed after
+  headset-20261012a, where a hand-held wand's tremor stopped every case 10 press. It is
+  checked at admission and again just before each trigger-down edge ("Observation changed
+  before a press"). Either refusal logs the changed fields with old and new values.
+- M3 (D118), native side:
+  - Test-panel case ids now go to 15, so the primitive cases can keep ids 10-12.
+  - A test runs a brush selection (aim, then a guarded press) and a short line through one
+    lease and one executor.
+  - The hand-back tracking check no longer waits on usages the runtime does not report; the
+    first acquire logs which ones the controller reports.
+- Headset runs:
+  - headset-20261012a (dbe1fc9d): 5 input leases, all released, and every batch delivered.
+    The one stopped press, the case 10 retry, was stopped by the palette-pose token.
+    Startup raised one tracking-origin event, epoch 1, before any lease.
+  - headset-20261012b (931aeb5b, after D120): 6 leases, all released, and 5 of 5 guarded
+    presses delivered (4-13 ms late). No guard stop, refusal, takeover or exception.
+  - Both runs: the controller reports isTracked with position and rotation.
+  - Bac's 4 "Host busy" refusals in run a were the runner's own buttons_neutral pre-check
+    right after the Approve click, not native.
+- M4 (D122): `POST /chris/observe/image` with body `{view: "head", width: 512|768|1024}`.
+  - It renders a read-only square JPEG (quality 80) with a symmetric 90-degree camera at
+    the head pose, using the VR camera's layers, clear and clip planes. Drawing-frame
+    outlines are hidden for the capture.
+  - The reply carries the camera pose (room metres), fov_v_deg, aspect 1, near_m, far_m,
+    frame, frame_index and captured_at.
+  - Refusals, in order: "Unsupported field", "Image rate limit" (1 s, counting only images
+    taken), "Batch in progress" (never captured during an input batch), "Host busy or
+    unavailable".
+  - Every capture logs `CHRIS observe image: WxH, bytes, ms`.
+- Renew (D131): `POST /chris/input/{lease}/renew` with body `{}` returns `{lease_id, expires_at}`.
+  - The new expiry is min(now + 30 s, task deadline), from the same held pose: no sample,
+    pose or trigger change. It counts as a heartbeat.
+  - Refusals, in order: "Lease is not active", "Batch in progress", "Authority changed; new
+    approval needed", "Task stopped; new approval needed", "Task deadline already reached",
+    then "Host busy or unavailable" (the acquire-time host and hand checks, its own lease
+    excepted). A refusal never ends the lease.
+  - Added after headset-20261012c, where all 5 M4 leases expired at the 30 s cap between
+    model calls.
+
 ## Upstream integration points
 
 CHRIS uses the existing TiltBrush namespace and compilation boundaries.
@@ -537,20 +605,38 @@ if any other source hash or Git status differs. Newly generated build files must
 be inspected and archived separately before removal. Never restore over another
 agent's concurrent edits; keep shared-checkout writes paused during verification.
 
-## Voice backend retained for external workflows
+## Voice backend and tap-to-talk (D129/D133)
 
-The headset status panel has no microphone, voice-command, approval, or readout
-controls. Opening it does not instantiate `CHRISAssistanceClient`,
-`CHRISVoiceInput`, or `CHRISConfirmationSpeech`. The voice backend classes and
-Python relay protocol remain in source for explicitly enabled workflows and
-in-memory regression checks; they are not started by the status panel. The
-external CHRIS service owns credentials and models. The native command gateway
-and mapping status/activation/reload APIs remain independent of the voice UI.
-
-`TiltBrush.TestCHRISNativeUI.Run` exercises the retained backend with mocked
-WebSocket, PCM, and command adapters. It does not open a microphone, contact a
-provider, or run the player. Any future headset voice workflow needs separate
-UI and acceptance work before it can be offered to users.
+The headset panel has one voice control: tap-to-talk (D129, built for the D133 retest).
+- **Button.** The mic button is left of the title. The first physical brush click starts
+  recording, the second sends, and the X cancels.
+  - Mapped, mouse and keyboard clicks are ignored (D62).
+  - The button is hidden while an Approve/Decline is live, a lease is active or a one-shot
+    command is running.
+  - Stop and focus loss cancel, as do a failed relay or silence. Nothing is sent in any of
+    those cases.
+  - It sends automatically at 58 s, before the relay's 60 s limit.
+- **Capture.** `CHRISTalk` drives its own `CHRISVoiceInput`. It is not the dormant
+  assistance flow: `CHRISAssistanceClient` and `CHRISConfirmationSpeech` are still never
+  started by the panel.
+  - The microphone is the Quest headset mic through Link ("Headset Microphone (Oculus
+    Virtual Audio Device)") if present, else the Windows default. Its name is shown while
+    recording.
+  - Audio streams through `CHRISCloudTranscription` to the service's `/voice/transcribe`.
+    The service calls OpenAI and holds the credentials. Unity never stores or logs audio
+    or text.
+- **Panel display.** While recording, the panel shows "Listening · Speech goes to OpenAI"
+  and a live "Heard: ...". The sent text stays until the test session's next display.
+- **Hand-off.** The only output is one panel event:
+  `{seq, kind: "utterance", case: null, nonce: null, at, text, id}`.
+  - text is 1-400 characters; control characters become spaces.
+  - The id is "uN".
+  - The test session still needs a physical Approve before anything runs.
+- **Tests.** `TestCHRISTalk` drives the voice input with its own worker messages: no
+  microphone, socket or provider. It covers sending, every no-send path, the 58 s
+  auto-send, the 400-character cap, the event rules and the headset-mic choice.
+  - The shared `test_events` cases (utterance included) are checked natively.
+  - The panel preview is `status-panel-talk.png`.
 
 ## Repository rules
 
