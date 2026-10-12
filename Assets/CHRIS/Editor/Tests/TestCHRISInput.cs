@@ -598,6 +598,106 @@ namespace TiltBrush
             Assert.That(notes.Any(n => n.EndsWith("press guard: changed hover_target_id (test)")), Is.True, string.Join("\n", notes));
         }
 
+        // M4 (D122): the head-view image route. Shape, refusal order, rate limit and the
+        // no-capture-during-a-batch rule, with the render stubbed by the test host.
+        [Test]
+        public void HeadImageRouteRefusesInOrderAndRateLimits()
+        {
+            CHRISHandAuthority.ResetForPlay();
+            CHRISRoomFrame.ResetForPlay();
+            CHRISHeadView.ResetForPlay();
+            var obj = new GameObject("CHRIS head image host");
+            try
+            {
+                var host = obj.AddComponent<CHRISGatewayTestHost>();
+                host.Initialize();
+                JObject Image(JObject body) => Route(host, "POST", "/chris/observe/image", body);
+                foreach (var bad in new[] {
+                    new JObject { ["view"] = "head", ["width"] = 2048 }, new JObject { ["view"] = "head", ["width"] = 640 },
+                    new JObject { ["view"] = "scene", ["width"] = 512 }, new JObject { ["view"] = "head" },
+                    new JObject { ["view"] = "head", ["width"] = 512, ["format"] = "png" }, new JObject { ["view"] = "head", ["width"] = 512.0 } })
+                    Assert.That((string)Image(bad)["error"], Is.EqualTo("Unsupported field"), bad.ToString());
+                Assert.That(host.ImagesTaken, Is.Zero, "refused requests render nothing");
+
+                var image = Image(new JObject { ["view"] = "head", ["width"] = 768 });
+                Assert.That(image["error"], Is.Null, image.ToString());
+                Assert.That(Keys(image), Is.EqualTo(new[] { "aspect", "camera", "captured_at", "data", "far_m", "fov_v_deg", "format",
+                    "frame", "frame_index", "height", "near_m", "width" }.OrderBy(n => n)));
+                Assert.That((string)image["frame"]["id"], Is.EqualTo("room"));
+                Assert.That((int)image["height"], Is.EqualTo(768));
+                Assert.That((string)Image(new JObject { ["view"] = "head", ["width"] = 512 })["error"], Is.EqualTo("Image rate limit"));
+                Assert.That(host.ImagesTaken, Is.EqualTo(1));
+
+                // Allowed with an idle lease, refused while its batch runs.
+                CHRISHeadView.ResetForPlay();
+                var grant = AcquireInput(host, "image");
+                Assert.That(grant["error"], Is.Null, grant.ToString());
+                Assert.That(Image(new JObject { ["view"] = "head", ["width"] = 512 })["error"], Is.Null, "idle lease");
+                CHRISHeadView.ResetForPlay();
+                Assert.That(Route(host, "POST", "/chris/input/" + (string)grant["lease_id"] + "/batches", B(1, S(0, Start), S(500, Start)))["error"], Is.Null);
+                Assert.That((string)Image(new JObject { ["view"] = "head", ["width"] = 512 })["error"], Is.EqualTo("Batch in progress"));
+                Assert.That(host.ImagesTaken, Is.EqualTo(2), "a refused-for-batch request is not taken and does not start the 1 s limit");
+                Route(host, "POST", "/chris/input/" + (string)grant["lease_id"] + "/release");
+            }
+            finally
+            {
+                CHRISHandAuthority.ResetForPlay();
+                CHRISRoomFrame.ResetForPlay();
+                CHRISHeadView.ResetForPlay();
+                UnityEngine.Object.DestroyImmediate(obj);
+            }
+        }
+
+        // The real render, offline: a square JPEG of the requested size from the head pose, with
+        // the camera in room metres; a cube straight ahead lands in the centre pixel.
+        [Test]
+        public void HeadImageRendersASquareViewFromTheHead()
+        {
+            var head = new GameObject("CHRIS test head");
+            var sourceObj = new GameObject("CHRIS test VR camera");
+            var cube = GameObject.CreatePrimitive(PrimitiveType.Cube);
+            try
+            {
+                var source = sourceObj.AddComponent<Camera>();
+                source.enabled = false;
+                source.clearFlags = CameraClearFlags.SolidColor;
+                source.backgroundColor = Color.black;
+                source.nearClipPlane = 0.1f;
+                source.farClipPlane = 1000f;
+                head.transform.SetPositionAndRotation(new Vector3(100, 16, 0), Quaternion.Euler(0, 90, 0));
+                cube.transform.position = head.transform.position + head.transform.forward * 10;
+                cube.transform.localScale = Vector3.one * 2;
+                var shader = Shader.Find("Universal Render Pipeline/Unlit") ?? Shader.Find("Unlit/Color");
+                var material = new Material(shader) { color = Color.white };
+                cube.GetComponent<Renderer>().sharedMaterial = material;
+                var image = CHRISHeadView.Capture(512, head.transform, source);
+                Assert.That((int)image["width"], Is.EqualTo(512));
+                Assert.That((double)image["aspect"], Is.EqualTo(1.0));
+                Assert.That((double)image["fov_v_deg"], Is.EqualTo(90));
+                Assert.That((double)image["near_m"], Is.EqualTo(0.01).Within(1e-6));
+                Assert.That((float)image["camera"]["position"][0], Is.EqualTo(10f).Within(1e-4f), "room metres");
+                var decoded = new Texture2D(2, 2);
+                try
+                {
+                    Assert.That(decoded.LoadImage(Convert.FromBase64String((string)image["data"])), Is.True);
+                    Assert.That(decoded.width, Is.EqualTo(512));
+                    Assert.That(decoded.height, Is.EqualTo(512));
+                    Color centre = decoded.GetPixel(256, 256), corner = decoded.GetPixel(4, 4);
+                    Assert.That(corner.maxColorComponent, Is.LessThan(0.1f), "background");
+                    Assert.That(centre.maxColorComponent, Is.GreaterThan(0.1f), "the cube straight ahead is in the centre");
+                }
+                finally { UnityEngine.Object.DestroyImmediate(decoded); }
+            }
+            finally
+            {
+                var mat = cube.GetComponent<Renderer>().sharedMaterial;
+                UnityEngine.Object.DestroyImmediate(cube);
+                if (mat != null && mat.name != "Default-Material") UnityEngine.Object.DestroyImmediate(mat);
+                UnityEngine.Object.DestroyImmediate(sourceObj);
+                UnityEngine.Object.DestroyImmediate(head);
+            }
+        }
+
         // ---- The new executor never reaches the aim, stroke or drawing-run code ----
         // A static IL walk: from the input roots, follow every call into CHRIS input code, and fail
         // on any reference to the procedure executor, the drawing runs, the draw frame or the

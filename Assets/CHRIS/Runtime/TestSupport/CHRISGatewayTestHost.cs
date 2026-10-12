@@ -68,6 +68,16 @@ namespace TiltBrush
             ["palette"] = null,
         };
         protected override JObject ReadObservation() => (JObject)Observed?.DeepClone();
+        // A head-view stand-in: no head or VR camera exist in edit mode.
+        public int ImagesTaken;
+        protected override JObject CaptureHeadView(int width, out string error)
+        {
+            error = null;
+            ImagesTaken++;
+            return new JObject { ["format"] = "jpeg", ["width"] = width, ["height"] = width, ["data"] = "/9j/",
+                ["camera"] = Observed["head"].DeepClone(), ["fov_v_deg"] = CHRISHeadView.FovDegrees, ["aspect"] = 1.0,
+                ["near_m"] = 0.01, ["far_m"] = 100.0 };
+        }
 
         public void Initialize()
         {

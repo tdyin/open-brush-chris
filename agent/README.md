@@ -486,7 +486,25 @@ The contract is Bac's (`chris` `src/chris/core/primitive.py`; shared cases in
     lease and one executor.
   - The hand-back tracking check no longer waits on usages the runtime does not report; the
     first acquire logs which ones the controller reports.
-- First headset run: headset-20261012a (M3 cases 10-12, at dbe1fc9d).
+- Headset runs:
+  - headset-20261012a (dbe1fc9d): 5 input leases, all released, and every batch delivered.
+    The one stopped press, the case 10 retry, was stopped by the palette-pose token.
+    Startup raised one tracking-origin event, epoch 1, before any lease.
+  - headset-20261012b (931aeb5b, after D120): 6 leases, all released, and 5 of 5 guarded
+    presses delivered (4-13 ms late). No guard stop, refusal, takeover or exception.
+  - Both runs: the controller reports isTracked with position and rotation.
+  - Bac's 4 "Host busy" refusals in run a were the runner's own buttons_neutral pre-check
+    right after the Approve click, not native.
+- M4 (D122): `POST /chris/observe/image` with body `{view: "head", width: 512|768|1024}`.
+  - It renders a read-only square JPEG (quality 80) with a symmetric 90-degree camera at
+    the head pose, using the VR camera's layers, clear and clip planes. Drawing-frame
+    outlines are hidden for the capture.
+  - The reply carries the camera pose (room metres), fov_v_deg, aspect 1, near_m, far_m,
+    frame, frame_index and captured_at.
+  - Refusals, in order: "Unsupported field", "Image rate limit" (1 s, counting only images
+    taken), "Batch in progress" (never captured during an input batch), "Host busy or
+    unavailable".
+  - Every capture logs `CHRIS observe image: WxH, bytes, ms`.
 
 ## Upstream integration points
 

@@ -418,6 +418,7 @@ namespace TiltBrush
                 return Submit(Parse(request.Body));
             if (request.Path.StartsWith(ProcedureRoute)) return RouteProcedure(request);
             if (request.Method == "GET" && request.Path == "/chris/observe") return Observation();
+            if (request.Method == "POST" && request.Path == "/chris/observe/image") return ObserveImage(Parse(request.Body));
             if (request.Path.StartsWith(InputRoute)) return RouteInput(request);
             if (request.Method == "GET" && request.Path == "/chris/drawing/snapshot")
             {
@@ -759,6 +760,33 @@ namespace TiltBrush
             };
             foreach (var property in body.Properties()) observation[property.Name] = property.Value;
             return observation;
+        }
+
+        // POST /chris/observe/image (D122): a read-only head-view image, at most one per second,
+        // never while an input batch runs (a main-thread capture would make its edges late).
+        JObject ObserveImage(JObject body)
+        {
+            Require(!m_Closed && m_Registered, "Host closed or unavailable");
+            string invalid = CHRISHeadView.ValidateRequest(body);
+            if (invalid != null) return Error(invalid);
+            float now = Time.realtimeSinceStartup;
+            if (CHRISHeadView.RateLimited(now)) return Error(CHRISHeadView.RateRefusal);
+            if (CHRISHandAuthority.FindInput(CHRISHandAuthority.InputLeaseId)?.BatchRunning == true)
+                return Error(CHRISInputExecutor.BusyBatch);
+            var image = CaptureHeadView((int)(long)body["width"], out string error);
+            if (image == null) return Error(error ?? BusyRefusal);
+            CHRISHeadView.Taken(now);
+            image["frame"] = FrameObject(CHRISRoomFrame.Epoch);
+            image["frame_index"] = Time.frameCount;
+            image["captured_at"] = Now;
+            return image;
+        }
+
+        protected virtual JObject CaptureHeadView(int width, out string error)
+        {
+            CHRISDrawingRuns.SetOutlinesActive(false);
+            try { return CHRISHeadView.Capture(width, out error); }
+            finally { CHRISDrawingRuns.SetOutlinesActive(true); }
         }
 
         // The freshness token (if_token): palette visibility and page, hover, brush, stroke
