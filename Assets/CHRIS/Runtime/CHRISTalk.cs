@@ -20,6 +20,7 @@ namespace TiltBrush
 
         readonly CHRISVoiceInput m_Voice;
         readonly Func<CHRISTestDisplay> m_Display;
+        readonly Func<bool> m_Focused;
         int m_Count;
         float m_Started;
         int m_HeardVersion = -1, m_NoticeVersion = -1;
@@ -33,10 +34,11 @@ namespace TiltBrush
         public int Version { get; private set; }
         public string Microphone => m_Voice.MicrophoneLabel;
 
-        public CHRISTalk(CHRISVoiceInput voice, Func<CHRISTestDisplay> display)
+        public CHRISTalk(CHRISVoiceInput voice, Func<CHRISTestDisplay> display, Func<bool> focused = null)
         {
             m_Voice = voice;
             m_Display = display;
+            m_Focused = focused ?? (() => true);
             m_Voice.Finalized += OnFinal;
             m_Voice.Changed += () => Version++;
         }
@@ -110,6 +112,15 @@ namespace TiltBrush
         void OnFinal(string transcript)
         {
             if (Current != State.Sending) return;
+            // A final can arrive before this frame's focus tick (PR #6 review P2): check focus
+            // right before publishing, so focus loss always means nothing is sent.
+            if (!m_Focused())
+            {
+                Current = State.Idle;
+                Debug.Log("CHRIS voice: transcript dropped (focus lost); nothing sent");
+                Changed("Focus lost; nothing sent");
+                return;
+            }
             Current = State.Idle;
             string text = CHRISTestDisplay.CleanUtterance(transcript);
             var display = m_Display();

@@ -391,6 +391,18 @@ namespace TiltBrush
         internal static CHRISInputExecutor FindInput(string leaseId) =>
             leaseId != null && s_InputLedger.TryGetValue(leaseId, out var lease) ? lease : null;
 
+        // Escape (local Stop) from the mapping host. Counted so the gateway runs its revoking
+        // Stop even when no lease is active (PR #6 review P1): authority must change between
+        // leases too. Never reset, so a gateway can tell a new Stop from an old one.
+        static int s_LocalStops;
+        internal static int LocalStops => s_LocalStops;
+
+        internal static void StopLocally()
+        {
+            s_LocalStops++;
+            Revoke("Stopped locally");
+        }
+
         public static void Revoke(string reason)
         {
             if (ProcedureActive)

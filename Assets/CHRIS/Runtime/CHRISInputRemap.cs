@@ -438,7 +438,7 @@ namespace TiltBrush
             Remap.Tick(CHRISDeviceInput.Instance, focused, interactionBusy);
             if (Remap.StoppedThisFrame)
             {
-                CHRISHandAuthority.Revoke("Stopped locally");
+                CHRISHandAuthority.StopLocally();
                 s_Authority.Stop();
                 CHRISBimanualHost.ReleaseKeyboardUI();
             }

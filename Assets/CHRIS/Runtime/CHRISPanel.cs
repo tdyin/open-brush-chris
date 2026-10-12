@@ -102,7 +102,7 @@ namespace TiltBrush
             if (Talk != null) return Talk;
             var voice = gameObject.AddComponent<CHRISVoiceInput>();
             voice.PreferHeadsetMicrophone();
-            Talk = new CHRISTalk(voice, () => CHRISTestDisplay.Instance);
+            Talk = new CHRISTalk(voice, () => CHRISTestDisplay.Instance, () => CHRISInputMappingHost.InputFocusedNow);
             return Talk;
         }
 

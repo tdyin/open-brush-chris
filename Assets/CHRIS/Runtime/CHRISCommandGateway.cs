@@ -46,6 +46,7 @@ namespace TiltBrush
         private readonly HashSet<string> m_Tombstones = new HashSet<string>();
         private CHRISInputExecutor m_InputLease;
         private bool m_WasFocused = true;
+        private int m_SeenLocalStops = CHRISHandAuthority.LocalStops;
         private readonly string m_Session = Guid.NewGuid().ToString("N");
         private long m_Revision, m_Epoch;
         private string m_ActiveTask;
@@ -283,6 +284,12 @@ namespace TiltBrush
         void Update()
         {
             if (m_Closed) return;
+            // Escape is a local Stop with or without a lease: authority changes either way.
+            if (CHRISHandAuthority.LocalStops != m_SeenLocalStops)
+            {
+                m_SeenLocalStops = CHRISHandAuthority.LocalStops;
+                Stop("Stopped locally");
+            }
             // Focus loss changes authority whether or not a lease is active.
             bool focused = InputFocused;
             if (m_WasFocused && !focused) m_Epoch++;
@@ -1168,6 +1175,9 @@ namespace TiltBrush
                 CHRISDrawingRuns.EndAll();
                 SyncInput(false);
                 m_Epoch++;
+                // Every task that has held input needs a new approval after a Stop, including
+                // one released normally just before it.
+                foreach (var task in m_InputTasks) Tombstone(task);
             }
             Invalidate(m_ActiveTask);
             m_ActiveTask = null;

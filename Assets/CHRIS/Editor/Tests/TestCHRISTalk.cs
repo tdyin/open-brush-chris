@@ -104,6 +104,33 @@ namespace TiltBrush
             finally { Object.DestroyImmediate(obj); }
         }
 
+        // PR #6 review P2: a final queued before the focus tick is not published after focus loss.
+        [Test]
+        public void AFinalAfterFocusLossIsNotPublished()
+        {
+            var obj = new GameObject("CHRIS talk focus test");
+            try
+            {
+                var voice = obj.AddComponent<CHRISVoiceInput>();
+                voice.Devices = () => new CHRISMicrophoneDevice[0];
+                var display = new CHRISTestDisplay();
+                bool focused = true;
+                var talk = new CHRISTalk(voice, () => display, () => focused);
+                talk.Click(0, null);
+                voice.Receive(voice.Session.Id, "listening", "");
+                talk.Click(1, null);
+                Assert.That(talk.Current, Is.EqualTo(CHRISTalk.State.Sending));
+                focused = false;
+                voice.Receive(voice.Session.Id, "final", "select the fire brush");
+                Assert.That(Events(display), Is.Empty, "delivered before the cancellation tick, still not sent");
+                Assert.That(talk.Current, Is.EqualTo(CHRISTalk.State.Idle));
+                Assert.That(talk.NoticeText(display.Version), Is.EqualTo("Focus lost; nothing sent"));
+                talk.Tick(2, false);
+                Assert.That(Events(display), Is.Empty);
+            }
+            finally { Object.DestroyImmediate(obj); }
+        }
+
         [Test]
         public void LongRecordingsSendBeforeTheRelayCap()
         {

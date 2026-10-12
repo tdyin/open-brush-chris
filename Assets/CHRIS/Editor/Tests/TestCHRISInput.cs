@@ -799,6 +799,48 @@ namespace TiltBrush
             }
         }
 
+        // PR #6 review P1: Escape is a local Stop with or without a lease. Before an acquire it
+        // stales the approval's authority; after a normal release the same task cannot lease again.
+        [Test]
+        public void EscapeBetweenLeasesInvalidatesAuthority()
+        {
+            CHRISHandAuthority.ResetForPlay();
+            CHRISRoomFrame.ResetForPlay();
+            var obj = new GameObject("CHRIS escape host");
+            try
+            {
+                var host = obj.AddComponent<CHRISGatewayTestHost>();
+                host.Initialize();
+                long epoch = (long)host.Capture()["authority_epoch"];
+
+                // Pre-acquire: the approval was made under the old epoch.
+                var approved = AcquireBody(host, "pre");
+                CHRISHandAuthority.StopLocally();
+                host.Tick();
+                Assert.That((long)host.Capture()["authority_epoch"], Is.EqualTo(epoch + 1), "Escape with no lease changes authority");
+                Assert.That((string)Route(host, "POST", "/chris/input/acquire", approved)["error"],
+                    Is.EqualTo("Authority changed; new approval needed"));
+
+                // Between leases: acquire, normal release, Escape, then the same task again.
+                var grant = AcquireInput(host, "between");
+                Assert.That(grant["error"], Is.Null, grant.ToString());
+                Release(host, grant);
+                CHRISHandAuthority.StopLocally();
+                host.Tick();
+                Assert.That((string)AcquireInput(host, "between")["error"], Is.EqualTo("Task stopped; new approval needed"),
+                    "even with the current epoch");
+                host.Tick();
+                Assert.That((long)host.Capture()["authority_epoch"], Is.EqualTo(epoch + 2), "one Stop per Escape, not per tick");
+                Assert.That(AcquireInput(host, "fresh")["error"], Is.Null, "a newly approved task still works");
+            }
+            finally
+            {
+                CHRISHandAuthority.ResetForPlay();
+                CHRISRoomFrame.ResetForPlay();
+                UnityEngine.Object.DestroyImmediate(obj);
+            }
+        }
+
         // ---- The new executor never reaches the aim, stroke or drawing-run code ----
         // A static IL walk: from the input roots, follow every call into CHRIS input code, and fail
         // on any reference to the procedure executor, the drawing runs, the draw frame or the
