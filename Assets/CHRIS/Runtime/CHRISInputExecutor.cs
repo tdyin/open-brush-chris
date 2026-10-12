@@ -92,6 +92,8 @@ namespace TiltBrush
         Batch m_Current;
         float m_Expiry, m_LastHeartbeat;
         bool m_TaskDeadline, m_Trigger;
+        // The approved task deadline (realtime), kept apart from the expiry so a renew can cap at it.
+        float m_Deadline = float.PositiveInfinity;
         Vector3 m_Position;
         Quaternion m_Rotation;
 
@@ -138,13 +140,33 @@ namespace TiltBrush
         }
 
         public float SecondsLeft(float now) => Mathf.Max(0, m_Expiry - now);
+        public float ExpiresAt => m_Expiry;
 
         // The approved task deadline ends the lease if it is earlier than the 30 s cap.
         public void LimitTo(float deadline)
         {
+            m_Deadline = Mathf.Min(m_Deadline, deadline);
             if (deadline >= m_Expiry) return;
             m_Expiry = deadline;
             m_TaskDeadline = true;
+        }
+
+        // A renew within 1 s of the task deadline grants nothing (as at acquire).
+        public bool DeadlineNear(float now) => m_Deadline <= now + 1;
+
+        // D131 renew: a new expiry of min(now + 30 s, task deadline), from the same held pose.
+        // No sample, pose or trigger change; it counts as a heartbeat. The gateway checks the
+        // agreed refusals first; this only refuses an ended lease or a running batch.
+        public string Renew(float now)
+        {
+            if (!Active) return Inactive;
+            if (m_Current != null) return BusyBatch;
+            Heartbeat(now);
+            float cap = now + MaxLeaseSeconds;
+            m_TaskDeadline = m_Deadline <= cap;
+            m_Expiry = m_TaskDeadline ? m_Deadline : cap;
+            Note($"lease {LeaseId} renewed until +{m_Expiry - now:F1} s" + (m_TaskDeadline ? " (task deadline)" : ""));
+            return null;
         }
 
         public void Heartbeat(float now)

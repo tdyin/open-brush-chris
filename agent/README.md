@@ -505,6 +505,15 @@ The contract is Bac's (`chris` `src/chris/core/primitive.py`; shared cases in
     taken), "Batch in progress" (never captured during an input batch), "Host busy or
     unavailable".
   - Every capture logs `CHRIS observe image: WxH, bytes, ms`.
+- Renew (D131): `POST /chris/input/{lease}/renew` with body `{}` returns `{lease_id, expires_at}`.
+  - The new expiry is min(now + 30 s, task deadline), from the same held pose: no sample,
+    pose or trigger change. It counts as a heartbeat.
+  - Refusals, in order: "Lease is not active", "Batch in progress", "Authority changed; new
+    approval needed", "Task stopped; new approval needed", "Task deadline already reached",
+    then "Host busy or unavailable" (the acquire-time host and hand checks, its own lease
+    excepted). A refusal never ends the lease.
+  - Added after headset-20261012c, where all 5 M4 leases expired at the 30 s cap between
+    model calls.
 
 ## Upstream integration points
 

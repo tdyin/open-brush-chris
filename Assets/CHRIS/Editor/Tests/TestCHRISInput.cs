@@ -91,6 +91,7 @@ namespace TiltBrush
                     case "acquire_request": verdict = CHRISCommandGateway.ValidateInputAcquire(doc); break;
                     case "batch": verdict = CHRISInputExecutor.ValidateBatch(doc); break;
                     case "image_request": verdict = CHRISHeadView.ValidateRequest(doc); break;
+                    case "renew_request": verdict = CHRISCommandGateway.ValidateRenew(doc); break;
                     case "batch_in_lease":
                         var batch = (JObject)doc["batch"];
                         var held = (JObject)doc["held"];
@@ -696,6 +697,105 @@ namespace TiltBrush
                 if (mat != null && mat.name != "Default-Material") UnityEngine.Object.DestroyImmediate(mat);
                 UnityEngine.Object.DestroyImmediate(sourceObj);
                 UnityEngine.Object.DestroyImmediate(head);
+            }
+        }
+
+        // D131 renew: a new expiry of min(now + 30 s, task deadline) from the same held pose,
+        // never during a batch, counted as a heartbeat; the expiry reason follows the cap.
+        [Test]
+        public void RenewExtendsFromTheHeldPoseWithinTheTaskDeadline()
+        {
+            var lease = Lease();
+            var moved = Start + new Vector3(0.05f, 0, 0);
+            Assert.That(lease.Submit(B(1, S(0, Start), S(100, moved)), 0), Is.Null);
+            Tick(lease, 0, 1);
+            Tick(lease, 0.15f, 2);
+            Assert.That(lease.Renew(20), Is.Null);
+            Assert.That(lease.SecondsLeft(20), Is.EqualTo(30).Within(1e-4f));
+            Assert.That(Vector3.Distance(lease.AppliedPosition, moved), Is.LessThan(1e-6f), "the held pose is kept");
+            Assert.That(lease.Hand.TriggerHeld, Is.False);
+            lease.Tick(new CHRISInputFrame { Now = 20.9f, Index = 3 });
+            Assert.That(lease.Active, Is.True, "the renew was a heartbeat");
+            Assert.That(lease.Submit(B(2, S(0, moved), S(500, moved)), 21), Is.Null);
+            Tick(lease, 21, 4);
+            Assert.That(lease.Renew(21.1f), Is.EqualTo("Batch in progress"));
+            lease.Release();
+            Assert.That(lease.Renew(22), Is.EqualTo("Lease is not active"));
+
+            var capped = Lease();
+            capped.LimitTo(40);
+            Assert.That(capped.Renew(20), Is.Null);
+            Assert.That(capped.ExpiresAt, Is.EqualTo(40).Within(1e-4f), "never past the task deadline");
+            Assert.That(capped.DeadlineNear(38.5f), Is.False);
+            Assert.That(capped.DeadlineNear(39.5f), Is.True, "within 1 s of the deadline");
+            Tick(capped, 40, 1);
+            Assert.That((string)capped.Status(t => t)["reason"], Is.EqualTo("Task deadline reached"));
+
+            var cap = Lease();
+            Assert.That(cap.Renew(5), Is.Null);
+            Assert.That(cap.ExpiresAt, Is.EqualTo(35).Within(1e-4f));
+            Tick(cap, 35, 1);
+            Assert.That((string)cap.Status(t => t)["reason"], Is.EqualTo("Lease reached 30 s limit"));
+        }
+
+        [Test]
+        public void GatewayRenewRefusesInTheAgreedOrderAndKeepsTheLease()
+        {
+            CHRISHandAuthority.ResetForPlay();
+            CHRISRoomFrame.ResetForPlay();
+            var obj = new GameObject("CHRIS renew host");
+            try
+            {
+                var host = obj.AddComponent<CHRISGatewayTestHost>();
+                host.Initialize();
+                var body = AcquireBody(host, "renew");
+                body["task_deadline"] = host.Clock + 100;
+                var grant = Route(host, "POST", "/chris/input/acquire", body);
+                Assert.That(grant["error"], Is.Null, grant.ToString());
+                string route = "/chris/input/" + (string)grant["lease_id"];
+                Assert.That((string)Route(host, "POST", route + "/renew", new JObject { ["seconds"] = 30 })["error"],
+                    Is.EqualTo("Unsupported field"));
+
+                var renewed = Route(host, "POST", route + "/renew");
+                Assert.That(Keys(renewed), Is.EqualTo(Keys((JObject)ValidDocument("renew_reply")["reply"])), renewed.ToString());
+                Assert.That((double)renewed["expires_at"] - CHRISCommandGateway.Now, Is.EqualTo(30).Within(0.5));
+
+                host.RenewRefusal = "Physical brush controller input held";
+                Assert.That((string)Route(host, "POST", route + "/renew")["error"], Is.EqualTo("Host busy or unavailable"));
+                Assert.That((string)Route(host, "GET", route)["state"], Is.EqualTo("active"), "a refused renew keeps the lease");
+                host.RenewRefusal = null;
+
+                Assert.That(Route(host, "POST", route + "/batches", B(1, S(0, Start), S(500, Start)))["error"], Is.Null);
+                Assert.That((string)Route(host, "POST", route + "/renew")["error"], Is.EqualTo("Batch in progress"));
+
+                Route(host, "POST", route + "/release");
+                Assert.That((string)Route(host, "POST", route + "/renew")["error"], Is.EqualTo("Lease is not active"));
+
+                // An authority change (here: focus loss at the gateway) refuses an idle lease's renew
+                // before the hand checks. In play the focus loss also revokes the lease.
+                CHRISHandAuthority.ResetForPlay();
+                var idle = AcquireInput(host, "renew_authority");
+                Assert.That(idle["error"], Is.Null, idle.ToString());
+                host.Focus = false;
+                host.Tick();
+                host.Focus = true;
+                Assert.That(CHRISHandAuthority.FindInput((string)idle["lease_id"]).Active, Is.True);
+                Assert.That((string)Route(host, "POST", "/chris/input/" + (string)idle["lease_id"] + "/renew")["error"],
+                    Is.EqualTo("Authority changed; new approval needed"));
+                Route(host, "POST", "/chris/input/" + (string)idle["lease_id"] + "/release");
+
+                // The task deadline caps a renew made on a 20 s deadline.
+                CHRISHandAuthority.ResetForPlay();
+                var near = AcquireInput(host, "renew_deadline");
+                Assert.That(near["error"], Is.Null, near.ToString());
+                var short_ = Route(host, "POST", "/chris/input/" + (string)near["lease_id"] + "/renew");
+                Assert.That((double)short_["expires_at"] - CHRISCommandGateway.Now, Is.EqualTo(20).Within(0.5));
+            }
+            finally
+            {
+                CHRISHandAuthority.ResetForPlay();
+                CHRISRoomFrame.ResetForPlay();
+                UnityEngine.Object.DestroyImmediate(obj);
             }
         }
 

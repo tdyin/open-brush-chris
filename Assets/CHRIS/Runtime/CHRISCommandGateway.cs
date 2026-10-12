@@ -672,6 +672,7 @@ namespace TiltBrush
                 return error != null ? Error(error) :
                     new JObject { ["lease_id"] = lease.LeaseId, ["batch_id"] = body["batch_id"], ["accepted"] = true };
             }
+            if (parts[1] == "renew") return RenewInput(lease, body, now);
             if (parts[1] == "release")
             {
                 Fields(body);
@@ -685,6 +686,39 @@ namespace TiltBrush
             }
             return Error("Unknown route");
         }
+
+        // D131: POST /chris/input/{lease}/renew, body {}. In the agreed order: an ended lease, a
+        // running batch, changed authority, a tombstone, the task deadline, then the acquire-time
+        // host and hand checks. A refusal never ends the lease.
+        JObject RenewInput(CHRISInputExecutor lease, JObject body, float now)
+        {
+            if (ValidateRenew(body) is string invalid) return Error(invalid);
+            if (!lease.Active) return Error(CHRISInputExecutor.Inactive);
+            if (lease.BatchRunning) return Error(CHRISInputExecutor.BusyBatch);
+            if (!m_GrantEpoch.TryGetValue(lease.LeaseId, out long epoch) || epoch != m_Epoch) return Error(AuthorityRefusal);
+            if (m_Tombstones.Contains(lease.TaskId)) return Error(TombstoneRefusal);
+            if (lease.DeadlineNear(now)) return Error("Task deadline already reached");
+            var context = ReadContext();
+            string refusal = m_Pending != null || !(bool)context["ready"] || (bool)context["stroke_active"]
+                ? "host busy" : RenewHandRefusal();
+            if (refusal != null)
+            {
+                Debug.Log($"CHRIS procedure: input lease {lease.LeaseId} renew refused: {refusal}");
+                return Error(BusyRefusal);
+            }
+            string error = lease.Renew(now);
+            if (error != null) return Error(error);
+            return new JObject { ["lease_id"] = lease.LeaseId, ["expires_at"] = Now + (lease.ExpiresAt - now) };
+        }
+
+        // Message shape only, as the shared renew_request cases describe: the body is {}.
+        internal static string ValidateRenew(JObject body) =>
+            body == null || body.Properties().Any() ? CHRISInputExecutor.FieldRefusal : null;
+
+        protected virtual string RenewHandRefusal() => CHRISHandAuthority.RenewRefusal(IsNativeInteractionBusy());
+
+        // The authority epoch each input lease was granted under.
+        private readonly Dictionary<string, long> m_GrantEpoch = new Dictionary<string, long>();
 
         JObject AcquireInput(JObject data)
         {
@@ -716,6 +750,8 @@ namespace TiltBrush
             lease.TokenSource = ObservationToken;
             lease.TokenChange = TokenChange;
             m_InputLease = lease;
+            if (m_GrantEpoch.Count >= 256) m_GrantEpoch.Clear();
+            m_GrantEpoch[lease.LeaseId] = m_Epoch;
             m_InputTasks.Add(task);
             // One-shot commands cannot use a task that has held an input lease.
             Invalidate(task);

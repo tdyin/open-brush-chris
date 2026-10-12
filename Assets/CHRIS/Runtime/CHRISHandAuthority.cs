@@ -229,7 +229,10 @@ namespace TiltBrush
         internal static JObject Acquire(string taskId, bool busy, out string refusal) =>
             Acquire(taskId, busy, CHRISProcedureExecutor.PaletteScope, out refusal);
 
-        static string LiveAcquireRefusal(bool busy)
+        // D131: a renew is checked like an acquire, except that its own lease does not count.
+        internal static string RenewRefusal(bool busy) => LiveAcquireRefusal(busy, renewing: true);
+
+        static string LiveAcquireRefusal(bool busy, bool renewing = false)
         {
             var bimanual = CHRISBimanualHost.Input;
             return AcquireRefusal(new CHRISAcquireFacts
@@ -237,8 +240,8 @@ namespace TiltBrush
                 ControllersReady = ControllersPresent &&
                     InputManager.Brush != null && InputManager.Wand != null && ViewpointScript.Head != null,
                 Focused = CHRISInputMappingHost.InputFocusedNow,
-                LeaseActive = OwnsBrush && !s_InputOwns,
-                InputLeaseActive = OwnsBrush && s_InputOwns,
+                LeaseActive = !renewing && OwnsBrush && !s_InputOwns,
+                InputLeaseActive = !renewing && OwnsBrush && s_InputOwns,
                 Busy = busy,
                 KeyboardUI = CHRISBimanualHost.InUIMode || CHRISBimanualHost.RecoveryUI,
                 MappingChangePending = CHRISInputMappingHost.MappingChangePending,

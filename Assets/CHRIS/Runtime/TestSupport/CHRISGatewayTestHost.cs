@@ -43,6 +43,9 @@ namespace TiltBrush
         public Vector3 Head = new Vector3(0, 1.6f, 0), InputStart = new Vector3(0.2f, 1.2f, 0.4f);
         public JObject InputReturnMode = new JObject { ["source"] = "physical", ["mode"] = null, ["selected_hand"] = null };
         public bool Focus = true;
+        // A renew's hand-level refusal (focus, held input, keyboard UI); null in the default state.
+        public string RenewRefusal;
+        protected override string RenewHandRefusal() => RenewRefusal;
         protected override bool InputFocused => Focus;
         protected override CHRISInputExecutor AcquireInputHand(string task, CHRISInputLimits limits, out string refusal)
         {
