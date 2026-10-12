@@ -307,7 +307,7 @@ namespace TiltBrush
             {
             TestCHRISAssistance.Exported.Clear();
             int tests = 0;
-            foreach (var suite in new object[] { new TestCHRISNativeUI(), new TestCHRISAssistance(), new TestCHRISCloudVoice(), new TestCHRISCompanion(), new TestCHRISInputMapping(), new TestCHRISInputRemap(), new TestCHRISBimanualInput(), new TestCHRISMappingAuthority(), new TestCHRISPerfProbe(), new TestCHRISProcedure(), new TestCHRISDrawing(), new TestCHRISInput() })
+            foreach (var suite in new object[] { new TestCHRISNativeUI(), new TestCHRISAssistance(), new TestCHRISCloudVoice(), new TestCHRISCompanion(), new TestCHRISInputMapping(), new TestCHRISInputRemap(), new TestCHRISBimanualInput(), new TestCHRISMappingAuthority(), new TestCHRISPerfProbe(), new TestCHRISProcedure(), new TestCHRISDrawing(), new TestCHRISInput(), new TestCHRISTalk() })
                 foreach (var method in suite.GetType().GetMethods().Where(m => m.GetCustomAttributes(typeof(TestAttribute), false).Length > 0))
                 {
                     method.Invoke(suite, null);
@@ -550,6 +550,29 @@ namespace TiltBrush
                     CHRISTestDisplay.Instance.Show(primitive, Time.realtimeSinceStartup);
                     popup.RefreshTest();
                     Capture(popupObject, "status-panel-primitive.png");
+                    // D129: recording with the mic button, live "Heard" and the privacy line.
+                    var voice = popupObject.AddComponent<CHRISVoiceInput>();
+                    voice.Devices = () => new CHRISMicrophoneDevice[0];
+                    var talk = new CHRISTalk(voice, () => CHRISTestDisplay.Instance);
+                    popup.TalkOverride = talk;
+                    popup.TalkBusyOverride = _ => null;
+                    popup.RefreshTest();
+                    Assert.That(Icons(popupObject), Does.Contain("Talk").And.Not.Contain("Talk cancel"), "idle: the mic only");
+                    talk.Click(Time.realtimeSinceStartup, null);
+                    voice.Receive(voice.Session.Id, "listening", "");
+                    voice.Receive(voice.Session.Id, "partial", "select the fire brush please");
+                    popup.RefreshTest();
+                    Capture(popupObject, "status-panel-talk.png");
+                    Assert.That(Icons(popupObject), Does.Contain("Talk").And.Contain("Talk cancel"));
+                    Assert.That(Icons(popupObject).Count(n => n.StartsWith("Test case")), Is.Zero, "the talk area replaces Start");
+                    talk.Cancel("Cancelled; nothing sent");
+                    popup.TalkBusyOverride = _ => CHRISTalk.BusyNotice;
+                    popup.RefreshTest();
+                    Assert.That(Icons(popupObject), Does.Not.Contain("Talk"), "hidden while busy");
+                    popup.TalkOverride = null;
+                    popup.TalkBusyOverride = null;
+                    UnityEngine.Object.DestroyImmediate(voice);
+                    popup.RefreshTest();
                     var ten = popupObject.GetComponentsInChildren<CHRISNativeButton>().Single(b => b.name == "Test case 1");
                     Assert.That(ten.Label.text, Is.EqualTo("10"));
                     Assert.That(ten.Hover, Is.EqualTo("Start case 10: Primitive: select a different brush"));

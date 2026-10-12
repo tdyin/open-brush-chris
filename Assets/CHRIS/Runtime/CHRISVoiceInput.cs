@@ -4,6 +4,7 @@ using System;
 using System.Collections.Concurrent;
 using System.Threading;
 using System.Threading.Tasks;
+using System.Linq;
 using UnityEngine;
 
 namespace TiltBrush
@@ -109,6 +110,21 @@ namespace TiltBrush
             Changed?.Invoke();
         }
 
+        // D129: the Quest headset mic through Link ("Headset Microphone (Oculus Virtual Audio
+        // Device)") when present, else the Windows default. The first recording waits for the query.
+        public void PreferHeadsetMicrophone()
+        {
+            m_PreferHeadset = true;
+            m_DeviceQueryError = null;
+            if (m_DeviceQuery == null) m_DeviceQuery = Task.Run(Devices);
+        }
+
+        internal static CHRISMicrophoneDevice HeadsetMicrophone(CHRISMicrophoneDevice[] devices) =>
+            devices.FirstOrDefault(d => d.Name.IndexOf("Oculus", StringComparison.OrdinalIgnoreCase) >= 0 ||
+                d.Name.IndexOf("Headset Microphone", StringComparison.OrdinalIgnoreCase) >= 0);
+
+        bool m_PreferHeadset;
+
         public void NextMicrophone()
         {
             CancelRecording();
@@ -208,7 +224,8 @@ namespace TiltBrush
                 {
                     var devices = m_DeviceQuery.Result;
                     int next = SelectedMicrophone == null ? 0 : Array.FindIndex(devices, device => device.Id == SelectedMicrophone) + 1;
-                    var selected = next >= devices.Length ? null : devices[next];
+                    var selected = m_PreferHeadset ? HeadsetMicrophone(devices) : next >= devices.Length ? null : devices[next];
+                    m_PreferHeadset = false;
                     SelectedMicrophone = selected?.Id;
                     m_SelectedMicrophoneLabel = selected?.Label;
                 }

@@ -47,6 +47,12 @@ namespace TiltBrush
         static string[] ValidKeys(string message) => ((JObject)SharedCases().First(c =>
             (string)c["message"] == message && (string)c["expect"] == "valid")["document"]).Properties().Select(p => p.Name).OrderBy(n => n).ToArray();
         internal static int SharedCasesChecked;
+
+        // {latest, events}: every event as native emits it (D133 adds utterance).
+        static string ValidateEvents(JObject document) =>
+            document.Count != 2 || document["latest"]?.Type != JTokenType.Integer || !(document["events"] is JArray events) ||
+                events.Count > CHRISTestDisplay.RingSize
+                ? "Invalid events" : events.Select(e => CHRISTestDisplay.ValidateEvent(e as JObject)).FirstOrDefault(r => r != null);
         internal static string[] SharedValidKeys(string message) => ValidKeys(message);
         // Keys of the first valid case of a message that matches, or null when none exists yet.
         internal static string[] SharedValidKeysWhere(string message, Func<JObject, bool> match) =>
@@ -65,6 +71,7 @@ namespace TiltBrush
                 string error = message == "acquire_request" ? CHRISCommandGateway.ValidateAcquire(document) :
                     message == "step" ? CHRISProcedureExecutor.ValidateStep(document) :
                     message == "test_display" ? CHRISTestDisplay.Validate(document) :
+                    message == "test_events" ? ValidateEvents(document) :
                     message == "test_events_query" ? (document.Count == 1 && document["after"]?.Type == JTokenType.Integer &&
                         CHRISCommandGateway.EventsAfter("?after=" + (long)document["after"]) != null ? null : "Invalid after") : "skip";
                 if (error == "skip") continue;
@@ -571,8 +578,8 @@ namespace TiltBrush
                 CHRISTestDisplay.Instance.Decide(true, Time.realtimeSinceStartup, CHRISCommandGateway.Now);
                 var events = CHRISTestDisplay.Instance.Events(0);
                 Assert.That(events.Properties().Select(p => p.Name).OrderBy(n => n), Is.EqualTo(ValidKeys("test_events")));
-                var validEvent = (JObject)SharedCases().First(c => (string)c["message"] == "test_events" &&
-                    (string)c["expect"] == "valid" && ((JArray)c["document"]["events"]).Count > 0)["document"]["events"][0];
+                var validEvent = (JObject)SharedCases().Where(c => (string)c["message"] == "test_events" && (string)c["expect"] == "valid")
+                    .SelectMany(c => (JArray)c["document"]["events"]).First(e => (string)e["kind"] == "approve");
                 Assert.That(((JObject)events["events"][0]).Properties().Select(p => p.Name).OrderBy(n => n),
                     Is.EqualTo(validEvent.Properties().Select(p => p.Name).OrderBy(n => n)));
             }

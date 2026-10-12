@@ -23,6 +23,10 @@ namespace TiltBrush
         public const string StartIcon = "play";
         public const string ApproveIcon = "approve";
         public const string DeclineIcon = "decline";
+        public const string TalkIcon = "mic";
+        public const string TalkCancelIcon = DeclineIcon;
+        internal const string TalkStartHover = "Talk to CHRIS: click, speak, then click again to send";
+        internal const string TalkSendHover = "Send what you said";
 
         CHRISPanel m_Model;
         Renderer m_Border;
@@ -34,6 +38,14 @@ namespace TiltBrush
         // The agent's reasoning shares the button area: Approve/Decline first, then reasoning,
         // then the case Start buttons.
         TextMeshPro m_ReasoningHeading, m_Reasoning;
+        // D129: the mic button left of the title, and Cancel beside it while recording.
+        CHRISNativeButton m_Talk, m_TalkCancel;
+        int m_TalkVersion = -1;
+        // Previews and tests supply a talk controller without a CHRISPanel model.
+        internal CHRISTalk TalkOverride;
+        internal Func<float, string> TalkBusyOverride;
+        CHRISTalk CurrentTalk => TalkOverride ?? m_Model?.Talk;
+        string TalkBusy(float now) => TalkBusyOverride != null ? TalkBusyOverride(now) : m_Model?.TalkBusy(now);
         int m_TestVersion = -1;
         bool m_ButtonsLive;
         float m_NextStatusPoll;
@@ -54,6 +66,7 @@ namespace TiltBrush
             BuildView(manager == null || manager.AdvancedModeActive());
             base.Init(parent, "");
             m_Model?.Opened(this);
+            m_Model?.EnsureTalk();
             RefreshStatus();
         }
 
@@ -62,16 +75,40 @@ namespace TiltBrush
             var resources = CHRISUIResources.Load();
             resources.NativeBackground(transform, new Vector2(Width - 2 * BackgroundInset, Height - 2 * BackgroundInset));
             m_Border = resources.NativeWindow(transform, new Vector2(Width, Height), advanced);
-            resources.NativeText(transform, "Title", new Vector3(0, 1.22f, -0.04f), new Vector2(1.2f, 0.34f), "CHRIS", 1.2f);
+            resources.NativeText(transform, "Title", new Vector3(0, 1.22f, -0.04f), new Vector2(0.7f, 0.34f), "CHRIS", 1.2f);
             // The title is the drag handle; the content and border are not.
-            resources.DragStrip(transform, "Drag title", new Vector3(0, 1.22f, -0.06f), new Vector2(1.2f, 0.34f),
+            resources.DragStrip(transform, "Drag title", new Vector3(0, 1.22f, -0.06f), new Vector2(0.7f, 0.34f),
                 () => (m_ParentPanel as CHRISFloatingPanel)?.BeginDrag());
             // Stop is always shown.
             resources.NativeIconButton(transform, "Local Stop", new Vector3(0.86f, 1.22f, -0.06f), IconSize,
                 StopIcon, "Stop: CHRIS releases control now", LocalStop);
             m_Status = resources.NativeBody(transform, "Status", new Vector3(0, 0.86f, -0.04f),
                 new Vector2(2.0f, 0.42f), "Physical controllers", 0.72f);
+            m_Talk = resources.NativeIconButton(transform, "Talk", new Vector3(-0.94f, 1.22f, -0.06f), IconSize,
+                TalkIcon, TalkStartHover, TalkClick);
+            m_TalkCancel = resources.NativeIconButton(transform, "Talk cancel", new Vector3(-0.56f, 1.22f, -0.06f), IconSize,
+                TalkCancelIcon, "Cancel: nothing is sent", TalkCancelClick);
+            m_Talk.gameObject.SetActive(false);
+            m_TalkCancel.gameObject.SetActive(false);
             BuildTestArea(resources);
+        }
+
+        // Tap-to-talk accepts only a physical brush-controller click, like Start and Approve.
+        void TalkClick()
+        {
+            if (!PhysicalOrLog("Talk")) return;
+            var talk = TalkOverride ?? m_Model?.EnsureTalk();
+            if (talk == null) return;
+            float now = Time.realtimeSinceStartup;
+            talk.Click(now, TalkBusy(now));
+            RefreshTest();
+        }
+
+        void TalkCancelClick()
+        {
+            if (!PhysicalOrLog("Talk cancel")) return;
+            CurrentTalk?.Cancel("Cancelled; nothing sent");
+            RefreshTest();
         }
 
         // Up to four instruction lines, eight case Start icons (two rows of four, each with its
@@ -133,22 +170,51 @@ namespace TiltBrush
 
         internal static string CaseHover(int id, string title) => "Start case " + id + ": " + title;
 
+        // "Listening · Speech goes to OpenAI" while recording; the notice or "Sent" afterwards.
+        internal static string TalkHeading(string phase, string notice) =>
+            phase != null ? phase + "  ·  " + CHRISTalk.PrivacyLine : notice ?? "Sent";
+
+        internal static string TalkBody(string heard, string microphone) =>
+            (string.IsNullOrEmpty(heard) ? "Heard: ..." : "Heard: " + heard) + (microphone != null ? "\nMic: " + microphone : "");
+
         internal void RefreshTest()
         {
             var display = CHRISTestDisplay.Instance;
             display.Tick(Time.realtimeSinceStartup);
-            bool live = display.ButtonsLive(Time.realtimeSinceStartup);
-            if (display.Version == m_TestVersion && live == m_ButtonsLive) return;
+            float now = Time.realtimeSinceStartup;
+            bool live = display.ButtonsLive(now);
+            var talk = CurrentTalk;
+            bool recording = talk != null && talk.Current != CHRISTalk.State.Idle;
+            // The mic shows only while idle (or to send); busy can change without a display change.
+            bool micShown = talk != null && (recording || TalkBusy(now) == null);
+            if (m_Talk != null && m_Talk.gameObject.activeSelf != micShown) m_Talk.gameObject.SetActive(micShown);
+            int talkVersion = talk?.Version ?? -1;
+            if (display.Version == m_TestVersion && live == m_ButtonsLive && talkVersion == m_TalkVersion) return;
             m_TestVersion = display.Version;
             m_ButtonsLive = live;
+            m_TalkVersion = talkVersion;
+            if (m_TalkCancel != null) m_TalkCancel.gameObject.SetActive(recording);
+            if (m_Talk != null) m_Talk.SetHover(recording ? TalkSendHover : TalkStartHover);
             for (int i = 0; i < m_TestLines.Length; i++)
                 SetText(m_TestLines[i], i < display.Lines.Length ? display.Lines[i] : "");
             // While an approval is live, only Approve/Decline can be pressed. Otherwise reasoning,
             // while an agent case sends it, takes the area of the Start buttons.
-            bool reasoning = !live && display.Reasoning != null;
+            // Talking (live transcript, or the sent text until the next display) takes the same area.
+            string heard = talk?.HeardText(display.Version), notice = talk?.NoticeText(display.Version);
+            bool talking = !live && (recording || heard != null || notice != null);
+            bool reasoning = !live && (talking || display.Reasoning != null);
             m_ReasoningHeading.gameObject.SetActive(reasoning);
             m_Reasoning.gameObject.SetActive(reasoning);
-            if (reasoning) SetText(m_Reasoning, display.Reasoning);
+            if (talking)
+            {
+                SetText(m_ReasoningHeading, TalkHeading(talk.Phase, notice));
+                SetText(m_Reasoning, TalkBody(heard, recording ? talk.Microphone : null));
+            }
+            else if (reasoning)
+            {
+                SetText(m_ReasoningHeading, "Reasoning");
+                SetText(m_Reasoning, display.Reasoning);
+            }
             for (int i = 0; i < m_CaseButtons.Length; i++)
             {
                 bool shown = !live && !reasoning && i < display.Cases.Length;

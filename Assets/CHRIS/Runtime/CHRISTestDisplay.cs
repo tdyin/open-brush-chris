@@ -126,12 +126,61 @@ namespace TiltBrush
             }
         }
 
-        void Emit(string kind, int? caseId, string nonce, double at)
+        void Emit(string kind, int? caseId, string nonce, double at, string text = null, string id = null)
         {
-            m_Events.Enqueue(new JObject { ["seq"] = ++m_Seq, ["kind"] = kind,
+            var e = new JObject { ["seq"] = ++m_Seq, ["kind"] = kind,
                 ["case"] = caseId.HasValue ? new JValue(caseId.Value) : JValue.CreateNull(),
-                ["nonce"] = nonce != null ? new JValue(nonce) : JValue.CreateNull(), ["at"] = at });
+                ["nonce"] = nonce != null ? new JValue(nonce) : JValue.CreateNull(), ["at"] = at };
+            if (kind == UtteranceKind) { e["text"] = text; e["id"] = id; }
+            m_Events.Enqueue(e);
             while (m_Events.Count > RingSize) m_Events.Dequeue();
+        }
+
+        // D129: what the user said with the panel's mic button, for the test session. Only a
+        // non-empty final transcript is sent; cancels, errors and silence send nothing.
+        public const string UtteranceKind = "utterance";
+        public const int MaxUtteranceLength = 400;
+
+        public bool Utterance(string text, string id, double at)
+        {
+            text = CleanUtterance(text);
+            if (text == null || id == null || !s_Id.IsMatch(id)) return false;
+            Emit(UtteranceKind, null, null, at, text, id);
+            return true;
+        }
+
+        // Control characters (newlines and tabs included) become spaces; runs of spaces collapse;
+        // at most 400 characters. Null when nothing is left.
+        public static string CleanUtterance(string raw)
+        {
+            if (raw == null) return null;
+            var chars = raw.Select(c => char.IsControl(c) ? ' ' : c).ToArray();
+            string text = Regex.Replace(new string(chars), " {2,}", " ").Trim();
+            if (text.Length > MaxUtteranceLength) text = text.Substring(0, MaxUtteranceLength).TrimEnd();
+            return text.Length == 0 ? null : text;
+        }
+
+        // Event shape only, as the shared test_events cases describe.
+        internal static string ValidateEvent(JObject e)
+        {
+            if (e == null || e["seq"]?.Type != JTokenType.Integer || (long)e["seq"] < 1 || e["kind"]?.Type != JTokenType.String ||
+                !(e["at"]?.Type == JTokenType.Float || e["at"]?.Type == JTokenType.Integer)) return "Invalid event";
+            string kind = (string)e["kind"];
+            var keys = new HashSet<string> { "seq", "kind", "case", "nonce", "at" };
+            if (kind == UtteranceKind) { keys.Add("text"); keys.Add("id"); }
+            else if (kind != "start" && kind != "approve" && kind != "decline") return "Invalid event kind";
+            if (e.Properties().Count() != keys.Count || !e.Properties().All(p => keys.Contains(p.Name))) return "Invalid event fields";
+            if (kind == "start" && (e["case"].Type != JTokenType.Integer || (long)e["case"] < 1 || (long)e["case"] > MaxCaseId ||
+                !IsNull(e["nonce"]))) return "Start needs a case and no nonce";
+            if ((kind == "approve" || kind == "decline") && (!IsNull(e["case"]) || e["nonce"].Type != JTokenType.String ||
+                !s_Id.IsMatch((string)e["nonce"]))) return "Approve and decline need a nonce and no case";
+            if (kind == UtteranceKind)
+            {
+                if (!IsNull(e["case"]) || !IsNull(e["nonce"])) return "Utterance carries case or nonce";
+                if (e["text"].Type != JTokenType.String || CleanUtterance((string)e["text"]) != (string)e["text"]) return "Invalid utterance text";
+                if (e["id"].Type != JTokenType.String || !s_Id.IsMatch((string)e["id"])) return "Invalid utterance id";
+            }
+            return null;
         }
 
         // Called only by the panel's native buttons, from physical clicks.

@@ -57,6 +57,8 @@ namespace TiltBrush
         private string m_PaletteError;
         private float m_NextPanelOpen;
         public string Status { get; private set; } = "Waiting for native host";
+        // A one-shot command segment is running (the panel's mic button waits for it).
+        public bool CommandPending => m_Pending != null;
         public double LastStopMilliseconds { get; private set; }
         public long StopCount { get; private set; }
         public event Action Stopped;

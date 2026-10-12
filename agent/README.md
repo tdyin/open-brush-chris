@@ -605,20 +605,38 @@ if any other source hash or Git status differs. Newly generated build files must
 be inspected and archived separately before removal. Never restore over another
 agent's concurrent edits; keep shared-checkout writes paused during verification.
 
-## Voice backend retained for external workflows
+## Voice backend and tap-to-talk (D129/D133)
 
-The headset status panel has no microphone, voice-command, approval, or readout
-controls. Opening it does not instantiate `CHRISAssistanceClient`,
-`CHRISVoiceInput`, or `CHRISConfirmationSpeech`. The voice backend classes and
-Python relay protocol remain in source for explicitly enabled workflows and
-in-memory regression checks; they are not started by the status panel. The
-external CHRIS service owns credentials and models. The native command gateway
-and mapping status/activation/reload APIs remain independent of the voice UI.
-
-`TiltBrush.TestCHRISNativeUI.Run` exercises the retained backend with mocked
-WebSocket, PCM, and command adapters. It does not open a microphone, contact a
-provider, or run the player. Any future headset voice workflow needs separate
-UI and acceptance work before it can be offered to users.
+The headset panel has one voice control: tap-to-talk (D129, built for the D133 retest).
+- **Button.** The mic button is left of the title. The first physical brush click starts
+  recording, the second sends, and the X cancels.
+  - Mapped, mouse and keyboard clicks are ignored (D62).
+  - The button is hidden while an Approve/Decline is live, a lease is active or a one-shot
+    command is running.
+  - Stop and focus loss cancel, as do a failed relay or silence. Nothing is sent in any of
+    those cases.
+  - It sends automatically at 58 s, before the relay's 60 s limit.
+- **Capture.** `CHRISTalk` drives its own `CHRISVoiceInput`. It is not the dormant
+  assistance flow: `CHRISAssistanceClient` and `CHRISConfirmationSpeech` are still never
+  started by the panel.
+  - The microphone is the Quest headset mic through Link ("Headset Microphone (Oculus
+    Virtual Audio Device)") if present, else the Windows default. Its name is shown while
+    recording.
+  - Audio streams through `CHRISCloudTranscription` to the service's `/voice/transcribe`.
+    The service calls OpenAI and holds the credentials. Unity never stores or logs audio
+    or text.
+- **Panel display.** While recording, the panel shows "Listening · Speech goes to OpenAI"
+  and a live "Heard: ...". The sent text stays until the test session's next display.
+- **Hand-off.** The only output is one panel event:
+  `{seq, kind: "utterance", case: null, nonce: null, at, text, id}`.
+  - text is 1-400 characters; control characters become spaces.
+  - The id is "uN".
+  - The test session still needs a physical Approve before anything runs.
+- **Tests.** `TestCHRISTalk` drives the voice input with its own worker messages: no
+  microphone, socket or provider. It covers sending, every no-send path, the 58 s
+  auto-send, the 400-character cap, the event rules and the headset-mic choice.
+  - The shared `test_events` cases (utterance included) are checked natively.
+  - The panel preview is `status-panel-talk.png`.
 
 ## Repository rules
 
