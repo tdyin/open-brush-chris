@@ -74,7 +74,7 @@ namespace TiltBrush
                 CHRISInputExecutor.NeutralRefusal, CHRISInputExecutor.BusyBatch, CHRISInputExecutor.StaleSeq,
                 CHRISInputExecutor.Inactive, CHRISInputExecutor.DeadlineRefusal, CHRISInputExecutor.TokenRefusal,
                 CHRISInputExecutor.FrameRefusal, CHRISInputExecutor.FieldRefusal, CHRISInputExecutor.HeadRefusal,
-                CHRISInputExecutor.OutsideRefusal, CHRISInputExecutor.BatchLimit,
+                CHRISInputExecutor.OutsideRefusal, CHRISInputExecutor.BatchLimit, CHRISHeadView.RateRefusal,
                 "Task stopped; new approval needed", "Authority changed; new approval needed", "Task deadline already reached",
                 "Host busy or unavailable", "Requested limit above the native cap" })
                 Assert.That(refusals, Does.Contain(native), "native string not in the shared refusals: " + native);
@@ -90,6 +90,7 @@ namespace TiltBrush
                 {
                     case "acquire_request": verdict = CHRISCommandGateway.ValidateInputAcquire(doc); break;
                     case "batch": verdict = CHRISInputExecutor.ValidateBatch(doc); break;
+                    case "image_request": verdict = CHRISHeadView.ValidateRequest(doc); break;
                     case "batch_in_lease":
                         var batch = (JObject)doc["batch"];
                         var held = (JObject)doc["held"];
@@ -621,8 +622,8 @@ namespace TiltBrush
 
                 var image = Image(new JObject { ["view"] = "head", ["width"] = 768 });
                 Assert.That(image["error"], Is.Null, image.ToString());
-                Assert.That(Keys(image), Is.EqualTo(new[] { "aspect", "camera", "captured_at", "data", "far_m", "fov_v_deg", "format",
-                    "frame", "frame_index", "height", "near_m", "width" }.OrderBy(n => n)));
+                Assert.That(Keys(image), Is.EqualTo(Keys(ValidDocument("head_image"))));
+                Assert.That(Keys((JObject)image["camera"]), Is.EqualTo(Keys((JObject)ValidDocument("head_image")["camera"])));
                 Assert.That((string)image["frame"]["id"], Is.EqualTo("room"));
                 Assert.That((int)image["height"], Is.EqualTo(768));
                 Assert.That((string)Image(new JObject { ["view"] = "head", ["width"] = 512 })["error"], Is.EqualTo("Image rate limit"));
